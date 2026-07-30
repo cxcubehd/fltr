@@ -8,10 +8,8 @@ Size RenderBox::size() const {
   FLTR_EXPECTS(hasSize_, "size read before this box has been laid out");
   if (owner() != nullptr) {
     const RenderObject* active = owner()->activeLayoutNode();
-    // A parent may only read a child's size if it said it would. Without this,
-    // a parent could silently depend on a child's size while the child remained
-    // a relayout boundary -- and the parent would never be re-laid-out when the
-    // child changed. This check is the whole reason boundaries are sound.
+    // Without this a parent could depend on a child's size while the child
+    // stayed a relayout boundary, and never be re-laid-out when it changed.
     if (active != nullptr && active == parent()) {
       FLTR_EXPECTS(canParentUseSize_,
                    "parent read a child's size without passing parentUsesSize = true");
@@ -79,7 +77,7 @@ void RenderBox::layoutWithoutResize() {
   ++layoutCount_;
 
   // No performResize: a sizedByParent node's size depends only on constraints,
-  // and the constraints have not changed. That is what makes this path cheap.
+  // and those have not changed.
   doingThisLayout_ = true;
   performLayout();
   doingThisLayout_ = false;
@@ -91,11 +89,7 @@ void RenderBox::layoutWithoutResize() {
 }
 
 bool RenderBox::hitTest(HitTestResult& result, Offset position) {
-  if (!hasSize_) return false;
-  if (position.dx < 0 || position.dy < 0 || position.dx >= size_.width ||
-      position.dy >= size_.height) {
-    return false;
-  }
+  if (!hasSize_ || !paintBounds().contains(position)) return false;
   if (hitTestChildren(result, position) || hitTestSelf(position)) {
     result.add(this, position);
     return true;

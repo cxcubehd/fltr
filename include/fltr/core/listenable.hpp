@@ -9,12 +9,10 @@ namespace fltr {
 
 class Listenable;
 
-/// One edge in an observer graph, owned by the observer.
-///
-/// Intrusive and allocation-free: subscribing costs two pointer stores, and the
-/// subscription unhooks itself when the observer is destroyed. This is what lets
-/// a render object hold an animation subscription with correct lifetime without
-/// any shared ownership.
+/// One edge in an observer graph, owned by the observer. Intrusive and
+/// allocation-free: subscribing costs two pointer stores, and the subscription
+/// unhooks itself when the observer is destroyed -- so a render object can hold
+/// an animation subscription with no shared ownership.
 class Subscription {
   friend class Listenable;
 
@@ -50,14 +48,12 @@ private:
   void* ctx_ = nullptr;
 };
 
-/// The single observable core shared by reactivity (Observable<T>) and
-/// animation (Animation<T>).
+/// The observable core, to be shared by reactivity (M6) and animation (M7).
 ///
-/// The rebuild-versus-repaint distinction deliberately does *not* live here. It
-/// lives in the subscriber: a Watch element subscribes and marks itself dirty
-/// for rebuild; a render object subscribes via watchForPaint and only marks
-/// itself needing paint. Same signal, different sink, and which one you are on
-/// is visible at the call site.
+/// The rebuild-versus-repaint distinction deliberately does *not* live here; it
+/// lives in the subscriber. A render object subscribing via `observeForPaint`
+/// marks only itself needing paint, while an element subscribing marks itself
+/// needing rebuild. Same signal, different sink, chosen at the call site.
 class Listenable {
   friend class Subscription;
 

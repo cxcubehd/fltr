@@ -35,10 +35,9 @@ void RenderStack::performLayout() {
     }
     setSize(sawNonPositioned ? constraints_.constrain(largest) : constraints_.smallest());
   } else {
-    // performResize already set the size; children just need laying out. The
-    // offset pass below reads each child's size, so this has to say so -- and it
-    // costs nothing, because Expand hands out tight constraints and tightness
-    // alone already makes every one of these children a relayout boundary.
+    // performResize already set the size. The offset pass below reads each
+    // child's size, so this must say so -- which costs nothing, since Expand
+    // hands out tight constraints and that alone makes them boundaries.
     for (std::size_t i = 0; i < n; ++i) {
       if (children_[i].data.positioned) continue;
       layoutChildForSize(*children_[i].child, nonPositioned);
@@ -50,10 +49,9 @@ void RenderStack::performLayout() {
     RenderBox& child = *children_[i].child;
 
     if (!d.positioned) {
-      // A non-positioned child was laid out above; align it within the stack.
-      // Its size is readable here because both branches above measured it.
-      const Size childSize = child.hasSize() ? child.size() : Size::zero();
-      setChildOffset(i, alignment_.inscribe(childSize, size_));
+      // Both branches above measured every non-positioned child, so the size is
+      // readable here.
+      setChildOffset(i, alignment_.inscribe(child.size(), size_));
       continue;
     }
 

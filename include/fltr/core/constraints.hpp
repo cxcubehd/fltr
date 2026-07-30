@@ -1,6 +1,8 @@
 #pragma once
 
 #include <algorithm>
+#include <optional>
+#include <type_traits>
 
 #include "fltr/core/geometry.hpp"
 
@@ -78,9 +80,12 @@ struct BoxConstraints {
             std::clamp(minHeight, outer.minHeight, outer.maxHeight),
             std::clamp(maxHeight, outer.minHeight, outer.maxHeight)};
   }
-  /// Relax the minimums to zero on the given axis only.
-  constexpr BoxConstraints copyWith(float minW, float maxW, float minH, float maxH) const noexcept {
-    return {minW, maxW, minH, maxH};
+  /// Replaces only the bounds that are given, keeping the rest.
+  constexpr BoxConstraints copyWith(std::optional<float> minW = {}, std::optional<float> maxW = {},
+                                    std::optional<float> minH = {},
+                                    std::optional<float> maxH = {}) const noexcept {
+    return {minW.value_or(minWidth), maxW.value_or(maxWidth), minH.value_or(minHeight),
+            maxH.value_or(maxHeight)};
   }
 
   constexpr bool isNormalized() const noexcept {

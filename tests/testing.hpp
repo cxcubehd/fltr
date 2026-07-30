@@ -25,6 +25,11 @@ void reportFailure(const char* file, int line, const std::string& msg);
 int failureCount();
 long checkCount();
 
+/// Total heap allocations in this binary. "No per-frame heap churn in the steady
+/// state" is a hard requirement of this framework, so it is measured rather than
+/// asserted in a comment.
+std::size_t allocationCount();
+
 /// Best-effort rendering for failure messages. Anything fltr::dbg can format
 /// prints structurally; everything else prints as <?>.
 template <class T>

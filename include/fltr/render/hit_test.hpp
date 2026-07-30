@@ -8,26 +8,15 @@
 
 namespace fltr {
 
-struct PointerEvent;
-class HitTestResult;
-
-/// Anything that can receive a routed pointer event. Render objects that take
-/// input implement this.
-class HitTestTarget {
-public:
-  virtual ~HitTestTarget() = default;
-  virtual void handleEvent(const PointerEvent& event, Offset localPosition) = 0;
-  /// Only for dump output.
-  virtual const char* targetName() const { return "HitTestTarget"; }
-};
+class RenderBox;
 
 struct HitTestEntry {
-  HitTestTarget* target = nullptr;
-  /// The event position in this target's own coordinate space.
+  RenderBox* target = nullptr;
+  /// The tested point in this target's own coordinate space.
   Offset localPosition;
 };
 
-/// The ordered set of targets under a point, deepest (topmost) first.
+/// The ordered set of boxes under a point, deepest (topmost) first.
 ///
 /// DIVERGENCE: Flutter records a full global->local transform per entry so a
 /// consumer can later re-derive any space. We record the already-resolved local
@@ -36,9 +25,7 @@ struct HitTestEntry {
 /// re-project an entry into a different space after the fact.
 class HitTestResult {
 public:
-  void add(HitTestTarget* target, Offset localPosition) {
-    path_.push_back({target, localPosition});
-  }
+  void add(RenderBox* target, Offset localPosition) { path_.push_back({target, localPosition}); }
 
   /// Runs `hitTest` in a space translated by `offset`, i.e. for a child painted
   /// at `offset` within this object.

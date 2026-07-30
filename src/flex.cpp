@@ -26,8 +26,8 @@ void RenderFlex::performLayout() {
   float crossSize = 0.0f;
   int totalFlex = 0;
 
-  // Pass 1: inflexible children size themselves, which is what makes the free
-  // space knowable without iterating.
+  // Pass 1: inflexible children size themselves, which makes the free space
+  // knowable without iterating.
   for (std::size_t i = 0; i < n; ++i) {
     const FlexChildData& d = children_[i].data;
     if (d.flex > 0) {

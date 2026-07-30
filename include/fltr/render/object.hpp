@@ -17,8 +17,8 @@ class PipelineOwner;
 class PaintingContext;
 class RenderObject;
 
-/// Which phase the pipeline is in. Phase separation is enforced, not merely
-/// documented: painting may not dirty layout, and layout may not paint.
+/// Painting may not dirty layout and layout may not paint; both are enforced
+/// against this rather than merely documented.
 enum class PipelinePhase : std::uint8_t { Idle, Layout, Paint };
 
 // ---------------------------------------------------------------------------
@@ -26,13 +26,9 @@ enum class PipelinePhase : std::uint8_t { Idle, Layout, Paint };
 // ---------------------------------------------------------------------------
 
 /// Protocol-agnostic base: tree structure, ownership, invalidation, painting.
-///
-/// The layout protocol itself lives in RenderBox. Keeping the split means a
-/// second protocol (slivers, say) could be added without disturbing the
-/// invalidation machinery -- but note that today `layout` is only declared on
-/// RenderBox, so a second protocol would first have to introduce a polymorphic
-/// Constraints. That is a deliberate simplification: this framework has exactly
-/// one protocol and paying for the abstraction now would buy nothing.
+/// The layout protocol itself lives in RenderBox, so a second protocol could be
+/// added without disturbing the invalidation machinery -- though it would first
+/// have to make Constraints polymorphic, which one protocol does not justify.
 class RenderObject {
 public:
   virtual ~RenderObject();
@@ -57,7 +53,7 @@ public:
 
   virtual const char* typeName() const = 0;
 
-  /// Extra detail for the headless dump only. Nothing depends on this.
+  /// Extra detail for the headless dump only.
   virtual std::string describe() const { return {}; }
 
   void attach(PipelineOwner* owner);
@@ -67,15 +63,13 @@ public:
 
   // --- invalidation -------------------------------------------------------
 
-  /// Marks this node as needing layout and registers the nearest enclosing
-  /// relayout boundary with the owner. This is why update cost is proportional
-  /// to the dirty set: the walk stops at the boundary rather than the root.
+  /// Registers the nearest enclosing relayout boundary with the owner. The walk
+  /// stops there rather than at the root, keeping update cost proportional to
+  /// the dirty set.
   void markNeedsLayout();
   void markParentNeedsLayout();
 
-  /// The cheap path. Paint invalidation never touches layout state; it walks up
-  /// to the nearest repaint boundary and stops. This is the path a render
-  /// object observing an animation takes on every tick.
+  /// Walks up to the nearest repaint boundary, touching no layout state.
   void markNeedsPaint();
 
   /// Call when the value `sizedByParent()` would return has changed.
@@ -85,12 +79,11 @@ public:
   bool needsPaint() const noexcept { return needsPaint_; }
   bool isRelayoutBoundary() const noexcept { return relayoutBoundary_ == 1; }
 
-  /// True when this object's size depends only on its constraints, never on its
-  /// children. Such an object is always a relayout boundary.
+  /// Size depends only on constraints, never on children -- which makes such an
+  /// object a relayout boundary unconditionally.
   virtual bool sizedByParent() const { return false; }
 
-  /// True when this object owns its own DisplayList, so repainting it does not
-  /// re-record its parent.
+  /// Owns its own DisplayList, so repainting it does not re-record its parent.
   virtual bool isRepaintBoundary() const { return false; }
 
   // --- painting -----------------------------------------------------------
@@ -104,11 +97,9 @@ public:
   DisplayList& boundaryList();
   const DisplayList* boundaryListIfAny() const noexcept { return boundaryList_.get(); }
 
-  /// The bounds this object paints into, in its own coordinate space. Used for
-  /// the harness dump and, later, for a compositing layer's bounds.
+  /// Bounds painted into, in this object's own coordinate space.
   virtual Rect paintBounds() const { return Rect::zero(); }
 
-  // --- counters used by tests to prove work is bounded --------------------
   std::uint32_t layoutCount() const noexcept { return layoutCount_; }
   std::uint32_t paintCount() const noexcept { return paintCount_; }
 
@@ -121,27 +112,15 @@ protected:
   void adoptChild(RenderObject* child);
   void dropChild(RenderObject* child);
 
-  /// Subscribe this render object to a listenable so that a change invalidates
-  /// only painting. This is the render-attached animation path: no element
-  /// rebuild, no reconciliation, no per-frame widget allocation.
-  ///
-  /// `slot` is a member of the concrete render object, so the subscription's
-  /// lifetime is exactly the render object's lifetime with no shared ownership.
+  /// The render-attached animation path: a change invalidates only painting, so
+  /// no element rebuild and no per-frame widget allocation. `slot` is a member
+  /// of the concrete render object, so the subscription's lifetime is exactly
+  /// the render object's with no shared ownership.
   void observeForPaint(Subscription& slot, Listenable* source) {
     slot.detach();
     if (source) {
       source->subscribe(
           slot, [](void* p) { static_cast<RenderObject*>(p)->markNeedsPaint(); }, this);
-    }
-  }
-
-  /// The expensive counterpart, for animated properties that affect layout.
-  /// Named differently on purpose: the call site should say which it is.
-  void observeForLayout(Subscription& slot, Listenable* source) {
-    slot.detach();
-    if (source) {
-      source->subscribe(
-          slot, [](void* p) { static_cast<RenderObject*>(p)->markNeedsLayout(); }, this);
     }
   }
 
@@ -175,10 +154,9 @@ private:
 
 /// Records painting into a DisplayList.
 ///
-/// A repaint boundary child is recorded into its *own* list, positioned by a
-/// DrawList command in the parent. The child's list is recorded relative to its
-/// own origin, so moving a boundary does not require re-recording it -- only the
-/// parent's DrawList offset changes.
+/// A repaint boundary child is recorded into its *own* list, at its own origin,
+/// and positioned by a DrawList command in the parent. Moving a boundary
+/// therefore changes only that DrawList's offset and never re-records it.
 class PaintingContext {
 public:
   explicit PaintingContext(DisplayList& list) : list_(list) {}
@@ -225,11 +203,9 @@ private:
 // PipelineOwner
 // ---------------------------------------------------------------------------
 
-/// Drives the render tree through its phases and holds the dirty sets.
-///
-/// The two dirty lists are separate on purpose. Layout invalidation and paint
-/// invalidation are different costs, and an animation that only affects painting
-/// must never touch the layout list.
+/// Drives the render tree through its phases and holds the dirty sets, which
+/// are separate so an animation that only affects painting never touches the
+/// layout list.
 class PipelineOwner {
 public:
   PipelineOwner() = default;
@@ -250,17 +226,9 @@ public:
 
   PipelinePhase phase() const noexcept { return phase_; }
 
-  /// True when some node is dirty and a frame would do work. When this is false
-  /// `drawFrame` is a no-op and the scene's revision will not change.
+  /// When false, `drawFrame` is a no-op and the scene's revision will not move.
   bool needsFrame() const noexcept {
     return !nodesNeedingLayout_.empty() || !nodesNeedingPaint_.empty();
-  }
-
-  void requestVisualUpdate() noexcept { visualUpdateRequested_ = true; }
-  bool consumeVisualUpdateRequest() noexcept {
-    const bool v = visualUpdateRequested_;
-    visualUpdateRequested_ = false;
-    return v;
   }
 
   /// Lays out every dirty relayout boundary, shallowest first, so a parent's
@@ -276,13 +244,9 @@ public:
   /// translated state verbatim.
   Scene scene() const;
 
-  /// One frame, as the game loop calls it. Resets the frame stats, flushes both
-  /// phases in order, and hands back what to submit.
-  ///
-  /// Calling this when nothing is dirty does no work at all: no layout, no
-  /// paint, no recording, and a Scene whose revision is unchanged from last
-  /// frame. That is the steady state, and it is meant to be cheap enough to call
-  /// unconditionally every frame rather than guarding it with `needsFrame()`.
+  /// One frame, as the game loop calls it. Cheap enough to call unconditionally:
+  /// with nothing dirty it does no layout, no paint and no recording, and
+  /// returns a Scene whose revision is unchanged.
   Scene drawFrame();
 
   // --- per-frame accounting, used by tests --------------------------------
@@ -291,9 +255,9 @@ public:
     int paints = 0;    ///< paintWithContext invocations
     int boundariesRelaidOut = 0;
     int boundariesRepainted = 0;
-    /// Times the layout dirty list had to be drained. A healthy frame is 0 (no
-    /// work) or 1; more means laying a node out dirtied an ancestor that had not
-    /// been visited yet, which is legal but worth noticing.
+    /// Times the layout dirty list had to be drained. A healthy frame is 0 or 1;
+    /// more means laying a node out dirtied an unvisited ancestor, which is
+    /// legal but rarely intended.
     int layoutPasses = 0;
   };
   const FrameStats& stats() const noexcept { return stats_; }
@@ -302,30 +266,46 @@ public:
   std::size_t dirtyLayoutCount() const noexcept { return nodesNeedingLayout_.size(); }
   std::size_t dirtyPaintCount() const noexcept { return nodesNeedingPaint_.size(); }
 
-  // --- internal, used by the protocol layer -------------------------------
-  /// The node whose performLayout is currently running. Used to enforce that a
-  /// parent only reads a child's size when it asked for it.
+  /// The node whose performLayout is currently running. RenderBox::size() reads
+  /// it to enforce that a parent only measures a child it asked to measure.
   RenderObject* activeLayoutNode() const noexcept { return activeLayoutNode_; }
-  void setActiveLayoutNode(RenderObject* n) noexcept { activeLayoutNode_ = n; }
-  FrameStats& mutableStats() noexcept { return stats_; }
-  void setPhase(PipelinePhase p) noexcept { phase_ = p; }
 
 private:
   friend class RenderObject;
+  friend class RenderBox;
   friend class PaintingContext;
+
+  /// Returns the pipeline to Idle however the phase is left, including on a
+  /// contract violation: in a checked build that throws, and a pipeline stuck in
+  /// Paint would turn one reported failure into a confusing second one during
+  /// teardown.
+  class PhaseScope {
+  public:
+    PhaseScope(PipelineOwner& owner, PipelinePhase entering) noexcept : owner_(owner) {
+      owner_.phase_ = entering;
+    }
+    ~PhaseScope() { owner_.phase_ = PipelinePhase::Idle; }
+
+    PhaseScope(const PhaseScope&) = delete;
+    PhaseScope& operator=(const PhaseScope&) = delete;
+
+  private:
+    PipelineOwner& owner_;
+  };
+
+  void setActiveLayoutNode(RenderObject* n) noexcept { activeLayoutNode_ = n; }
+  FrameStats& mutableStats() noexcept { return stats_; }
 
   RenderObject* root_ = nullptr;
   std::vector<RenderObject*> nodesNeedingLayout_;
   std::vector<RenderObject*> nodesNeedingPaint_;
-  /// Each flush drains its dirty list into one of these so that nodes dirtied
-  /// mid-flush land in a fresh list. They are members rather than locals so a
-  /// frame that does work still allocates nothing once the high-water mark is
-  /// reached -- which matters because an animating HUD does work every frame.
+  /// Each flush drains its dirty list into one of these, so nodes dirtied
+  /// mid-flush land in a fresh list. Members rather than locals, so a frame that
+  /// does work still allocates nothing once the high-water mark is reached.
   std::vector<RenderObject*> layoutScratch_;
   std::vector<RenderObject*> paintScratch_;
   PipelinePhase phase_ = PipelinePhase::Idle;
   RenderObject* activeLayoutNode_ = nullptr;
-  bool visualUpdateRequested_ = false;
   FrameStats stats_;
   /// Incremented every time any display list is re-recorded.
   std::uint64_t recordCounter_ = 0;

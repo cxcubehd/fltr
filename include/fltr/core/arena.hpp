@@ -14,16 +14,14 @@ namespace fltr {
 
 /// A bump allocator for objects with a bounded, uniform lifetime.
 ///
-/// Widget configurations live here. They are created during a build phase and
-/// released wholesale when it ends; `reset()` rewinds to the first chunk and
-/// bumps a generation counter, which is a pointer store plus an increment. The
-/// chunks themselves are retained, so the steady state performs no allocation.
+/// Widget configurations live here: created during a build phase and released
+/// wholesale when it ends. `reset()` rewinds to the first chunk and bumps the
+/// generation, retaining the chunks, so the steady state allocates nothing.
 ///
-/// Trivially destructible types are the intended case and go through
-/// `create()`. A type that genuinely owns heap memory must be created with
-/// `createOwning()`, which registers a destructor to run at reset. That call is
-/// deliberately more verbose than the common path: owning widgets are an
-/// exception and should be visible as one.
+/// `create()` is the common path and takes only trivially destructible types.
+/// Anything that owns heap memory must go through `createOwning()`, which is
+/// more verbose on purpose: such widgets are an exception and should look like
+/// one at the point of creation.
 class Arena {
 public:
   explicit Arena(std::size_t firstChunkBytes = 64 * 1024) : firstChunk_(firstChunkBytes) {}
@@ -69,17 +67,6 @@ public:
     return obj;
   }
 
-  /// Copies `n` elements into arena storage and returns a pointer to the first.
-  template <class T>
-  T* createArray(const T* src, std::size_t n) {
-    static_assert(std::is_trivially_destructible_v<T>);
-    if (n == 0) return nullptr;
-    void* mem = allocate(sizeof(T) * n, alignof(T));
-    T* dst = static_cast<T*>(mem);
-    for (std::size_t i = 0; i < n; ++i) new (dst + i) T(src[i]);
-    return dst;
-  }
-
   /// Releases everything allocated since the last reset and invalidates every
   /// pointer previously handed out. Retains the chunks.
   void reset() {
@@ -92,16 +79,14 @@ public:
       cur_ = end_ = nullptr;
     }
     ++generation_;
-    highWater_ = highWater_ > bytesUsed_ ? highWater_ : bytesUsed_;
     bytesUsed_ = 0;
   }
 
-  /// Incremented by every reset. A pointer handed out during generation N is
-  /// dangling from generation N+1 onwards; WidgetRef uses this to catch stale
-  /// dereferences in checked builds.
+  /// Incremented by every reset, so a pointer handed out during generation N is
+  /// dangling from N+1 on. WidgetRef compares against it to tell a stale
+  /// reference from a live one.
   std::uint32_t generation() const noexcept { return generation_; }
   std::size_t bytesUsed() const noexcept { return bytesUsed_; }
-  std::size_t highWaterMark() const noexcept { return highWater_ > bytesUsed_ ? highWater_ : bytesUsed_; }
   std::size_t chunkCount() const noexcept { return chunks_.size(); }
   /// Total bytes ever requested from the system allocator.
   std::size_t reservedBytes() const noexcept {
@@ -152,7 +137,6 @@ private:
   std::byte* end_ = nullptr;
   std::uint32_t generation_ = 1;
   std::size_t bytesUsed_ = 0;
-  std::size_t highWater_ = 0;
 };
 
 }  // namespace fltr

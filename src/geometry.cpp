@@ -1,46 +1,6 @@
 #include "fltr/core/geometry.hpp"
 
-#include <cstdio>
-#include <cstdlib>
-#include <string>
-
-#include "fltr/core/config.hpp"
-
 namespace fltr {
-
-namespace {
-[[noreturn]] void defaultViolationHandler(const char* expr, const char* msg, const char* file,
-                                          int line) {
-  std::string what = "fltr contract violation: ";
-  what += msg ? msg : "";
-  what += " [";
-  what += expr ? expr : "";
-  what += "] at ";
-  what += file ? file : "?";
-  what += ":";
-  what += std::to_string(line);
-  throw ContractViolation(what);
-}
-
-detail::ViolationHandler g_handler = &defaultViolationHandler;
-}  // namespace
-
-namespace detail {
-
-ViolationHandler setViolationHandler(ViolationHandler h) {
-  ViolationHandler prev = g_handler;
-  g_handler = h ? h : &defaultViolationHandler;
-  return prev;
-}
-
-void reportViolation(const char* expr, const char* msg, const char* file, int line) {
-  g_handler(expr, msg, file, line);
-  // A handler that returns is a programming error; there is no sane recovery
-  // from a violated layout invariant.
-  std::abort();
-}
-
-}  // namespace detail
 
 Color lerp(Color a, Color b, float t) noexcept {
   auto mix = [t](std::uint8_t x, std::uint8_t y) {

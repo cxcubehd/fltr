@@ -129,6 +129,10 @@ ParagraphHandle MonospaceTextService::acquire(const ParagraphSpec& spec, float m
     lines.resize(static_cast<std::size_t>(maxLines));
     para.metrics.didExceedMaxLines = true;
   }
+  // A real shaper replaces the tail of the last line with an ellipsis glyph and
+  // re-measures. The placeholder only reports that it would have.
+  para.metrics.didEllipsize =
+      para.metrics.didExceedMaxLines && spec.overflow == TextOverflow::Ellipsis;
 
   // --- Position runs ------------------------------------------------------
   float y = 0.0f;

@@ -1,32 +1,11 @@
 #include "testing.hpp"
 
-#include <cstdlib>
-#include <new>
-
 #include "fltr/harness.hpp"
 #include "fltr/render/boxes.hpp"
 #include "fltr/render/flex.hpp"
 #include "fltr/render/stack.hpp"
 
 using namespace fltr;
-
-// Counts every heap allocation in the test binary. "No per-frame heap churn in
-// the steady state" is a hard requirement of this framework, so it is measured
-// rather than asserted in a comment.
-namespace {
-std::size_t g_allocations = 0;
-}
-
-void* operator new(std::size_t n) {
-  ++g_allocations;
-  if (void* p = std::malloc(n == 0 ? 1 : n)) return p;
-  throw std::bad_alloc();
-}
-void* operator new[](std::size_t n) { return ::operator new(n); }
-void operator delete(void* p) noexcept { std::free(p); }
-void operator delete[](void* p) noexcept { std::free(p); }
-void operator delete(void* p, std::size_t) noexcept { std::free(p); }
-void operator delete[](void* p, std::size_t) noexcept { std::free(p); }
 
 namespace {
 
@@ -76,6 +55,16 @@ public:
   const char* typeName() const override { return "IllegalPainter"; }
   void performLayout() override { setSize(constraints_.constrain({10, 10})); }
   void paint(PaintingContext&, Offset) override { markNeedsLayout(); }
+};
+
+/// Deliberately illegal: re-enters the pipeline from inside its own layout.
+class RenderReentrantLayout final : public RenderBox {
+public:
+  const char* typeName() const override { return "ReentrantLayout"; }
+  void performLayout() override {
+    setSize(constraints_.constrain({10, 10}));
+    owner()->flushLayout();
+  }
 };
 
 /// Deliberately non-converging: dirties a partner every time it lays out, so a
@@ -210,22 +199,22 @@ TEST(pipeline_steady_state_frames_allocate_nothing) {
   }
 
   // A frame with nothing dirty.
-  std::size_t before = g_allocations;
+  std::size_t before = fltrtest::allocationCount();
   t.owner.drawFrame();
-  CHECK_EQ(g_allocations - before, std::size_t{0});
+  CHECK_EQ(fltrtest::allocationCount() - before, std::size_t{0});
 
   // A repaint-only frame, which is what an animation attached to a render
   // object produces every single tick.
-  before = g_allocations;
+  before = fltrtest::allocationCount();
   t.a->setColor(Color::argb(0xFF123456));
   t.owner.drawFrame();
-  CHECK_EQ(g_allocations - before, std::size_t{0});
+  CHECK_EQ(fltrtest::allocationCount() - before, std::size_t{0});
 
   // And a relayout frame.
-  before = g_allocations;
+  before = fltrtest::allocationCount();
   t.a->setPreferredSize({44, 20});
   t.owner.drawFrame();
-  CHECK_EQ(g_allocations - before, std::size_t{0});
+  CHECK_EQ(fltrtest::allocationCount() - before, std::size_t{0});
 }
 
 // ---------------------------------------------------------------------------
@@ -537,13 +526,16 @@ TEST(pipeline_flushing_paint_with_layout_still_dirty_is_a_contract_violation) {
 }
 
 TEST(pipeline_reentering_a_phase_is_a_contract_violation) {
-  BasicTree t;
-  t.owner.drawFrame();
-  t.a->setPreferredSize({50, 20});
-  // Simulate being inside layout when a second flush is requested.
-  t.owner.setPhase(PipelinePhase::Layout);
-  CHECK_THROWS(t.owner.flushLayout());
-  t.owner.setPhase(PipelinePhase::Idle);
+  PipelineOwner owner;
+  auto view = make<RenderView>(Size{100, 100});
+  view->setChild(make<RenderReentrantLayout>());
+  owner.setRootNode(view.get());
+
+  CHECK_THROWS(owner.flushLayout());
+  // The scope restored the phase on the way out, so teardown is not a second
+  // confusing failure.
+  CHECK_EQ(owner.phase(), PipelinePhase::Idle);
+  owner.setRootNode(nullptr);
 }
 
 TEST(pipeline_a_node_still_needing_layout_cannot_be_painted) {
@@ -703,6 +695,23 @@ TEST(pipeline_layout_that_never_converges_is_capped_and_reported) {
   CHECK_THROWS(owner.flushLayout());
   // It stopped rather than spinning, and stopped where it said it would.
   CHECK_EQ(owner.stats().layoutPasses, 32);
+}
+
+TEST(pipeline_the_convergence_cap_is_per_flush_not_cumulative) {
+  PipelineOwner owner;
+  auto view = make<RenderView>(Size{200, 100});
+  auto align = make<RenderPositionedBox>();
+  RenderPositionedBox* alignRaw = align.get();
+  view->setChild(std::move(align));
+  owner.setRootNode(view.get());
+  owner.flushLayout();
+
+  // Far more flushes than the cap, without the resetStats() that drawFrame does.
+  for (int i = 0; i < 100; ++i) {
+    alignRaw->setAlignment(i % 2 == 0 ? Alignment::topLeft() : Alignment::bottomRight());
+    owner.flushLayout();
+    CHECK_EQ(owner.dirtyLayoutCount(), std::size_t{0});
+  }
 }
 
 TEST(pipeline_scene_dump_is_stable_and_shows_nested_boundaries_in_place) {
