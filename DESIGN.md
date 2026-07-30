@@ -161,3 +161,112 @@ the subscriber: a `Watch` element subscribes and marks itself dirty for rebuild;
 a render object subscribes via `watchForPaint` and only marks itself needing
 paint. Same signal, different sink, and which one you are on is visible at the
 call site.
+
+---
+
+## Milestone 2 — the render tree
+
+Built and verified with no widget layer and no renderer at all: trees are
+constructed by hand in `tests/test_render_layout.cpp` and `layout()` is called
+directly. The render tree carries the invariants that cannot be fixed later, so
+it has to be right before anything is built on top of it.
+
+### The box protocol
+
+`RenderBox::layout(constraints, parentUsesSize)` is the single entry point.
+`performLayout()` is never called directly. Three things are enforced rather
+than merely documented:
+
+- **`setSize` may only be called from this object's own layout**, and the size
+  must satisfy the incoming constraints (`layout_a_size_violating_constraints_is_a_contract_violation`).
+- **A parent may only read a child's size if it passed `parentUsesSize = true`.**
+  Checked by comparing the pipeline's currently-active layout node against the
+  child's parent. This is the load-bearing check: without it a parent could
+  silently depend on a child that remained a relayout boundary, and would never
+  be re-laid-out when that child changed.
+- **Constraints must be normalised** on the way in.
+
+`layoutChild` / `layoutChildForSize` are the two ways to lay out a child, named
+so the call site says which one it is.
+
+### Relayout boundaries
+
+Computed exactly as Flutter does, and for the same reasons:
+
+```
+isRelayoutBoundary = !parentUsesSize || sizedByParent || constraints.isTight || parent == nullptr
+```
+
+`markNeedsLayout` walks up only to the nearest boundary and registers *that*
+node with the owner. `markNeedsPaint` is a separate, cheaper walk that stops at
+the nearest repaint boundary and never touches layout state.
+
+The boundary flag is a tri-state (`-1` unknown / `0` no / `1` yes). Unknown means
+"never laid out, or freshly reparented" and propagates like "no", which is the
+safe direction.
+
+DIVERGENCE: Flutter eagerly propagates a `_cleanRelayoutBoundary` pass when a
+subtree is reparented. We reset the subtree's flags to unknown on adopt/drop and
+otherwise rely on two guards in the flush loops — a node is skipped unless it is
+still dirty *and* still owned by this pipeline. Detach therefore leaves stale
+pointers in the dirty lists rather than paying an O(n) removal. The cost is a
+slightly larger dirty vector in churn-heavy frames; the benefit is that detach
+stays O(subtree) instead of O(subtree x dirty).
+
+### DIVERGENCE: per-child data lives in the parent
+
+Flutter attaches a heap-allocated `ParentData` object to each child, typed by
+whatever the parent happens to be. `RenderBoxContainer<ChildData>` stores that
+data in the parent's own child list instead: statically typed, no allocation,
+and a child cannot be asked for parent data belonging to a different parent.
+
+The cost is that a child cannot read its own parent data without going through
+the parent. Nothing in this framework needs that.
+
+### Painting
+
+`PaintingContext` records into a `DisplayList`. A repaint boundary is recorded
+into its **own** list at its own origin, and the parent emits a `DrawList`
+referencing it. Two consequences fall out for free:
+
+- moving a boundary does not re-record it — only the parent's `DrawList` offset
+  changes;
+- re-recording a boundary does not touch the parent's list or its revision.
+
+`pushOpacity` records nothing at all at alpha 0 and no push at alpha 1, so the
+common cases cost nothing in the command stream.
+
+### The widget catalogue's render half
+
+`View` (root, always a repaint boundary), `Padding`, `Align`, `ConstrainedBox`,
+`DecoratedBox`, `Opacity`, `Transform`, `ClipRect`, `RepaintBoundary`, `Row` /
+`Column` (`RenderFlex`), `Stack`, `Paragraph`, `Sprite`.
+
+Flex is two linear passes: inflexible children measure themselves, then flexible
+children divide the remainder. The last flexible child receives
+`freeSpace - allocatedFlexSpace` rather than its nominal share, matching Flutter
+— which means a `FlexFit::Loose` sibling's unused space is handed to the last
+flexible child instead of leaving a gap. That is tested explicitly, because it
+is surprising.
+
+`RenderStack` with `StackFit::Expand` is `sizedByParent`: its size comes from
+its constraints alone, so it is always a relayout boundary and no child can ever
+reach its parent. That is a genuine instance of the concept rather than a
+decoration.
+
+DIVERGENCE: Flutter's `RenderStack` is not `sizedByParent`; it computes its size
+in `performLayout` via `_computeSize`. Making Expand `sizedByParent` here is
+strictly stronger and gives the pipeline a real sizedByParent node to exercise.
+The cost is that `StackFit::Expand` under unbounded constraints is now a
+contract violation rather than a silent fallback — which is the right failure.
+
+### Text stays an ordinary child
+
+`RenderParagraph` resolves its size from constraints like any other box, by
+asking the `TextService` to measure into `constraints.maxWidth`. Nothing in
+layout special-cases it. A real shaper drops in behind `TextService` without
+touching this class.
+
+The render object owns its text as a `std::string`; the widget config carries
+only a `std::string_view`. Render objects are long-lived and may own heap
+memory, and the copy happens only when the text actually changes.
