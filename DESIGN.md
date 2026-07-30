@@ -104,9 +104,12 @@ partial repaint cheap. It is also the seam a real compositing layer tree slots
 into later: give `DrawListCmd` a transform/opacity slot and let a compositor own
 those lists. That is additive, not a rewrite.
 
-`Scene::revision` is the sum of all reachable list revisions. Unchanged means
-nothing was re-recorded and the consumer may resubmit last frame's translation
-verbatim.
+`Scene::revision` is a monotonic count of how many display lists the pipeline
+has re-recorded. Unchanged means nothing was re-recorded anywhere in the tree and
+the consumer may resubmit last frame's translation verbatim. A per-list
+`revision()` is also exposed, so a backend that caches translated state keys it
+on `(list pointer, list revision)` and re-translates only the boundaries that
+actually moved on.
 
 Images and fonts are `std::uint64_t` opaque handles. The framework never loads,
 allocates, or frees a GPU resource.
@@ -158,9 +161,9 @@ not-yet-visited successor — via a chain of cursors that `detach()` fixes up.
 This is the one observable abstraction, shared by reactivity and animation. **The
 rebuild-versus-repaint distinction deliberately does not live here.** It lives in
 the subscriber: a `Watch` element subscribes and marks itself dirty for rebuild;
-a render object subscribes via `watchForPaint` and only marks itself needing
-paint. Same signal, different sink, and which one you are on is visible at the
-call site.
+a render object subscribes via `observeForPaint` and only marks itself needing
+paint, or via `observeForLayout` when the property genuinely affects layout. Same
+signal, different sink, and which one you are on is visible at the call site.
 
 ---
 
@@ -208,10 +211,17 @@ safe direction.
 DIVERGENCE: Flutter eagerly propagates a `_cleanRelayoutBoundary` pass when a
 subtree is reparented. We reset the subtree's flags to unknown on adopt/drop and
 otherwise rely on two guards in the flush loops — a node is skipped unless it is
-still dirty *and* still owned by this pipeline. Detach therefore leaves stale
-pointers in the dirty lists rather than paying an O(n) removal. The cost is a
-slightly larger dirty vector in churn-heavy frames; the benefit is that detach
-stays O(subtree) instead of O(subtree x dirty).
+still dirty *and* still owned by this pipeline.
+
+> **Corrected in M3.** This section originally went on to say that detach could
+> simply *leave* stale pointers in the dirty lists, relying on those guards. That
+> is wrong, and driving the pipeline in M3 proved it: the guards have to
+> dereference an entry to decide whether to skip it, so a detached node that is
+> then destroyed leaves the flush reading freed memory. Detach now purges the
+> lists — once per detach call, not once per detached node, so tearing down a
+> subtree is O(subtree + dirty) rather than O(subtree x dirty). The guards stay,
+> because they still cover a node that is alive but has moved to another
+> pipeline.
 
 ### DIVERGENCE: per-child data lives in the parent
 
@@ -270,3 +280,115 @@ touching this class.
 The render object owns its text as a `std::string`; the widget config carries
 only a `std::string_view`. Render objects are long-lived and may own heap
 memory, and the copy happens only when the text actually changes.
+
+---
+
+## Milestone 3 — the pipeline
+
+`PipelineOwner` was written in M2, because `RenderObject`'s invalidation cannot
+compile without it, but nothing drove it: the M2 tests construct trees by hand
+and call `layout()` directly. M3 is where it is actually driven, and driving it
+is what found the bugs below. That is the argument for the milestone order —
+none of these are visible by reading the code.
+
+### The frame
+
+`PipelineOwner::drawFrame()` is what a game loop calls. It resets the frame
+stats, flushes layout, flushes paint, and returns the `Scene` to submit. It is
+meant to be called unconditionally rather than guarded by `needsFrame()`,
+because a frame with nothing dirty already costs nothing.
+
+Layout flushes shallowest-first, so a parent's layout subsumes any dirty
+descendant. Paint flushes deepest-first, so a boundary that repaints on its own
+is already clean by the time an ancestor embeds it by reference.
+
+### Phase separation, both directions
+
+M2 enforced half of it: `markNeedsLayout` refuses to run during the paint phase.
+The other half was missing — nothing stopped a node being painted outside the
+paint phase. `paintWithContext` now requires it. A detached tree has no owner
+and therefore no phase, which is how the M2 tests still paint by hand.
+
+Phase restoration is exception-safe. In a shipping build a contract violation
+aborts and this is moot; in a checked build it throws, and a pipeline left stuck
+in `Paint` turns one reported failure into a confusing second one during
+teardown, when a destructor drops a child and marks layout dirty.
+
+### Non-convergence is capped, not asserted away
+
+A node cannot spin on its own: it is still marked dirty while its own
+`performLayout` runs, so marking itself short-circuits. Two nodes dirtying each
+other can spin, and that is a real bug class in this design. The drain is capped
+at 32 passes in *every* build, so the failure mode is one stale frame rather
+than a frozen game, and a checked build then names it. `FrameStats::layoutPasses`
+exposes the count; a healthy frame is 0 or 1.
+
+### What driving the pipeline surfaced
+
+**A use-after-free in the dirty lists.** Documented above, in the M2 section it
+contradicts. The purge lives in `detach()` and in `~RenderObject` — the latter
+covers a root destroyed while still installed, which also clears the owner's
+root pointer.
+
+**`RenderStack` read a child's size it had not asked for.** Under
+`StackFit::Expand` it laid children out with `parentUsesSize = false` and then
+read `child.size()` in the offset pass. The M2 code even carried a comment
+explaining why that was supposed to be fine ("layoutChild gave it tight
+constraints"), which is exactly the kind of reasoning the check exists to
+refuse. The fix is to say `parentUsesSize = true`, which is honest and costs
+nothing: tight constraints already make those children relayout boundaries, so
+the boundary decision is unchanged. This is the check from M2 doing its job the
+first time anything ran through it.
+
+**A test expectation that taught something.** `EdgeInsets`-deflated constraints
+stay tight, so `View > Padding > Row` makes the *Row* a relayout boundary, not
+just the padding. Getting a non-boundary chain to test propagation with needs
+something that genuinely loosens — an `Align`. Worth knowing when reasoning
+about where invalidation actually stops in a real tree.
+
+### No per-frame heap churn, measured
+
+Both flush phases drain their dirty list into a scratch buffer so that nodes
+dirtied mid-flush land in a fresh list. Those buffers are members, not locals,
+so a frame that does work allocates nothing once the high-water mark is reached.
+That matters because an animating HUD does work every frame — treating "steady
+state" as "nothing changed" would miss the case the requirement is actually
+about.
+
+`pipeline_steady_state_frames_allocate_nothing` replaces the global `operator
+new` with a counter and asserts zero allocations across three frame shapes: one
+with nothing dirty, one repaint-only (what a render-attached animation produces
+every tick), and one relayout.
+
+Hoisting the buffers introduced a hazard worth naming: a node detached from
+inside a flush — by a parent that restructures its children during layout —
+would sit in the buffer that flush is walking. Purging blanks those entries
+rather than erasing them, so the walk's iterators stay valid, and both loops
+skip nulls.
+
+### What is verified
+
+- A first frame lays out and paints the whole tree; a second does nothing at
+  all, and the scene's revision and commands are unchanged and resubmittable.
+- Dirtying a leaf registers exactly one node — the nearest enclosing boundary —
+  and re-lays-out that boundary and below, never above.
+- The three ways to be a boundary each stop propagation: tight constraints,
+  `sizedByParent`, and an unmeasured child. The negative case is tested too,
+  since otherwise the positive ones prove nothing.
+- Reparenting resets the boundary decision, and the node picks up its new
+  parent's answer.
+- A paint-only change performs no layout, repaints one boundary, and leaves the
+  root's display list untouched when that boundary is nested.
+- Repainting the root does not re-record a clean nested boundary.
+- Moving a repaint boundary does not re-record it — only the parent's `DrawList`
+  offset changes. This is the payoff of recording boundaries at their own origin.
+- A render object observing a `Listenable` invalidates only its painting, and
+  its subscription unhooks with it. That is the M7 render-attached path, already
+  load-bearing.
+- Both phase-separation violations, phase re-entry, painting a node that still
+  needs layout, and non-convergence all trip contracts.
+- Removing a subtree purges its dirty entries; a detached subtree is skipped and
+  stays dirty for reuse; re-attaching re-registers it.
+
+Verified on GCC 13.3 and Clang 18.1, and under ASan + UBSan. The library also
+compiles clean with `FLTR_ENABLE_CHECKS=OFF`.

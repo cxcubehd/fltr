@@ -1,10 +1,22 @@
 #include "fltr/render/object.hpp"
 
 #include <algorithm>
+#include <vector>
 
 namespace fltr {
 
-RenderObject::~RenderObject() = default;
+RenderObject::~RenderObject() {
+  // Normal teardown drops a child before destroying it, so this only fires for a
+  // root destroyed while still installed. Without it the owner would be left
+  // holding pointers into freed memory, and the flush guards cannot help: they
+  // have to read the node to decide whether to skip it.
+  if (owner_) {
+    PipelineOwner* o = owner_;
+    owner_ = nullptr;
+    if (o->root_ == this) o->root_ = nullptr;
+    o->purgeDetachedDirtyNodes();
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Tree
@@ -27,11 +39,17 @@ void RenderObject::attach(PipelineOwner* owner) {
 }
 
 void RenderObject::detach() {
-  // Stale entries are left in the owner's dirty lists; both flush phases skip
-  // any node whose owner is no longer this pipeline. That is cheaper than an
-  // O(n) removal on every detach, and detach is the rare operation.
+  PipelineOwner* o = owner_;
+  detachSubtree();
+  // One sweep for the whole subtree, not one per node. Entries have to go: a
+  // detached node may be destroyed at any point after this, and the flush
+  // guards have to dereference an entry before they can skip it.
+  if (o) o->purgeDetachedDirtyNodes();
+}
+
+void RenderObject::detachSubtree() {
   owner_ = nullptr;
-  visitChildren([](RenderObject& child) { child.detach(); });
+  visitChildren([](RenderObject& child) { child.detachSubtree(); });
 }
 
 void RenderObject::redepthChild(RenderObject* child) {
@@ -111,7 +129,10 @@ void RenderObject::markNeedsPaint() {
   } else if (parent_) {
     parent_->markNeedsPaint();
   } else if (owner_) {
-    owner_->rootNeedsPaint_ = true;
+    // A root that has not painted yet, so `wasRepaintBoundary_` is still false.
+    // It is the outermost boundary by definition and registers as one.
+    FLTR_ASSERT(isRepaintBoundary(), "the pipeline root must be a repaint boundary");
+    owner_->nodesNeedingPaint_.push_back(this);
     owner_->requestVisualUpdate();
   }
 }
@@ -128,6 +149,12 @@ DisplayList& RenderObject::boundaryList() {
 
 void RenderObject::paintWithContext(PaintingContext& context, Offset offset) {
   FLTR_EXPECTS(!needsLayout_, "cannot paint a node that still needs layout");
+  // The other half of phase separation. `markNeedsLayout` refuses to run during
+  // paint; this refuses to paint outside it. An attached tree is only ever
+  // painted by flushPaint -- a detached one has no owner and no phase, which is
+  // how the render-tree tests paint by hand.
+  FLTR_EXPECTS(owner_ == nullptr || owner_->phase() == PipelinePhase::Paint,
+               "painting outside the paint phase");
   needsPaint_ = false;
   wasRepaintBoundary_ = isRepaintBoundary();
   ++paintCount_;
@@ -161,8 +188,43 @@ void PaintingContext::paintChild(RenderObject& child, Offset offset) {
 // PipelineOwner
 // ---------------------------------------------------------------------------
 
+namespace {
+
+/// Returns the pipeline to Idle however the phase is left, including on a
+/// contract violation. In a shipping build a violation aborts and this does not
+/// matter; in a checked build it throws, and a pipeline stuck in Paint would
+/// turn one reported failure into a confusing second one during teardown.
+struct PhaseScope {
+  PipelineOwner* owner;
+  explicit PhaseScope(PipelineOwner* o, PipelinePhase entering) : owner(o) {
+    owner->setPhase(entering);
+  }
+  ~PhaseScope() { owner->setPhase(PipelinePhase::Idle); }
+  PhaseScope(const PhaseScope&) = delete;
+  PhaseScope& operator=(const PhaseScope&) = delete;
+};
+
+}  // namespace
+
 PipelineOwner::~PipelineOwner() {
   if (root_) root_->detach();
+}
+
+void PipelineOwner::purgeDetachedDirtyNodes() {
+  const auto gone = [this](const RenderObject* n) { return n->owner_ != this; };
+  std::erase_if(nodesNeedingLayout_, gone);
+  std::erase_if(nodesNeedingPaint_, gone);
+  // A node can be detached from inside a flush -- by a parent that restructures
+  // its children during layout, say -- while it is sitting in the scratch buffer
+  // that flush is currently walking. Blank those entries instead of erasing
+  // them, so the walk's iterators stay valid.
+  const auto blank = [&gone](std::vector<RenderObject*>& scratch) {
+    for (RenderObject*& n : scratch) {
+      if (n != nullptr && gone(n)) n = nullptr;
+    }
+  };
+  blank(layoutScratch_);
+  blank(paintScratch_);
 }
 
 void PipelineOwner::setRootNode(RenderObject* root) {
@@ -177,64 +239,79 @@ void PipelineOwner::setRootNode(RenderObject* root) {
     root_->attach(this);
     // A node with no parent is a relayout boundary by definition.
     root_->relayoutBoundary_ = 1;
-    // The root is dirty by construction but was never registered, because
-    // markNeedsLayout short-circuits on an already-dirty node.
+    // The root is dirty by construction but was never registered, because both
+    // mark* calls short-circuit on an already-dirty node.
     root_->needsLayout_ = false;
     root_->markNeedsLayout();
     root_->needsPaint_ = false;
-    root_->wasRepaintBoundary_ = true;
     root_->markNeedsPaint();
   }
 }
 
 void PipelineOwner::flushLayout() {
   FLTR_EXPECTS(phase_ == PipelinePhase::Idle, "flushLayout entered while another phase is active");
-  phase_ = PipelinePhase::Layout;
+  PhaseScope scope(this, PipelinePhase::Layout);
 
-  // Nodes dirtied *during* layout are picked up by the outer loop.
-  while (!nodesNeedingLayout_.empty()) {
-    std::vector<RenderObject*> dirty;
-    dirty.swap(nodesNeedingLayout_);
+  // Laying a node out can legitimately dirty a boundary that has not been
+  // visited yet, so the list is drained rather than swept once. A node that
+  // re-dirties itself on every pass would spin here; that is a bug in the render
+  // object, and the cap is real in every build so it degrades to a stale frame
+  // rather than a freeze. Checked builds then name it.
+  static constexpr int kMaxLayoutPasses = 32;
+  while (!nodesNeedingLayout_.empty() && stats_.layoutPasses < kMaxLayoutPasses) {
+    ++stats_.layoutPasses;
+    layoutScratch_.clear();
+    layoutScratch_.swap(nodesNeedingLayout_);
     // Shallowest first: a parent's layout subsumes any dirty descendants, which
     // are then skipped by the needsLayout guard below.
-    std::sort(dirty.begin(), dirty.end(),
+    std::sort(layoutScratch_.begin(), layoutScratch_.end(),
               [](const RenderObject* a, const RenderObject* b) { return a->depth_ < b->depth_; });
-    for (RenderObject* node : dirty) {
-      if (node->needsLayout_ && node->owner_ == this) {
+    for (RenderObject* node : layoutScratch_) {
+      if (node != nullptr && node->needsLayout_ && node->owner_ == this) {
         ++stats_.boundariesRelaidOut;
         node->layoutWithoutResize();
       }
     }
   }
-
-  phase_ = PipelinePhase::Idle;
+  FLTR_ENSURES(nodesNeedingLayout_.empty(),
+               "layout did not converge: a render object keeps dirtying itself during layout");
 }
 
 void PipelineOwner::flushPaint() {
   FLTR_EXPECTS(phase_ == PipelinePhase::Idle, "flushPaint entered while another phase is active");
   FLTR_EXPECTS(nodesNeedingLayout_.empty(), "flushPaint with layout still dirty");
-  phase_ = PipelinePhase::Paint;
+  {
+    PhaseScope scope(this, PipelinePhase::Paint);
 
-  std::vector<RenderObject*> dirty;
-  dirty.swap(nodesNeedingPaint_);
-  // Deepest first, so a boundary that repaints on its own is already clean by
-  // the time an ancestor boundary embeds it by reference.
-  std::sort(dirty.begin(), dirty.end(),
-            [](const RenderObject* a, const RenderObject* b) { return b->depth_ < a->depth_; });
+    paintScratch_.clear();
+    paintScratch_.swap(nodesNeedingPaint_);
+    // Deepest first, so a boundary that repaints on its own is already clean by
+    // the time an ancestor boundary embeds it by reference.
+    std::sort(paintScratch_.begin(), paintScratch_.end(),
+              [](const RenderObject* a, const RenderObject* b) { return b->depth_ < a->depth_; });
 
-  for (RenderObject* node : dirty) {
-    if (!node->needsPaint_ || node->owner_ != this) continue;
-    DisplayList& sub = node->boundaryList();
-    sub.beginRecording();
-    PaintingContext ctx(sub);
-    node->paintWithContext(ctx, Offset::zero());
-    sub.endRecording();
-    ++stats_.boundariesRepainted;
-    ++recordCounter_;
+    for (RenderObject* node : paintScratch_) {
+      if (node == nullptr || !node->needsPaint_ || node->owner_ != this) continue;
+      DisplayList& sub = node->boundaryList();
+      sub.beginRecording();
+      PaintingContext ctx(sub);
+      node->paintWithContext(ctx, Offset::zero());
+      sub.endRecording();
+      ++stats_.boundariesRepainted;
+      ++recordCounter_;
+    }
   }
+  // Checked outside the phase, so reporting it does not itself run under Paint.
+  // Nothing here legitimately dirties painting while painting, so a non-empty
+  // list means a render object invalidated something from inside its own paint.
+  FLTR_ENSURES(nodesNeedingPaint_.empty(), "painting dirtied painting");
+}
 
-  rootNeedsPaint_ = false;
-  phase_ = PipelinePhase::Idle;
+Scene PipelineOwner::drawFrame() {
+  resetStats();
+  flushLayout();
+  flushPaint();
+  return scene();
 }
 
 Scene PipelineOwner::scene() const {

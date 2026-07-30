@@ -61,6 +61,8 @@ public:
   virtual std::string describe() const { return {}; }
 
   void attach(PipelineOwner* owner);
+  /// Detaches this whole subtree from its pipeline and purges any of its nodes
+  /// from the owner's dirty lists, so nothing left there can outlive its node.
   void detach();
 
   // --- invalidation -------------------------------------------------------
@@ -158,6 +160,7 @@ private:
 
   void redepthChild(RenderObject* child);
   void resetRelayoutBoundarySubtree();
+  void detachSubtree();
 
   RenderObject* parent_ = nullptr;
   PipelineOwner* owner_ = nullptr;
@@ -235,14 +238,22 @@ public:
   PipelineOwner(const PipelineOwner&) = delete;
   PipelineOwner& operator=(const PipelineOwner&) = delete;
 
+  /// Installs the render tree. The root must outlive the owner, or be removed
+  /// with `setRootNode(nullptr)` first.
   void setRootNode(RenderObject* root);
   RenderObject* rootNode() const noexcept { return root_; }
 
+  /// Drops every dirty-list entry whose node no longer belongs to this pipeline.
+  /// Called once per detach rather than once per detached node, so tearing down
+  /// a subtree stays O(subtree + dirty) instead of O(subtree x dirty).
+  void purgeDetachedDirtyNodes();
+
   PipelinePhase phase() const noexcept { return phase_; }
 
-  /// True when some node is dirty and a frame would do work.
+  /// True when some node is dirty and a frame would do work. When this is false
+  /// `drawFrame` is a no-op and the scene's revision will not change.
   bool needsFrame() const noexcept {
-    return !nodesNeedingLayout_.empty() || !nodesNeedingPaint_.empty() || rootNeedsPaint_;
+    return !nodesNeedingLayout_.empty() || !nodesNeedingPaint_.empty();
   }
 
   void requestVisualUpdate() noexcept { visualUpdateRequested_ = true; }
@@ -265,12 +276,25 @@ public:
   /// translated state verbatim.
   Scene scene() const;
 
+  /// One frame, as the game loop calls it. Resets the frame stats, flushes both
+  /// phases in order, and hands back what to submit.
+  ///
+  /// Calling this when nothing is dirty does no work at all: no layout, no
+  /// paint, no recording, and a Scene whose revision is unchanged from last
+  /// frame. That is the steady state, and it is meant to be cheap enough to call
+  /// unconditionally every frame rather than guarding it with `needsFrame()`.
+  Scene drawFrame();
+
   // --- per-frame accounting, used by tests --------------------------------
   struct FrameStats {
     int layouts = 0;   ///< performLayout / performResize invocations
     int paints = 0;    ///< paintWithContext invocations
     int boundariesRelaidOut = 0;
     int boundariesRepainted = 0;
+    /// Times the layout dirty list had to be drained. A healthy frame is 0 (no
+    /// work) or 1; more means laying a node out dirtied an ancestor that had not
+    /// been visited yet, which is legal but worth noticing.
+    int layoutPasses = 0;
   };
   const FrameStats& stats() const noexcept { return stats_; }
   void resetStats() noexcept { stats_ = {}; }
@@ -293,9 +317,14 @@ private:
   RenderObject* root_ = nullptr;
   std::vector<RenderObject*> nodesNeedingLayout_;
   std::vector<RenderObject*> nodesNeedingPaint_;
+  /// Each flush drains its dirty list into one of these so that nodes dirtied
+  /// mid-flush land in a fresh list. They are members rather than locals so a
+  /// frame that does work still allocates nothing once the high-water mark is
+  /// reached -- which matters because an animating HUD does work every frame.
+  std::vector<RenderObject*> layoutScratch_;
+  std::vector<RenderObject*> paintScratch_;
   PipelinePhase phase_ = PipelinePhase::Idle;
   RenderObject* activeLayoutNode_ = nullptr;
-  bool rootNeedsPaint_ = true;
   bool visualUpdateRequested_ = false;
   FrameStats stats_;
   /// Incremented every time any display list is re-recorded.
