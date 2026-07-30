@@ -43,6 +43,12 @@ public:
   virtual bool hitTestSelf(Offset /*position*/) const { return false; }
   virtual bool hitTestChildren(HitTestResult& /*result*/, Offset /*position*/) { return false; }
 
+  /// The one kind of box that consumes pointer events; null for every other.
+  /// This is how routing and hover pick their targets out of a hit-test path
+  /// without RTTI, and it is the render tree's only mention of the gesture
+  /// layer.
+  virtual RenderPointerRegion* asPointerRegion() noexcept { return nullptr; }
+
   void paint(PaintingContext&, Offset) override {}
   void visitChildren(FunctionRef<void(RenderObject&)>) const override {}
 

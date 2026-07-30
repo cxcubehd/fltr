@@ -5,8 +5,10 @@
 
 #include "fltr/harness.hpp"
 #include "fltr/widgets/binding.hpp"
+#include "widget_harness.hpp"
 
 using namespace fltr;
+using namespace fltrtest;
 
 namespace {
 
@@ -145,121 +147,11 @@ private:
   Args args_;
 };
 
-Element& elementFor(Element& root, WidgetType type, Key key = Key::none()) {
-  Element* found = nullptr;
-  const auto walk = [&](auto&& self, Element& element) -> void {
-    if (found) return;
-    if (element.widget()->type() == type && element.widget()->key() == key) {
-      found = &element;
-      return;
-    }
-    element.visitChildren([&](Element& child) { self(self, child); });
-  };
-  walk(walk, root);
-  FLTR_EXPECTS(found != nullptr, "no such element in this tree");
-  return *found;
-}
-
 TrackedState& trackedState(Element& root, Key key = Key::none()) {
   auto& element =
       static_cast<StatefulElement<Tracked>&>(elementFor(root, widgetTypeOf<Tracked>(), key));
   return static_cast<TrackedState&>(element.state());
 }
-
-/// Drives the binding from a builder the test can change between frames, which
-/// is how a rebuild with different configuration is expressed.
-class Harness {
-public:
-  explicit Harness(Size surface = {200, 100}) : binding_(surface, text_) {}
-
-  template <class BuildRoot>
-  void attach(BuildRoot&& buildRoot) {
-    root_ = std::make_unique<RootHolder<std::decay_t<BuildRoot>>>(
-        std::forward<BuildRoot>(buildRoot));
-    binding_.attachRoot([this] { return root_->build(); });
-  }
-
-  Scene frame() { return binding_.drawFrame(); }
-
-  WidgetBinding& binding() noexcept { return binding_; }
-  BuildOwner& buildOwner() noexcept { return binding_.buildOwner(); }
-  PipelineOwner& pipeline() noexcept { return binding_.pipeline(); }
-  Element& rootElement() const noexcept { return *binding_.rootElement(); }
-  RenderView& view() const noexcept { return *binding_.renderView(); }
-  MonospaceTextService& textService() noexcept { return text_; }
-
-private:
-  struct RootBuilder {
-    virtual ~RootBuilder() = default;
-    virtual WidgetRef build() = 0;
-  };
-  template <class F>
-  struct RootHolder final : RootBuilder {
-    explicit RootHolder(F f) : fn(std::move(f)) {}
-    WidgetRef build() override { return fn(); }
-    F fn;
-  };
-
-  MonospaceTextService text_;
-  WidgetBinding binding_;
-  std::unique_ptr<RootBuilder> root_;
-};
-
-/// A stateful root whose build is driven by a test-owned function, so the tree
-/// can change shape between frames without re-attaching the binding.
-class Scripted;
-
-class ScriptedState final : public State<Scripted> {
-public:
-  WidgetRef build(BuildContext& context) override;
-};
-
-class Scripted final : public Configure<Scripted, StatefulWidget> {
-public:
-  using Script = WidgetRef (*)(void*);
-
-  struct Args {
-    Key key;
-    Script script = nullptr;
-    void* context = nullptr;
-  };
-
-  explicit Scripted(const Args& args) : Configure(args.key), args_(args) {}
-
-  const char* name() const noexcept override { return "Scripted"; }
-  WidgetRef run() const { return args_.script(args_.context); }
-
-  std::unique_ptr<State<Scripted>> createState() const {
-    return std::make_unique<ScriptedState>();
-  }
-
-private:
-  Args args_;
-};
-
-WidgetRef ScriptedState::build(BuildContext&) { return widget().run(); }
-
-/// A root that re-runs `script` on demand. `rebuild()` is the widget-layer
-/// equivalent of a game pushing a whole new frame of state.
-template <class Script>
-class ScriptedRoot {
-public:
-  explicit ScriptedRoot(Harness& harness, Script script) : script_(std::move(script)) {
-    harness.attach([this] {
-      return Scripted::make({
-          .script = [](void* self) { return static_cast<ScriptedRoot*>(self)->script_(); },
-          .context = this,
-      });
-    });
-    element_ = &harness.rootElement();
-  }
-
-  void rebuild() { elementFor(*element_, widgetTypeOf<Scripted>()).markNeedsBuild(); }
-
-private:
-  Script script_;
-  Element* element_ = nullptr;
-};
 
 const RenderFlex& flexIn(const RenderObject& root) {
   const RenderFlex* found = nullptr;
@@ -1028,7 +920,8 @@ TEST(widgets_the_build_arena_is_reused_rather_than_regrown) {
 
 TEST(widgets_a_widget_from_a_released_build_is_trapped) {
   MonospaceTextService text;
-  BuildOwner owner(text);
+  PointerBinding pointers;
+  BuildOwner owner(text, pointers);
 
   WidgetRef escaped;
   {

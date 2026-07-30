@@ -9,6 +9,9 @@
 namespace fltr {
 
 class RenderBox;
+/// Defined by the gesture layer. Named here only so a hit-test path can be
+/// filtered down to the boxes that consume pointer events.
+class RenderPointerRegion;
 
 struct HitTestEntry {
   RenderBox* target = nullptr;

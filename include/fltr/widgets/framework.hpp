@@ -18,6 +18,7 @@ namespace fltr {
 
 class BuildOwner;
 class Element;
+class PointerBinding;
 class RenderObjectElement;
 class Widget;
 
@@ -164,6 +165,7 @@ public:
   Element& element() const noexcept { return *element_; }
   BuildOwner& owner() const noexcept;
   TextService& textService() const noexcept;
+  PointerBinding& pointerBinding() const noexcept;
   bool mounted() const noexcept;
 
 private:
@@ -703,14 +705,19 @@ protected:
 /// PipelineOwner does for layout and paint.
 class BuildOwner {
 public:
-  explicit BuildOwner(TextService& textService) noexcept : textService_(&textService) {}
+  BuildOwner(TextService& textService, PointerBinding& pointerBinding) noexcept
+      : textService_(&textService), pointerBinding_(&pointerBinding) {}
   ~BuildOwner();
 
   BuildOwner(const BuildOwner&) = delete;
   BuildOwner& operator=(const BuildOwner&) = delete;
 
   Arena& arena() noexcept { return arena_; }
+
+  /// The ambient services a widget builds against. Both are supplied by the
+  /// consumer and neither is owned here.
   TextService& textService() const noexcept { return *textService_; }
+  PointerBinding& pointerBinding() const noexcept { return *pointerBinding_; }
 
   bool needsBuild() const noexcept { return !dirty_.empty(); }
   std::size_t dirtyElementCount() const noexcept { return dirty_.size(); }
@@ -736,6 +743,7 @@ private:
   std::vector<Element*> buildScratch_;
   Arena arena_;
   TextService* textService_;
+  PointerBinding* pointerBinding_;
   std::unique_ptr<RenderBox> rootRenderObject_;
   int buildCount_ = 0;
 };
@@ -743,6 +751,9 @@ private:
 inline BuildOwner& BuildContext::owner() const noexcept { return *element_->owner(); }
 inline TextService& BuildContext::textService() const noexcept {
   return element_->owner()->textService();
+}
+inline PointerBinding& BuildContext::pointerBinding() const noexcept {
+  return element_->owner()->pointerBinding();
 }
 inline bool BuildContext::mounted() const noexcept { return element_->mounted(); }
 

@@ -4,6 +4,8 @@
 #include <optional>
 #include <string_view>
 
+#include "fltr/core/callback.hpp"
+#include "fltr/gestures/pointer_region.hpp"
 #include "fltr/render/boxes.hpp"
 #include "fltr/render/flex.hpp"
 #include "fltr/render/stack.hpp"
@@ -402,6 +404,58 @@ public:
   }
 
 private:
+  Args args_;
+};
+
+// ---------------------------------------------------------------------------
+// Interaction
+// ---------------------------------------------------------------------------
+
+/// Taps and hover over the area its child occupies.
+///
+/// The two are separate mechanisms sharing one region: a tap is contested in the
+/// arena and only the winner is told, while hover is resolved by diffing what
+/// lies under the cursor and is never contested at all.
+///
+/// A callback is copied into the region and is invoked from `dispatchPointer`
+/// or, for enter and exit, from the start of a frame. Anything it captures by
+/// reference must outlive the widget.
+class Pointer final : public Configure<Pointer, SingleChildRenderObjectWidget> {
+public:
+  struct Args {
+    Key key;
+    HitTestBehavior behavior = HitTestBehavior::DeferToChild;
+    Callback<void()> onEnter;
+    Callback<void()> onExit;
+    /// Fires when this region wins the pointer, which is when press feedback is
+    /// correct to show -- not necessarily the instant the pointer went down.
+    Callback<void()> onTapDown;
+    Callback<void()> onTap;
+    Callback<void()> onTapCancel;
+    WidgetRef child;
+  };
+  using Render = RenderPointerRegion;
+
+  explicit Pointer(const Args& args) : Configure(args.key), args_(args) {}
+
+  const char* name() const noexcept override { return "Pointer"; }
+  WidgetRef child() const noexcept { return args_.child; }
+
+  std::unique_ptr<RenderPointerRegion> createRenderObject(BuildContext& context) const {
+    auto region = std::make_unique<RenderPointerRegion>(context.pointerBinding(), args_.behavior);
+    region->setCallbacks(callbacks());
+    return region;
+  }
+  void updateRenderObject(BuildContext&, RenderPointerRegion& render) const {
+    render.setBehavior(args_.behavior);
+    render.setCallbacks(callbacks());
+  }
+
+private:
+  PointerCallbacks callbacks() const noexcept {
+    return {args_.onEnter, args_.onExit, args_.onTapDown, args_.onTap, args_.onTapCancel};
+  }
+
   Args args_;
 };
 

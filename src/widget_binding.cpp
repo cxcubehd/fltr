@@ -3,7 +3,7 @@
 namespace fltr {
 
 WidgetBinding::WidgetBinding(Size surface, TextService& textService)
-    : buildOwner_(textService), surface_(surface) {}
+    : buildOwner_(textService, pointers_), surface_(surface) {}
 
 WidgetBinding::~WidgetBinding() {
   // Unmount before anything is destroyed, so every State sees dispose().
@@ -30,10 +30,26 @@ void WidgetBinding::setSurface(Size surface) {
   if (RenderView* view = renderView()) view->setSurface(surface);
 }
 
+void WidgetBinding::dispatchPointer(const PointerEvent& event) {
+  FLTR_EXPECTS(view_ != nullptr, "pointer events need a mounted root");
+  pointers_.dispatch(event, *view_);
+}
+
 Scene WidgetBinding::drawFrame() {
+  // Hover is settled before the build, not after it: the answer is re-resolved
+  // against the tree the previous frame left laid out, so whatever an enter or
+  // exit callback changes is built in this frame rather than the next.
+  if (view_) pointers_.settleHover(*view_);
+
   buildOwner_.resetBuildCount();
   buildOwner_.flushBuild();
-  return pipeline_.drawFrame();
+  Scene scene = pipeline_.drawFrame();
+
+  // Layout is what moves boxes. A paint-only change -- the render-attached
+  // animation path -- cannot alter what lies under the cursor, which is exactly
+  // the invariant that makes markNeedsPaint the cheap path.
+  if (pipeline_.stats().layouts > 0) pointers_.mouseTracker().invalidate();
+  return scene;
 }
 
 }  // namespace fltr
