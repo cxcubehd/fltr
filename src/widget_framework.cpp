@@ -92,8 +92,8 @@ RenderBox* Element::renderObject() const {
   return found;
 }
 
-void Element::applyParentDataTo(RenderObject& container, std::size_t index) const {
-  visitChildren([&](Element& child) { child.applyParentDataTo(container, index); });
+void Element::writeParentData(ParentDataSlot slot) const {
+  visitChildren([&slot](Element& child) { child.writeParentData(slot); });
 }
 
 void Element::detachRenderObject() {

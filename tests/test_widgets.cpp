@@ -393,6 +393,35 @@ TEST(widgets_rebuild_with_equivalent_configuration_mutates_no_render_object) {
   CHECK_EQ(after.revision, revision);
 }
 
+TEST(widgets_rebuilding_a_container_with_parent_data_mutates_no_render_object) {
+  Harness h({300, 50});
+  ScriptedRoot root(h, [&] {
+    return Row::make({.children = {
+                          SizedBox::make({.size = {60, 10}}),
+                          Flexible::make({.flex = 1, .child = SizedBox::make({.size = {0, 10}})}),
+                      }});
+  });
+  h.frame();
+  const std::uint64_t revision = h.frame().revision;
+
+  root.rebuild();
+  const Scene after = h.frame();
+
+  CHECK_EQ(h.pipeline().stats().layouts, 0);
+  CHECK_EQ(h.pipeline().stats().paints, 0);
+  CHECK_EQ(after.revision, revision);
+  CHECK_EQ(flexIn(h.view()).dataAt(1).flex, 1);
+}
+
+TEST(widgets_a_parent_data_widget_in_the_wrong_container_is_trapped) {
+  Harness h({200, 100});
+  CHECK_THROWS(h.attach([] {
+    return Stack::make({.children = {
+                            Flexible::make({.flex = 1, .child = SizedBox::make({.size = {5, 5}})}),
+                        }});
+  }));
+}
+
 TEST(widgets_changed_configuration_reaches_layout) {
   Harness h;
   Life life;
@@ -952,6 +981,19 @@ TEST(widgets_discarding_a_subtree_disposes_every_state_in_it) {
   CHECK_EQ(outer.disposes, 1);
   CHECK_EQ(inner.disposes, 1);
   CHECK_EQ(flexIn(h.view()).childCount(), std::size_t{0});
+}
+
+TEST(widgets_setState_after_unmount_is_trapped_rather_than_crashing) {
+  Harness h;
+  Life life;
+  h.attach([&] { return Tracked::make({.life = &life}); });
+  h.frame();
+
+  TrackedState& state = trackedState(h.rootElement());
+  h.rootElement().unmount();
+
+  CHECK(!state.mounted());
+  CHECK_THROWS(state.bump());
 }
 
 TEST(widgets_a_build_that_never_settles_is_capped_rather_than_spinning) {

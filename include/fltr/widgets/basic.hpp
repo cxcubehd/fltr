@@ -337,7 +337,7 @@ public:
     FlexFit fit = FlexFit::Tight;
     WidgetRef child;
   };
-  using Container = RenderFlex;
+  using ChildData = FlexChildData;
 
   explicit Flexible(const Args& args) : Configure(args.key), args_(args) {}
 
@@ -389,7 +389,7 @@ public:
     std::optional<float> left, top, right, bottom, width, height;
     WidgetRef child;
   };
-  using Container = RenderStack;
+  using ChildData = StackChildData;
 
   explicit Positioned(const Args& args) : Configure(args.key), args_(args) {}
 

@@ -258,7 +258,9 @@ void PipelineOwner::flushLayout() {
   // object, and the cap is real in every build so it degrades to a stale frame
   // rather than a freeze. Checked builds then name it.
   static constexpr int kMaxLayoutPasses = 32;
-  while (!nodesNeedingLayout_.empty() && stats_.layoutPasses < kMaxLayoutPasses) {
+  int passes = 0;
+  while (!nodesNeedingLayout_.empty() && passes < kMaxLayoutPasses) {
+    ++passes;
     ++stats_.layoutPasses;
     layoutScratch_.clear();
     layoutScratch_.swap(nodesNeedingLayout_);

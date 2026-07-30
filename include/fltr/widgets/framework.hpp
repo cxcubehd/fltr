@@ -9,6 +9,7 @@
 #include "fltr/core/arena.hpp"
 #include "fltr/core/function_ref.hpp"
 #include "fltr/core/key.hpp"
+#include "fltr/core/type_tag.hpp"
 #include "fltr/paint/text.hpp"
 #include "fltr/render/box.hpp"
 
@@ -25,18 +26,11 @@ using ElementPtr = std::unique_ptr<Element>;
 // Widget configuration
 // ---------------------------------------------------------------------------
 
-/// Runtime identity of a widget class, without RTTI: the address of a per-class
-/// object, which is unique and comparable in one instruction.
-using WidgetType = const void*;
-
-namespace detail {
-template <class T>
-inline constexpr char widgetTypeTag = 0;
-}
+using WidgetType = TypeTag;
 
 template <class T>
 constexpr WidgetType widgetTypeOf() noexcept {
-  return &detail::widgetTypeTag<T>;
+  return typeTagOf<T>();
 }
 
 /// The arena widgets are built into.
@@ -188,6 +182,24 @@ private:
 
 class ChildList;
 
+/// A mutable reference to one container's per-child layout data, tagged with
+/// that data's type so a parent-data widget aimed at the wrong kind of container
+/// is refused rather than reinterpreting memory.
+class ParentDataSlot {
+public:
+  template <class Data>
+  explicit ParentDataSlot(Data& data) noexcept : data_(&data), tag_(typeTagOf<Data>()) {}
+
+  template <class Data>
+  Data* as() const noexcept {
+    return tag_ == typeTagOf<Data>() ? static_cast<Data*>(data_) : nullptr;
+  }
+
+private:
+  void* data_;
+  TypeTag tag_;
+};
+
 /// The persistent tree. An element outlives the widgets that configure it and
 /// owns whatever state and render object that configuration implies.
 class Element {
@@ -218,10 +230,10 @@ public:
 
   void rebuild();
 
-  /// Writes per-child layout data into `container` at `index`, for widgets that
-  /// configure their position in a parent rather than creating a render object.
-  /// The walk stops at the first render object in each branch.
-  virtual void applyParentDataTo(RenderObject& container, std::size_t index) const;
+  /// Lets a parent-data widget fill in the slot its subtree occupies in an
+  /// ancestor container. The walk stops at the first render object in each
+  /// branch, so it reaches through intervening component elements.
+  virtual void writeParentData(ParentDataSlot slot) const;
 
   /// Removes this subtree's render objects from the render tree, destroying
   /// them. Called once at the top of a subtree being discarded; `unmount` below
@@ -370,8 +382,9 @@ public:
   bool mounted() const noexcept { return element_ != nullptr && element_->mounted(); }
 
   void setState(FunctionRef<void()> change) {
+    FLTR_EXPECTS(mounted(), "setState on a State whose element is no longer mounted");
     change();
-    element_->markNeedsBuild();
+    if (mounted()) element_->markNeedsBuild();
   }
 
 protected:
@@ -434,11 +447,12 @@ public:
     if (child_) visitor(*child_);
   }
 
-  void applyParentDataTo(RenderObject& container, std::size_t index) const override {
-    auto* typed = dynamic_cast<typename W::Container*>(&container);
-    FLTR_EXPECTS(typed != nullptr,
-                 "a parent-data widget must be a child of the container it configures");
-    if (typed) typed->setChildData(index, this->config_.childData());
+  void writeParentData(ParentDataSlot slot) const override {
+    if (auto* data = slot.as<typename W::ChildData>()) {
+      *data = this->config_.childData();
+      return;
+    }
+    FLTR_EXPECTS(false, "a parent-data widget must be a child of the container it configures");
   }
 
 protected:
@@ -460,7 +474,7 @@ private:
 class RenderObjectElement : public Element {
 public:
   RenderBox* renderObject() const noexcept final { return renderObject_; }
-  void applyParentDataTo(RenderObject&, std::size_t) const final {}
+  void writeParentData(ParentDataSlot) const final {}
   void detachRenderObject() final;
 
 protected:
@@ -576,9 +590,11 @@ private:
   Render& render() const noexcept { return static_cast<Render&>(*this->renderObject_); }
 
   /// Children are appended as they are inflated, so the container's order is
-  /// only correct once the element list is final. Reordering moves slots rather
-  /// than re-adopting children, which is what lets a keyed child keep its layout
-  /// and paint state across a move.
+  /// only correct once the element list is final.
+  ///
+  /// Each slot's data is gathered into a default-initialised value and written
+  /// once, so an unchanged rebuild leaves the container untouched and a removed
+  /// parent-data widget clears what it had set.
   void syncRenderChildren() {
     order_.clear();
     order_.reserve(children_.size());
@@ -589,8 +605,9 @@ private:
     }
     render().reorderChildren(order_);
     for (std::size_t i = 0; i < children_.size(); ++i) {
-      render().setChildData(i, typename Render::ChildData{});
-      children_[i].applyParentDataTo(render(), i);
+      typename Render::ChildData data;
+      children_[i].writeParentData(ParentDataSlot(data));
+      render().setChildData(i, data);
     }
   }
 

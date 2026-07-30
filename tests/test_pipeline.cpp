@@ -684,6 +684,23 @@ TEST(pipeline_layout_that_never_converges_is_capped_and_reported) {
   CHECK_EQ(owner.stats().layoutPasses, 32);
 }
 
+TEST(pipeline_the_convergence_cap_is_per_flush_not_cumulative) {
+  PipelineOwner owner;
+  auto view = make<RenderView>(Size{200, 100});
+  auto align = make<RenderPositionedBox>();
+  RenderPositionedBox* alignRaw = align.get();
+  view->setChild(std::move(align));
+  owner.setRootNode(view.get());
+  owner.flushLayout();
+
+  // Far more flushes than the cap, without the resetStats() that drawFrame does.
+  for (int i = 0; i < 100; ++i) {
+    alignRaw->setAlignment(i % 2 == 0 ? Alignment::topLeft() : Alignment::bottomRight());
+    owner.flushLayout();
+    CHECK_EQ(owner.dirtyLayoutCount(), std::size_t{0});
+  }
+}
+
 TEST(pipeline_scene_dump_is_stable_and_shows_nested_boundaries_in_place) {
   PipelineOwner owner;
   auto view = make<RenderView>(Size{100, 40});
