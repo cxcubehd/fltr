@@ -2,6 +2,7 @@
 
 #include <vector>
 
+#include "fltr/core/config.hpp"
 #include "fltr/gestures/arena.hpp"
 #include "fltr/gestures/events.hpp"
 #include "fltr/gestures/mouse_tracker.hpp"
@@ -31,6 +32,11 @@ class RenderBox;
 /// terms of gestures and hover, so nothing wants that today.
 class PointerBinding {
 public:
+  PointerBinding() = default;
+
+  PointerBinding(const PointerBinding&) = delete;
+  PointerBinding& operator=(const PointerBinding&) = delete;
+
   /// One pointer event, tested against `root`. Called by the consumer at
   /// whatever rate its input system produces events; unrelated to the frame.
   void dispatch(const PointerEvent& event, RenderBox& root);
@@ -57,6 +63,27 @@ private:
     GestureRecognizer* recognizer;
   };
 
+  /// Both entry points record into `path_` and walk it, so neither may run
+  /// inside the other -- a nested hit test would reallocate the list the outer
+  /// walk is holding. A game callback dispatching an event or driving a frame is
+  /// the way in. Restored however the scope is left, as the pipeline's phases
+  /// are, so a checked build reports the re-entry rather than a second failure
+  /// during unwinding.
+  class DispatchScope {
+  public:
+    explicit DispatchScope(PointerBinding& owner) : owner_(owner) {
+      FLTR_EXPECTS(!owner_.dispatching_, "a pointer callback re-entered pointer dispatch");
+      owner_.dispatching_ = true;
+    }
+    ~DispatchScope() { owner_.dispatching_ = false; }
+
+    DispatchScope(const DispatchScope&) = delete;
+    DispatchScope& operator=(const DispatchScope&) = delete;
+
+  private:
+    PointerBinding& owner_;
+  };
+
   const HitTestResult& hitTest(RenderBox& root, Offset position);
   void routeToRecognizers(const PointerEvent& event);
 
@@ -70,6 +97,7 @@ private:
   /// rather than erasing them, keeping the walk's indices valid.
   std::vector<Route> routing_;
   int hitTests_ = 0;
+  bool dispatching_ = false;
 };
 
 }  // namespace fltr

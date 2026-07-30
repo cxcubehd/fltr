@@ -907,10 +907,14 @@ render tree whose regions withdraw from it.
 - A region destroyed while hovered leaves no dangling reference and no exit.
 - A frame that changes nothing runs no hit test and reports no work to do.
 - A hover, press, move and release in the steady state allocate nothing.
+- A callback that pushes another event re-enters dispatch, and is trapped.
+  Dispatching and settling both record into one hit-test list, so a nested walk
+  would reallocate the list the outer one is holding; `DispatchScope` names it
+  the way `PipelineOwner::PhaseScope` names a phase violation.
 
 The widget-test harness — `Harness`, `Scripted`, `ScriptedRoot`, `elementFor` —
 moved to `tests/widget_harness.hpp`, since the gesture tests drive the binding
 exactly the way the widget tests do.
 
-Verified on GCC 13.3 and Clang 18.1, and under ASan + UBSan: 152 tests, 645
+Verified on GCC 13.3 and Clang 18.1, and under ASan + UBSan: 153 tests, 647
 checks. The library also compiles clean with `FLTR_ENABLE_CHECKS=OFF`.

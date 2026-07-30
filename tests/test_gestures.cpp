@@ -27,9 +27,8 @@ PointerEvent mouse(PointerPhase phase, Offset position, PointerId pointer = 0) {
 }
 
 /// An interactive rectangle at a known place in a Stack, reporting into `tally`.
-WidgetRef region(Tally& tally, Rect rect, Key key = Key::none()) {
+WidgetRef region(Tally& tally, Rect rect) {
   return Positioned::make({
-      .key = key,
       .left = rect.left,
       .top = rect.top,
       .width = rect.width(),
@@ -44,6 +43,13 @@ WidgetRef region(Tally& tally, Rect rect, Key key = Key::none()) {
       }),
   });
 }
+
+WidgetRef screen(WidgetList regions) {
+  return Stack::make({.fit = StackFit::Expand, .children = regions});
+}
+
+constexpr Rect kLeft = Rect::fromLTWH(0, 0, 40, 20);
+constexpr Rect kRight = Rect::fromLTWH(60, 0, 40, 20);
 
 }  // namespace
 
@@ -191,9 +197,7 @@ TEST(gestures_withdrawing_a_member_awards_nothing_out_of_a_destructor) {
 TEST(gestures_a_press_and_release_over_a_region_fires_tap_down_then_tap) {
   Harness h;
   Tally button;
-  ScriptedRoot root(h, [&] {
-    return Stack::make({.fit = StackFit::Expand, .children = {region(button, Rect::fromLTWH(0, 0, 40, 20))}});
-  });
+  ScriptedRoot root(h, [&] { return screen({region(button, kLeft)}); });
   h.frame();
 
   h.binding().dispatchPointer(mouse(PointerPhase::Down, {10, 10}));
@@ -208,9 +212,7 @@ TEST(gestures_a_press_and_release_over_a_region_fires_tap_down_then_tap) {
 TEST(gestures_a_press_outside_every_region_reaches_nobody) {
   Harness h;
   Tally button;
-  ScriptedRoot root(h, [&] {
-    return Stack::make({.fit = StackFit::Expand, .children = {region(button, Rect::fromLTWH(0, 0, 40, 20))}});
-  });
+  ScriptedRoot root(h, [&] { return screen({region(button, kLeft)}); });
   h.frame();
 
   h.binding().dispatchPointer(mouse(PointerPhase::Down, {150, 80}));
@@ -223,9 +225,7 @@ TEST(gestures_a_press_outside_every_region_reaches_nobody) {
 TEST(gestures_a_press_that_travels_beyond_the_slop_is_cancelled) {
   Harness h;
   Tally button;
-  ScriptedRoot root(h, [&] {
-    return Stack::make({.fit = StackFit::Expand, .children = {region(button, Rect::fromLTWH(0, 0, 40, 20))}});
-  });
+  ScriptedRoot root(h, [&] { return screen({region(button, kLeft)}); });
   h.frame();
 
   h.binding().dispatchPointer(mouse(PointerPhase::Down, {10, 10}));
@@ -242,9 +242,7 @@ TEST(gestures_a_press_that_travels_beyond_the_slop_is_cancelled) {
 TEST(gestures_a_press_that_leaves_the_region_but_not_the_slop_still_taps) {
   Harness h;
   Tally button;
-  ScriptedRoot root(h, [&] {
-    return Stack::make({.fit = StackFit::Expand, .children = {region(button, Rect::fromLTWH(0, 0, 40, 20))}});
-  });
+  ScriptedRoot root(h, [&] { return screen({region(button, kLeft)}); });
   h.frame();
 
   // The recognizer follows the pointer, not the hit-test path, so a release
@@ -259,9 +257,7 @@ TEST(gestures_a_press_that_leaves_the_region_but_not_the_slop_still_taps) {
 TEST(gestures_a_cancelled_pointer_cancels_the_press_it_had_already_won) {
   Harness h;
   Tally button;
-  ScriptedRoot root(h, [&] {
-    return Stack::make({.fit = StackFit::Expand, .children = {region(button, Rect::fromLTWH(0, 0, 40, 20))}});
-  });
+  ScriptedRoot root(h, [&] { return screen({region(button, kLeft)}); });
   h.frame();
 
   h.binding().dispatchPointer(mouse(PointerPhase::Down, {10, 10}));
@@ -326,10 +322,7 @@ TEST(gestures_a_region_destroyed_mid_press_withdraws_its_routes_and_arena_entry)
   Harness h;
   Tally button;
   bool present = true;
-  ScriptedRoot root(h, [&] {
-    return Stack::make({.fit = StackFit::Expand,
-                        .children = {present ? region(button, Rect::fromLTWH(0, 0, 40, 20)) : WidgetRef{}}});
-  });
+  ScriptedRoot root(h, [&] { return screen({present ? region(button, kLeft) : WidgetRef{}}); });
   h.frame();
 
   h.binding().dispatchPointer(mouse(PointerPhase::Down, {10, 10}));
@@ -345,6 +338,28 @@ TEST(gestures_a_region_destroyed_mid_press_withdraws_its_routes_and_arena_entry)
   CHECK_EQ(button.cancel, 0);
 }
 
+TEST(gestures_a_callback_that_re_enters_dispatch_is_trapped) {
+  Harness h;
+  bool fired = false;
+  ScriptedRoot root(h, [&] {
+    return Pointer::make({
+        .behavior = HitTestBehavior::Opaque,
+        // Pushing another event from a callback would hit test into the very
+        // list the dispatch above it is walking.
+        .onTap =
+            [&] {
+              fired = true;
+              h.binding().dispatchPointer(mouse(PointerPhase::Hover, {5, 5}));
+            },
+    });
+  });
+  h.frame();
+
+  h.binding().dispatchPointer(mouse(PointerPhase::Down, {10, 10}));
+  CHECK_THROWS(h.binding().dispatchPointer(mouse(PointerPhase::Up, {10, 10})));
+  CHECK(fired);
+}
+
 // ---------------------------------------------------------------------------
 // Hover
 // ---------------------------------------------------------------------------
@@ -353,10 +368,7 @@ TEST(gestures_hover_enters_and_exits_as_the_cursor_crosses_regions) {
   Harness h;
   Tally left;
   Tally right;
-  ScriptedRoot root(h, [&] {
-    return Stack::make({.fit = StackFit::Expand,
-                        .children = {region(left, Rect::fromLTWH(0, 0, 40, 20)), region(right, Rect::fromLTWH(60, 0, 40, 20))}});
-  });
+  ScriptedRoot root(h, [&] { return screen({region(left, kLeft), region(right, kRight)}); });
   h.frame();
 
   h.binding().dispatchPointer(mouse(PointerPhase::Hover, {10, 10}));
@@ -380,9 +392,7 @@ TEST(gestures_hover_enters_and_exits_as_the_cursor_crosses_regions) {
 TEST(gestures_a_cancelled_pointer_leaves_nothing_hovered) {
   Harness h;
   Tally button;
-  ScriptedRoot root(h, [&] {
-    return Stack::make({.fit = StackFit::Expand, .children = {region(button, Rect::fromLTWH(0, 0, 40, 20))}});
-  });
+  ScriptedRoot root(h, [&] { return screen({region(button, kLeft)}); });
   h.frame();
 
   h.binding().dispatchPointer(mouse(PointerPhase::Hover, {10, 10}));
@@ -398,9 +408,7 @@ TEST(gestures_a_cancelled_pointer_leaves_nothing_hovered) {
 TEST(gestures_a_touch_pointer_never_hovers) {
   Harness h;
   Tally button;
-  ScriptedRoot root(h, [&] {
-    return Stack::make({.fit = StackFit::Expand, .children = {region(button, Rect::fromLTWH(0, 0, 40, 20))}});
-  });
+  ScriptedRoot root(h, [&] { return screen({region(button, kLeft)}); });
   h.frame();
 
   const PointerEvent touch{PointerPhase::Down, 0, PointerDeviceKind::Touch, Offset{10, 10}};
@@ -414,9 +422,7 @@ TEST(gestures_hover_is_re_resolved_when_the_tree_moves_beneath_a_stationary_curs
   Harness h;
   Tally button;
   Rect placement = Rect::fromLTWH(0, 0, 40, 20);
-  ScriptedRoot root(h, [&] {
-    return Stack::make({.fit = StackFit::Expand, .children = {region(button, placement)}});
-  });
+  ScriptedRoot root(h, [&] { return screen({region(button, placement)}); });
   h.frame();
 
   h.binding().dispatchPointer(mouse(PointerPhase::Hover, {100, 50}));
@@ -445,10 +451,7 @@ TEST(gestures_a_region_destroyed_while_hovered_leaves_no_dangling_reference) {
   Harness h;
   Tally button;
   bool present = true;
-  ScriptedRoot root(h, [&] {
-    return Stack::make({.fit = StackFit::Expand,
-                        .children = {present ? region(button, Rect::fromLTWH(0, 0, 40, 20)) : WidgetRef{}}});
-  });
+  ScriptedRoot root(h, [&] { return screen({present ? region(button, kLeft) : WidgetRef{}}); });
   h.frame();
 
   h.binding().dispatchPointer(mouse(PointerPhase::Hover, {10, 10}));
@@ -476,9 +479,7 @@ TEST(gestures_a_region_destroyed_while_hovered_leaves_no_dangling_reference) {
 TEST(gestures_a_frame_that_changes_nothing_runs_no_hit_test) {
   Harness h;
   Tally button;
-  ScriptedRoot root(h, [&] {
-    return Stack::make({.fit = StackFit::Expand, .children = {region(button, Rect::fromLTWH(0, 0, 40, 20))}});
-  });
+  ScriptedRoot root(h, [&] { return screen({region(button, kLeft)}); });
   h.frame();
   h.binding().dispatchPointer(mouse(PointerPhase::Hover, {10, 10}));
   h.frame();
@@ -494,10 +495,7 @@ TEST(gestures_dispatching_a_pointer_in_the_steady_state_allocates_nothing) {
   Harness h;
   Tally left;
   Tally right;
-  ScriptedRoot root(h, [&] {
-    return Stack::make({.fit = StackFit::Expand,
-                        .children = {region(left, Rect::fromLTWH(0, 0, 40, 20)), region(right, Rect::fromLTWH(60, 0, 40, 20))}});
-  });
+  ScriptedRoot root(h, [&] { return screen({region(left, kLeft), region(right, kRight)}); });
   h.frame();
 
   // Warm the hit-test path, the tracker's buffers, the route table and the

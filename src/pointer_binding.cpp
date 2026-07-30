@@ -15,6 +15,7 @@ const HitTestResult& PointerBinding::hitTest(RenderBox& root, Offset position) {
 }
 
 void PointerBinding::dispatch(const PointerEvent& event, RenderBox& root) {
+  DispatchScope scope(*this);
   const bool tracksHover = event.kind == PointerDeviceKind::Mouse;
 
   if (event.phase == PointerPhase::Cancel) {
@@ -31,7 +32,8 @@ void PointerBinding::dispatch(const PointerEvent& event, RenderBox& root) {
       // Members join deepest-first, which is the order the arena awards an
       // unresolved sweep in.
       for (const HitTestEntry& entry : path_.path()) {
-        if (RenderPointerRegion* region = entry.target->asPointerRegion()) region->receiveDown(event);
+        RenderPointerRegion* region = entry.target->asPointerRegion();
+        if (region) region->receiveDown(event);
       }
       arena_.close(event.pointer);
       break;
@@ -52,6 +54,7 @@ void PointerBinding::dispatch(const PointerEvent& event, RenderBox& root) {
 
 void PointerBinding::settleHover(RenderBox& root) {
   if (!tracker_.needsResolve()) return;
+  DispatchScope scope(*this);
   const Offset cursor = tracker_.cursor();
   hitTest(root, cursor);
   tracker_.update(cursor, path_);
