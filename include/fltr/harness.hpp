@@ -4,6 +4,7 @@
 
 #include "fltr/paint/display_list.hpp"
 #include "fltr/render/object.hpp"
+#include "fltr/widgets/framework.hpp"
 
 namespace fltr {
 
@@ -26,5 +27,11 @@ std::string dumpDisplayList(const DisplayList& list);
 
 /// The scene as the consumer would receive it, including the root list.
 std::string dumpScene(const Scene& scene);
+
+/// One line per element, indented by depth, with the key where one is set.
+///   View
+///     Column
+///       Text key="hp"
+std::string dumpElementTree(const Element& root);
 
 }  // namespace fltr

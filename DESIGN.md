@@ -76,6 +76,15 @@ type and never needs resizing.
   pointer is a footgun, so `WidgetRef` carries the arena generation and checked
   builds trap a stale dereference.
 
+> **Corrected in M4.** "Elements never read them outside that window" is false,
+> and building the element layer is what showed it. Any element that rebuilds
+> *without* being handed a new configuration — the whole point of `setState` —
+> re-emits the child ref it adopted, and that ref belongs to a released arena by
+> then. Since a wrapper widget that stores a `child` and passes it through is the
+> most ordinary shape in the catalogue, this is the common path, not an edge
+> case. See *A stale ref means unchanged* below for what it cost and what it
+> turned out to buy.
+
 **What it buys:** unambiguous lifetime, no refcounting anywhere in the tree, and
 an arena reset that is genuinely a pointer operation rather than a mark phase.
 
@@ -392,3 +401,180 @@ skip nulls.
 
 Verified on GCC 13.3 and Clang 18.1, and under ASan + UBSan. The library also
 compiles clean with `FLTR_ENABLE_CHECKS=OFF`.
+
+---
+
+## Milestone 4 — the widget and element layer
+
+Three trees now: immutable `Widget` configuration in an arena, persistent
+`Element`s that reconcile it, and the render tree from M2/M3 underneath. The
+build phase joins layout and paint as the first of three per-frame phases, and
+`WidgetBinding::drawFrame()` runs all three in order.
+
+### Authoring
+
+Each widget declares its fields once, in a nested `Args` aggregate that callers
+fill with designated initializers:
+
+```cpp
+Column::make({
+  .crossAxisAlignment = CrossAxisAlignment::Start,
+  .children = {
+    Text::make({.text = "SHIELD", .style = label}),
+    Flexible::make({.flex = 1, .child = Bar::make({.value = shield})}),
+  },
+})
+```
+
+Nesting allocates nothing at the call site: `make` bump-allocates into an
+*ambient* build arena. Ambient rather than threaded through, because a widget
+expression nests arbitrarily deep and an explicit allocator parameter would put
+noise at exactly the call sites this is optimising.
+
+`Configure<Derived, Base>` supplies the three things every widget would otherwise
+repeat — its runtime type, its element, and `make`. Runtime type is the address
+of a per-class object rather than `typeid`, so `canUpdate` is one pointer
+compare. `make` defers naming `Derived::Args` through a defaulted template
+parameter, because a class template's member declarations are instantiated while
+the derived widget is still incomplete; a braced initialiser is a non-deduced
+context, so the default always wins and the call site stays clean.
+
+Widgets have a **protected non-virtual destructor**. They are arena scratch and
+are never deleted, which is what keeps every concrete widget trivially
+destructible and therefore accepted by `Arena::create` — the static assert that
+enforces the memory model is doing real work here.
+
+### DIVERGENCE: a stale ref means unchanged
+
+The arena resets at the end of every build scope, so a `WidgetRef` an element
+adopted is dangling by the next build. That collides head-on with the most
+ordinary widget shape there is:
+
+```cpp
+WidgetRef build(BuildContext&) const {
+  return Padding::make({.padding = args_.padding, .child = args_.child});
+}
+```
+
+When that element rebuilds on its own, `args_.child` points into a released
+arena. Flutter has no such problem: the child `Widget` object is kept alive by
+the GC, and `updateChild` short-circuits on `identical(child.widget, newWidget)`.
+
+**Chosen:** `WidgetRef` carries the identity it needs — type and key — beside the
+pointer, and a ref from a released generation is treated as *unchanged*. It is
+never dereferenced; reconciliation answers `canUpdate` from the ref alone, and a
+match with a stale ref returns the existing child untouched.
+
+This is sound because a stale ref can only have come from an element's adopted
+config, and that element copied the configuration verbatim when the ref was
+fresh. Nothing could have changed one without replacing the other.
+
+**What it costs:** `WidgetRef` grows to a pointer, a type tag, a `Key`, and a
+generation. It is arena scratch, so this is bytes bumped, not allocations made.
+`WidgetList` carries a generation for the same reason — its backing array is
+arena memory too, and a stale list is skipped whole rather than indexed.
+
+**What it buys:** more than it costs, as it turns out. The generation counter
+existed only as a debugging aid, and it has become the mechanism that makes an
+independent rebuild *stop* at the branches it actually changed. A `setState` deep
+in a HUD re-emits its untouched siblings as stale refs and the reconciler skips
+those subtrees entirely — the same short-circuit Flutter gets from pointer
+identity, reached from the opposite direction.
+
+Inflating a stale ref would mean the element that held it is gone and its
+configuration is unrecoverable. That is a contract violation, not a fallback.
+
+### DIVERGENCE: no slots; order is fixed by a permutation pass
+
+Flutter threads an `IndexedSlot` (index plus previous sibling) through
+`insertRenderObjectChild` / `moveRenderObjectChild`, because sibling-anchored
+moves compose correctly when several children move at once and intermediate
+indices shift.
+
+Since per-child data already lives in the parent here (the M2 divergence), our
+containers are index-addressed and a simpler shape works: new children are
+**appended**, and `RenderBoxContainer::reorderChildren` permutes the slots into
+the element order in one linear selection pass once the element list is final.
+Slots disappear from the design entirely.
+
+Reordering swaps `Slot` objects. Nothing is adopted or dropped, so a keyed child
+that moves keeps its layout state, its paint state, and its per-child data, which
+travels in the slot with it. The cost is one extra O(n) pointer-compare pass per
+multi-child rebuild that changed structure, and `markNeedsLayout` fires only if
+something actually moved.
+
+### Reconciliation
+
+`ChildList::update` is Flutter's algorithm: match a leading run by position,
+match a trailing run, then reconcile the middle by key. Unkeyed middle children
+are discarded; keyed ones are held aside and reclaimed wherever their key
+reappears. Scratch buffers are members, so a rebuild allocates nothing once the
+high-water mark is reached.
+
+A **null entry in a children list is dropped** at list construction, which is
+what makes `visible ? Badge::make({...}) : WidgetRef{}` work inline. Single-child
+slots keep null as a real value meaning "no child".
+
+`deactivate` is the single choke point through which a discarded subtree passes.
+Global keys and animating a subtree *out* are both deferred, and both would be
+implemented by making that one function retain the subtree instead of destroying
+it — so the design does not preclude them, which is what the brief asked for.
+
+### Parent data without a second mechanism
+
+`Flexible` and `Positioned` create no render object. They are `ParentDataWidget`s
+whose element writes into the container's slot for its index, and the walk that
+finds them stops at the first render object in each branch — so they still work
+through an intervening stateless widget, which is where a real HUD puts them.
+The container is named statically (`using Container = RenderFlex`) and checked at
+the point of application, so `Flexible` inside a `Stack` names its own mistake.
+
+Every index is reset to default data before the walk, so removing a `Flexible`
+clears the flex it had set. `setChildData` is change-guarded, which makes both
+writes free when nothing moved.
+
+### Build ordering, and the same two hazards as M3
+
+Dirty elements are rebuilt **shallowest first**, so a parent's rebuild subsumes
+any descendant that was also dirty: by the time the list reaches the child, its
+`update` has already run and cleared its dirty flag.
+
+Both hazards M3 found in the pipeline recur exactly here, and are solved the same
+way:
+
+- **Non-convergence.** An element that dirties itself from its own build would
+  spin. The drain is capped at 32 passes in *every* build, so it degrades to a
+  stale frame rather than a freeze, and a checked build names it afterwards.
+- **Unmounting mid-flush.** An element dropped by a parent's rebuild can be
+  sitting in the buffer that build is walking. `stopTracking` erases it from the
+  dirty list and *blanks* it in the scratch buffer, so the walk's iterators stay
+  valid — the guard cannot skip an entry without dereferencing it first.
+
+`~WidgetBinding` unmounts the root before anything is destroyed, so every `State`
+sees `dispose()`.
+
+### What is verified
+
+- A first frame builds, lays out and paints; a second does no build, no layout,
+  no paint, and returns an unchanged revision.
+- A steady-state frame allocates nothing — and so does a *rebuilding* frame,
+  which is the one that matters, since an animating HUD rebuilds every frame.
+- A rebuild producing equivalent configuration mutates no render object: the
+  element tree rebuilds, the render tree does not move, the revision holds.
+- Keyed children survive reordering with the same `State` and the same render
+  object, in the new order. Unkeyed children reconcile by position, and the test
+  shows the State that used to back one config now backs another.
+- Insert, remove, type-change, null child, and whole-subtree discard each dispose
+  exactly the states they should and leave the container's child count right.
+- `setState` rebuilds one element; an ancestor rebuild subsumes a dirtied
+  descendant; a wrapper rebuilding alone leaves the child it stored untouched.
+- Flex distribution, positioned placement, padding arithmetic and surface resize
+  all produce hand-computed geometry through the widget layer.
+- Text measures through `TextService` and releases its paragraph on teardown.
+- The arena is reused rather than regrown across 32 rebuilds; a widget from a
+  released build traps; creating one outside a build scope traps; a build that
+  never settles is capped.
+- A `RepaintBoundary` widget confines a paint-only change to its own list.
+
+Verified on GCC 13.3 and Clang 18.1, and under ASan + UBSan: 123 tests, 436
+checks. The library also compiles clean with `FLTR_ENABLE_CHECKS=OFF`.

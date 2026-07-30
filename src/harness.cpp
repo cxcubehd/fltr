@@ -102,6 +102,29 @@ std::string dumpDisplayList(const DisplayList& list) {
   return out;
 }
 
+namespace {
+
+void dumpElement(std::string& out, const Element& element, int depth) {
+  out.append(static_cast<std::size_t>(depth) * 2, ' ');
+  const Widget& widget = *element.widget();
+  out += widget.name();
+  switch (const Key key = widget.key(); key.kind) {
+    case Key::Kind::None: break;
+    case Key::Kind::Int: out += " key=" + std::to_string(key.value); break;
+    case Key::Kind::Str: out += std::string(" key=\"") + key.text + "\""; break;
+  }
+  out += '\n';
+  element.visitChildren([&out, depth](Element& child) { dumpElement(out, child, depth + 1); });
+}
+
+}  // namespace
+
+std::string dumpElementTree(const Element& root) {
+  std::string out;
+  dumpElement(out, root, 0);
+  return out;
+}
+
 std::string dumpScene(const Scene& scene) {
   std::string out = "Scene surface=" + dbg::str(scene.surface) +
                     " revision=" + std::to_string(scene.revision) + "\n";

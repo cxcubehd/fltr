@@ -1,10 +1,29 @@
 #include "testing.hpp"
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <exception>
+#include <new>
+
+namespace {
+std::size_t g_allocations = 0;
+}
+
+void* operator new(std::size_t n) {
+  ++g_allocations;
+  if (void* p = std::malloc(n == 0 ? 1 : n)) return p;
+  throw std::bad_alloc();
+}
+void* operator new[](std::size_t n) { return ::operator new(n); }
+void operator delete(void* p) noexcept { std::free(p); }
+void operator delete[](void* p) noexcept { std::free(p); }
+void operator delete(void* p, std::size_t) noexcept { std::free(p); }
+void operator delete[](void* p, std::size_t) noexcept { std::free(p); }
 
 namespace fltrtest {
+
+std::size_t allocationCount() { return g_allocations; }
 
 std::vector<TestCase>& registry() {
   static std::vector<TestCase> r;

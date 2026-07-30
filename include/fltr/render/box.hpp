@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <span>
 #include <vector>
 
 #include "fltr/core/constraints.hpp"
@@ -147,9 +148,11 @@ protected:
 /// costs no allocation, and a child cannot be asked for parent data belonging to
 /// a different parent. The cost is that a child cannot read its own parent data
 /// without going through the parent, which nothing in this framework needs.
-template <class ChildData>
+template <class Data>
 class RenderBoxContainer : public RenderBox {
 public:
+  using ChildData = Data;
+
   struct Slot {
     std::unique_ptr<RenderBox> child;
     ChildData data{};
@@ -178,6 +181,14 @@ public:
   Offset childOffsetAt(std::size_t i) const {
     FLTR_EXPECTS(i < children_.size(), "child index out of range");
     return children_[i].offset;
+  }
+
+  std::size_t indexOfChild(const RenderBox& child) const {
+    for (std::size_t i = 0; i < children_.size(); ++i) {
+      if (children_[i].child.get() == &child) return i;
+    }
+    FLTR_EXPECTS(false, "indexOfChild called for a node that is not a child");
+    return children_.size();
   }
 
   void insertChild(std::size_t index, std::unique_ptr<RenderBox> child, ChildData data = {}) {
@@ -212,8 +223,27 @@ public:
     markNeedsLayout();
   }
 
+  /// Rearranges slots so children appear in the order given. Nothing is adopted
+  /// or dropped, so a keyed child that moves keeps its layout and paint state --
+  /// and its per-child data, which travels in the slot.
+  void reorderChildren(std::span<RenderBox* const> order) {
+    FLTR_EXPECTS(order.size() == children_.size(), "reorderChildren needs the full child list");
+    bool moved = false;
+    for (std::size_t i = 0; i < order.size(); ++i) {
+      if (children_[i].child.get() == order[i]) continue;
+      std::size_t from = i + 1;
+      while (from < children_.size() && children_[from].child.get() != order[i]) ++from;
+      FLTR_EXPECTS(from < children_.size(), "reorderChildren given a node that is not a child");
+      if (from >= children_.size()) return;
+      std::swap(children_[i], children_[from]);
+      moved = true;
+    }
+    if (moved) markNeedsLayout();
+  }
+
   void setChildData(std::size_t index, ChildData data) {
     FLTR_EXPECTS(index < children_.size(), "index out of range");
+    if (children_[index].data == data) return;
     children_[index].data = std::move(data);
     markNeedsLayout();
   }

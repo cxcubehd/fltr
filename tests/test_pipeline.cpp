@@ -1,32 +1,11 @@
 #include "testing.hpp"
 
-#include <cstdlib>
-#include <new>
-
 #include "fltr/harness.hpp"
 #include "fltr/render/boxes.hpp"
 #include "fltr/render/flex.hpp"
 #include "fltr/render/stack.hpp"
 
 using namespace fltr;
-
-// Counts every heap allocation in the test binary. "No per-frame heap churn in
-// the steady state" is a hard requirement of this framework, so it is measured
-// rather than asserted in a comment.
-namespace {
-std::size_t g_allocations = 0;
-}
-
-void* operator new(std::size_t n) {
-  ++g_allocations;
-  if (void* p = std::malloc(n == 0 ? 1 : n)) return p;
-  throw std::bad_alloc();
-}
-void* operator new[](std::size_t n) { return ::operator new(n); }
-void operator delete(void* p) noexcept { std::free(p); }
-void operator delete[](void* p) noexcept { std::free(p); }
-void operator delete(void* p, std::size_t) noexcept { std::free(p); }
-void operator delete[](void* p, std::size_t) noexcept { std::free(p); }
 
 namespace {
 
@@ -210,22 +189,22 @@ TEST(pipeline_steady_state_frames_allocate_nothing) {
   }
 
   // A frame with nothing dirty.
-  std::size_t before = g_allocations;
+  std::size_t before = fltrtest::allocationCount();
   t.owner.drawFrame();
-  CHECK_EQ(g_allocations - before, std::size_t{0});
+  CHECK_EQ(fltrtest::allocationCount() - before, std::size_t{0});
 
   // A repaint-only frame, which is what an animation attached to a render
   // object produces every single tick.
-  before = g_allocations;
+  before = fltrtest::allocationCount();
   t.a->setColor(Color::argb(0xFF123456));
   t.owner.drawFrame();
-  CHECK_EQ(g_allocations - before, std::size_t{0});
+  CHECK_EQ(fltrtest::allocationCount() - before, std::size_t{0});
 
   // And a relayout frame.
-  before = g_allocations;
+  before = fltrtest::allocationCount();
   t.a->setPreferredSize({44, 20});
   t.owner.drawFrame();
-  CHECK_EQ(g_allocations - before, std::size_t{0});
+  CHECK_EQ(fltrtest::allocationCount() - before, std::size_t{0});
 }
 
 // ---------------------------------------------------------------------------
