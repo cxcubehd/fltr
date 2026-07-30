@@ -2,8 +2,10 @@
 
 #include <cstdint>
 #include <span>
+#include <type_traits>
 #include <vector>
 
+#include "fltr/core/config.hpp"
 #include "fltr/core/geometry.hpp"
 
 namespace fltr {
@@ -27,10 +29,10 @@ enum class PaintOp : std::uint8_t {
   DrawRRect,
   DrawImage,
   DrawParagraph,
-  /// Embeds another list by reference. This is the repaint-boundary seam: the
-  /// referenced list is owned by a boundary render object and is only
-  /// re-recorded when that subtree repaints. A backend may cache translated
-  /// state keyed on (list pointer, list revision) and skip re-translation.
+  /// Embeds another list by reference -- the repaint-boundary seam. The
+  /// referenced list belongs to a boundary and is re-recorded only when that
+  /// subtree repaints, so a backend can cache its translation on
+  /// (list pointer, revision).
   DrawList,
 };
 
@@ -95,18 +97,14 @@ struct PaintCmd {
 static_assert(std::is_trivially_destructible_v<PaintCmd>);
 static_assert(std::is_trivially_copyable_v<PaintCmd>);
 
-/// An ordered, backend-agnostic recording.
-///
-/// Nothing here assumes the consumer is immediate-mode or retained-mode: an
-/// immediate-mode backend walks the list once per frame, a retained-mode
-/// backend translates it once and re-uses the translation while `revision()`
-/// is unchanged.
+/// An ordered, backend-agnostic recording. Nothing here assumes immediate-mode
+/// or retained-mode: the former walks the list each frame, the latter translates
+/// once and re-uses that while `revision()` holds.
 class DisplayList {
 public:
   DisplayList() = default;
 
-  /// Begins a new recording. Retains the command buffer's capacity, so a
-  /// re-record in the steady state performs no allocation.
+  /// Retains the command buffer's capacity, so re-recording allocates nothing.
   void beginRecording() {
     cmds_.clear();
     ++revision_;
@@ -185,20 +183,13 @@ private:
 
 /// What the framework hands the consumer each frame.
 ///
-/// `revision` is the sum of the revisions of every list reachable from the
-/// root; if it is unchanged since the last frame, absolutely nothing was
-/// re-recorded and the consumer may resubmit whatever it did last time.
+/// `revision` counts how many display lists the pipeline has re-recorded in
+/// total. Unchanged since last frame means nothing anywhere was re-recorded and
+/// the consumer may resubmit whatever it submitted last time.
 struct Scene {
   const DisplayList* root = nullptr;
   Size surface;
   std::uint64_t revision = 0;
-};
-
-/// Consumer-side translation target. The framework never implements a real one.
-class PaintBackend {
-public:
-  virtual ~PaintBackend() = default;
-  virtual void submit(const Scene& scene) = 0;
 };
 
 }  // namespace fltr

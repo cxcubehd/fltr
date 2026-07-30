@@ -1,5 +1,7 @@
 #pragma once
 
+#include <algorithm>
+#include <memory>
 #include <string>
 #include <string_view>
 
@@ -34,8 +36,8 @@ inline BoxDecoration lerp(const BoxDecoration& a, const BoxDecoration& b, float 
 // RenderView -- the root
 // ---------------------------------------------------------------------------
 
-/// The pipeline root. Always a repaint boundary, so it owns the display list
-/// the consumer submits.
+/// The pipeline root, always a repaint boundary so it owns the display list the
+/// consumer submits.
 class RenderView final : public RenderProxyBox {
 public:
   explicit RenderView(Size surface) : surface_(surface) {}
@@ -52,8 +54,8 @@ public:
 
   void performLayout() override {
     setSize(surface_);
-    // The child gets tight constraints, so it is a relayout boundary and its
-    // invalidations never reach the view.
+    // Tight constraints make the child a relayout boundary, so its invalidations
+    // never reach the view.
     if (child_) layoutChild(*child_, BoxConstraints::tight(surface_));
   }
 
@@ -110,9 +112,8 @@ public:
   void setAlignment(Alignment a) {
     if (a == alignment_) return;
     alignment_ = a;
-    // Alignment changes where the child sits, not how big anything is -- but
-    // the offset is computed during layout, so this is a layout invalidation.
-    // The render-attached animated variant overrides this; see RenderAlignAnimated.
+    // The child moves but nothing resizes; still a layout invalidation, because
+    // the offset is computed during layout.
     markNeedsLayout();
   }
   void setSizeFactors(float w, float h) {
@@ -187,8 +188,7 @@ public:
   void setDecoration(const BoxDecoration& d) {
     if (d == decoration_) return;
     decoration_ = d;
-    // Decoration never affects layout, so this is the cheap path.
-    markNeedsPaint();
+    markNeedsPaint();  // decoration never affects layout
   }
 
   void paint(PaintingContext& context, Offset offset) override {
@@ -313,19 +313,23 @@ private:
 // RenderParagraph -- text as an ordinary child of the layout protocol
 // ---------------------------------------------------------------------------
 
-/// Resolves a size from constraints exactly like any other box, by asking the
-/// TextService to measure into the available width. A real text implementation
-/// drops in behind TextService without touching this class or layout.
+/// Resolves a size from constraints like any other box, by asking the
+/// TextService to measure into the available width, so a real implementation
+/// drops in behind TextService without touching layout.
 ///
-/// The render object owns its text as a std::string. Render objects are
-/// long-lived and may own heap memory; widget configs, which are arena-scratch,
-/// carry only a std::string_view. The copy happens only when the text actually
-/// changes.
+/// Owns its text as a std::string: render objects are long-lived and may own
+/// heap memory, while widget configs are arena scratch and carry only a view.
 class RenderParagraph final : public RenderBox {
 public:
   RenderParagraph(TextService* service, std::string_view text, TextStyle style,
-                  TextAlign align = TextAlign::Left, int maxLines = 0)
-      : service_(service), text_(text), style_(style), align_(align), maxLines_(maxLines) {
+                  TextAlign align = TextAlign::Left, int maxLines = 0,
+                  TextOverflow overflow = TextOverflow::Clip)
+      : service_(service),
+        text_(text),
+        style_(style),
+        align_(align),
+        maxLines_(maxLines),
+        overflow_(overflow) {
     FLTR_EXPECTS(service_ != nullptr, "RenderParagraph requires a TextService");
   }
   ~RenderParagraph() override { releaseHandle(); }
@@ -343,8 +347,7 @@ public:
   }
   void setStyle(const TextStyle& s) {
     if (s == style_) return;
-    // Colour alone does not change metrics, but everything else does; keeping
-    // this one branch honest is cheaper than getting it subtly wrong.
+    // Colour alone does not change metrics; everything else does.
     const bool metricsChanged = s.font != style_.font || s.size != style_.size ||
                                 s.letterSpacing != style_.letterSpacing ||
                                 s.lineHeight != style_.lineHeight;
@@ -365,6 +368,11 @@ public:
     maxLines_ = n;
     markNeedsLayout();
   }
+  void setOverflow(TextOverflow o) {
+    if (o == overflow_) return;
+    overflow_ = o;
+    markNeedsLayout();
+  }
 
   void performLayout() override {
     releaseHandle();
@@ -373,6 +381,7 @@ public:
     spec.spans = {&span, 1};
     spec.align = align_;
     spec.maxLines = maxLines_;
+    spec.overflow = overflow_;
     handle_ = service_->acquire(spec, constraints_.maxWidth);
     setSize(constraints_.constrain(service_->metrics(handle_).size));
   }
@@ -381,8 +390,7 @@ public:
     if (handle_ != kNullParagraph) context.list().drawParagraph(handle_, offset, style_.color);
   }
 
-  /// Byte offset in the source text at a local position; the seam for future
-  /// selection and caret work.
+  /// Byte offset in the source text at a local position.
   std::uint32_t byteOffsetAt(Offset local) const {
     return handle_ == kNullParagraph ? 0 : service_->byteOffsetAt(handle_, local);
   }
@@ -400,6 +408,7 @@ private:
   TextStyle style_;
   TextAlign align_;
   int maxLines_;
+  TextOverflow overflow_;
   ParagraphHandle handle_ = kNullParagraph;
 };
 

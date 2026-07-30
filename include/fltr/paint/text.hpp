@@ -47,11 +47,9 @@ struct ParagraphSpec {
   TextOverflow overflow = TextOverflow::Clip;
 };
 
-/// A contiguous piece of one span placed on one line.
-///
-/// Explicitly not one-glyph-per-character and not one-run-per-span: a real
-/// shaper will split a span across lines and may merge or reorder within a
-/// line. The framework only ever reads positions and bounds from these.
+/// A contiguous piece of one span placed on one line. Explicitly not
+/// one-glyph-per-character and not one-run-per-span: a real shaper splits spans
+/// across lines and may merge or reorder within one.
 struct PositionedRun {
   Offset offset;  ///< top-left, paragraph-relative
   Size size;
@@ -75,20 +73,19 @@ struct ParagraphMetrics {
   float firstBaseline = 0.0f;
   float lastBaseline = 0.0f;
   bool didExceedMaxLines = false;
+  /// Whether the service trimmed content and marked it as elided.
+  bool didEllipsize = false;
   std::span<const LineMetrics> lines;
   std::span<const PositionedRun> runs;
 };
 
-/// The boundary through which the framework asks for text.
+/// The boundary through which the framework asks for text, consumed exactly the
+/// way a rendering backend is: the framework calls out, the consumer implements.
+/// Nothing above this interface assumes single-line, fixed-width, ASCII, or one
+/// glyph per character, and nothing above it shapes, breaks lines, or rasterises.
 ///
-/// Text is consumed exactly the way a rendering backend is consumed: the
-/// framework calls out, the consumer implements. Nothing above this interface
-/// assumes single-line, fixed-width, ASCII, or one glyph per character, and
-/// nothing above it does shaping, font matching, line breaking, rasterization,
-/// or atlas management.
-///
-/// Lifetime: `acquire` returns a handle the caller owns and must `release`.
-/// Render objects acquire on layout and release on re-layout and destruction.
+/// `acquire` returns a handle the caller owns and must `release`. Render objects
+/// acquire on layout and release on re-layout and destruction.
 class TextService {
 public:
   virtual ~TextService() = default;
@@ -107,12 +104,10 @@ public:
   virtual std::uint32_t byteOffsetAt(ParagraphHandle h, Offset local) const = 0;
 };
 
-/// Development stand-in: a fixed-advance font with greedy word wrapping.
-///
-/// Deliberately produces multiple lines and multiple positioned runs so that
-/// layout, painting, and hit testing are exercised against the same shape of
-/// data a real shaper will return. It is not a text renderer and makes no
-/// attempt at correctness beyond ASCII.
+/// Development stand-in: a fixed-advance font with greedy word wrapping. It
+/// produces multiple lines and multiple positioned runs on purpose, so layout,
+/// painting and hit testing meet the shape of data a real shaper returns. Not a
+/// text renderer, and no correctness beyond ASCII.
 class MonospaceTextService final : public TextService {
 public:
   /// Advance width as a fraction of the style's font size.

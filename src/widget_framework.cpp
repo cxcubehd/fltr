@@ -129,9 +129,7 @@ ElementPtr Element::updateChild(ElementPtr child, WidgetRef widget) {
   if (child) {
     if (widget.canUpdate(*child->widget())) {
       // A stale ref is the configuration this child already holds, so there is
-      // nothing to adopt and the whole subtree can be skipped. This is what
-      // makes a rebuild deep in the tree stop at the branches it actually
-      // changed rather than walking every descendant.
+      // nothing to adopt and the subtree can be skipped entirely.
       if (!widget.stale()) child->update(widget);
       return child;
     }
@@ -151,8 +149,8 @@ void ChildList::update(Element& parent, WidgetList widgets) {
   next_.clear();
   next_.resize(newCount);
 
-  // Leading run of children that still match by position, which is the whole
-  // list whenever nothing structural changed.
+  // Leading run matched by position -- the whole list when nothing structural
+  // changed.
   std::size_t oldTop = 0;
   std::size_t newTop = 0;
   while (oldTop < oldCount && newTop < newCount &&
@@ -162,7 +160,7 @@ void ChildList::update(Element& parent, WidgetList widgets) {
     ++newTop;
   }
 
-  // Trailing run. Matched here but placed last, because the middle decides how
+  // Trailing run: matched here, but placed last because the middle decides how
   // many of them there are.
   std::size_t oldEnd = oldCount;
   std::size_t newEnd = newCount;
@@ -172,8 +170,8 @@ void ChildList::update(Element& parent, WidgetList widgets) {
     --newEnd;
   }
 
-  // The middle is where keys earn their place: an unkeyed child is discarded,
-  // while a keyed one is held aside and reclaimed wherever its key reappears.
+  // In the middle an unkeyed child is discarded, while a keyed one is held
+  // aside and reclaimed wherever its key reappears.
   keyed_.clear();
   for (std::size_t i = oldTop; i < oldEnd; ++i) {
     const Key key = children_[i]->widget()->key();
@@ -255,9 +253,8 @@ void BuildOwner::scheduleBuild(Element& element) {
 void BuildOwner::stopTracking(Element& element) {
   element.inDirtyList_ = false;
   std::erase(dirty_, &element);
-  // An element can be unmounted from inside a build -- by a parent whose new
-  // configuration drops it -- while it sits in the buffer that build is walking.
-  // Blank it rather than erase it, so the walk's iterators stay valid.
+  // An element dropped by a parent's rebuild can be sitting in the buffer that
+  // build is walking. Blank it rather than erase it, so the iterators stay valid.
   std::replace(buildScratch_.begin(), buildScratch_.end(), &element,
                static_cast<Element*>(nullptr));
 }
@@ -266,11 +263,9 @@ void BuildOwner::flushBuild() {
   if (dirty_.empty()) return;
   BuildScope scope(arena_);
 
-  // Building an element can legitimately dirty one that has not been visited
-  // yet, so the list is drained rather than swept once. An element that dirties
-  // itself from its own build would spin here; the cap is real in every build so
-  // it degrades to a stale frame rather than a freeze, and checked builds name
-  // it afterwards.
+  // Building an element can dirty one not yet visited, so the list is drained
+  // rather than swept once. The cap applies in every build, so an element that
+  // dirties itself degrades to a stale frame rather than a freeze.
   static constexpr int kMaxBuildPasses = 32;
   int passes = 0;
   while (!dirty_.empty() && passes < kMaxBuildPasses) {

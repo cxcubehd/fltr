@@ -114,7 +114,8 @@ into later: give `DrawListCmd` a transform/opacity slot and let a compositor own
 those lists. That is additive, not a rewrite.
 
 `Scene::revision` is a monotonic count of how many display lists the pipeline
-has re-recorded. Unchanged means nothing was re-recorded anywhere in the tree and
+has re-recorded. (The header used to describe it as a sum of per-list revisions,
+which it never was; corrected in the M1–M4 review.) Unchanged means nothing was re-recorded anywhere in the tree and
 the consumer may resubmit last frame's translation verbatim. A per-list
 `revision()` is also exposed, so a backend that caches translated state keys it
 on `(list pointer, list revision)` and re-translates only the boundaries that
@@ -167,12 +168,14 @@ itself when its owner is destroyed. Notification is safe against listeners
 subscribing or detaching mid-walk — including a listener detaching its
 not-yet-visited successor — via a chain of cursors that `detach()` fixes up.
 
-This is the one observable abstraction, shared by reactivity and animation. **The
-rebuild-versus-repaint distinction deliberately does not live here.** It lives in
-the subscriber: a `Watch` element subscribes and marks itself dirty for rebuild;
-a render object subscribes via `observeForPaint` and only marks itself needing
-paint, or via `observeForLayout` when the property genuinely affects layout. Same
-signal, different sink, and which one you are on is visible at the call site.
+This is the one observable abstraction, to be shared by reactivity (M6) and
+animation (M7). **The rebuild-versus-repaint distinction deliberately does not
+live here.** It lives in the subscriber: `observeForPaint` marks a render object
+needing paint and nothing else, while a subscribing element will mark itself
+needing rebuild. Same signal, different sink, chosen at the call site.
+
+The layout-invalidating counterpart is deliberately absent until something
+animates a layout property; it lands with the first widget that does.
 
 ---
 
@@ -494,14 +497,14 @@ indices shift.
 Since per-child data already lives in the parent here (the M2 divergence), our
 containers are index-addressed and a simpler shape works: new children are
 **appended**, and `RenderBoxContainer::reorderChildren` permutes the slots into
-the element order in one linear selection pass once the element list is final.
-Slots disappear from the design entirely.
+the element order once the element list is final. Slots disappear from the design
+entirely.
 
 Reordering swaps `Slot` objects. Nothing is adopted or dropped, so a keyed child
 that moves keeps its layout state, its paint state, and its per-child data, which
-travels in the slot with it. The cost is one extra O(n) pointer-compare pass per
-multi-child rebuild that changed structure, and `markNeedsLayout` fires only if
-something actually moved.
+travels in the slot with it. The permutation is a selection pass with a linear
+inner scan, so O(n²) in the worst case against sibling counts that are single
+digits in a HUD; `markNeedsLayout` fires only if something actually moved.
 
 ### Reconciliation
 
@@ -526,12 +529,22 @@ it — so the design does not preclude them, which is what the brief asked for.
 whose element writes into the container's slot for its index, and the walk that
 finds them stops at the first render object in each branch — so they still work
 through an intervening stateless widget, which is where a real HUD puts them.
-The container is named statically (`using Container = RenderFlex`) and checked at
-the point of application, so `Flexible` inside a `Stack` names its own mistake.
+A parent-data widget names the data it writes (`using ChildData = FlexChildData`)
+rather than the container it expects, and `ParentDataSlot` carries that type's
+tag, so `Flexible` inside a `Stack` names its own mistake. That is the same
+no-RTTI mechanism `WidgetType` uses; the framework contains no `dynamic_cast`.
 
-Every index is reset to default data before the walk, so removing a `Flexible`
-clears the flex it had set. `setChildData` is change-guarded, which makes both
-writes free when nothing moved.
+Each slot's data is gathered into a default-initialised value that the walk
+fills in, and written to the container once. Removing a `Flexible` therefore
+clears the flex it had set, and a rebuild that changes nothing writes nothing —
+which is what makes `setChildData`'s change guard actually bite.
+
+> **Corrected after M4.** This first reset every slot to default and *then*
+> re-applied, so the guard fired on both writes and every rebuild of a container
+> holding a `Flexible` or `Positioned` relayed out and repainted it. Since a HUD
+> row essentially always holds one, that was the steady-state path. The test that
+> claimed to cover "equivalent configuration mutates no render object" used a
+> single-child `Padding`, which never reaches this code.
 
 ### Build ordering, and the same two hazards as M3
 
@@ -578,3 +591,107 @@ sees `dispose()`.
 
 Verified on GCC 13.3 and Clang 18.1, and under ASan + UBSan: 123 tests, 436
 checks. The library also compiles clean with `FLTR_ENABLE_CHECKS=OFF`.
+
+---
+
+## Review of M1–M4
+
+A pass over everything built so far, before the milestones that build on it.
+
+### Three defects, each reproduced before it was fixed
+
+**Rebuilding a container with parent data mutated the render tree.** Covered
+above. Measured on a `Row` + `Flexible` rebuilt with identical configuration:
+one layout, four paints, a bumped scene revision, against zero for the same tree
+without the `Flexible`.
+
+**`setState` after unmount dereferenced null.** `StatefulElement::unmount` clears
+`State::element_`, and `setState` used it unguarded — a segfault exactly where a
+game callback outlives the panel that registered it. `State::mounted()` existed
+two lines above and was not consulted. It is now a precondition.
+
+**`flushLayout`'s convergence cap was cumulative.** It used
+`FrameStats::layoutPasses` as its own loop counter, and only `resetStats` — which
+only `drawFrame` calls — cleared it. Driving `flushLayout` directly gave a silent
+no-op after 32 calls and a spurious *"layout did not converge"* on the 33rd, on a
+perfectly healthy tree. `flushBuild` already used a local; `flushLayout` now
+matches.
+
+The shape all three share: each was a claim the code made about itself that
+nothing checked. Each now has a test that fails without the fix.
+
+### Scaffolding removed
+
+Hit testing was fully written in M2, three milestones before its own, with no
+test touching it — and `PointerEvent` was forward-declared but never defined, so
+`HitTestTarget::handleEvent`, a virtual on every `RenderBox`, could not be
+called by anyone.
+
+Split accordingly. Resolving *which boxes lie under a point, and in what space*
+is the render tree's own business and stays, now in `render/hit_test.hpp` and
+covered by tests: exclusive edges, deepest-first paths in local space, transform
+inversion including a non-invertible one, and overlapping children resolving
+topmost-first. Routing, `PointerEvent`, the arena and recognizers are M5, and
+`gestures/` reappears when they do.
+
+Also removed: `PaintBackend`, a consumer-side interface the framework never
+referenced; `PipelineOwner::requestVisualUpdate` and its flag, which nothing ever
+read; `RenderBoxContainer::moveChild`, superseded by `reorderChildren`, where
+having two ways to move a child invites the wrong one.
+
+`TextOverflow` went the other way. It was declared and carried in `ParagraphSpec`
+with nothing setting it and nothing reading it. Since the brief's whole point
+about text is that the interface must be honest *now*, it is plumbed through
+`Text` and `RenderParagraph` to the service instead, which reports back through
+`ParagraphMetrics::didEllipsize`.
+
+Deliberately kept, though currently unused: the value-type API on `Offset`,
+`Size`, `Rect`, `EdgeInsets`, `Color`, `BoxConstraints` and `Key`, and the
+per-type `lerp` overloads. That is the vocabulary this port is meant to mirror,
+not speculative machinery, and M7's interpolation layer is named in the brief.
+`BoxConstraints::copyWith` was the exception worth fixing rather than keeping: it
+replaced all four bounds unconditionally, which made it a slower spelling of
+aggregate initialisation, and its doc comment described a function that did not
+exist. It now takes optionals and preserves what it is not given, as Flutter's
+does.
+
+### Encapsulation and structure
+
+`PipelineOwner` published `setPhase`, `mutableStats` and `setActiveLayoutNode`
+under a comment calling them internal; `friend class RenderObject` was declared
+but friendship does not inherit, so `RenderBox` could not use it. They are
+private now, with `RenderBox` a friend, and `PhaseScope` is a private nested
+class rather than a free struct that needed the setter public.
+
+The contract machinery — `setViolationHandler`, `reportViolation`, the default
+handler — was implemented in `src/geometry.cpp`. It lives in `src/contracts.cpp`.
+
+Several headers relied on transitive includes for `std::optional`,
+`std::unique_ptr`, `<type_traits>` and even `FLTR_EXPECTS`; they include what
+they use.
+
+`WidgetBinding` held its `RenderView` through an unchecked `static_cast` on every
+call and asserted the one thing that could not fail. It now checks the root
+widget's type at mount and caches the pointer. `attachRoot` forwards its callable
+instead of taking a forwarding reference and ignoring it. `drawFrame` resets the
+build count, so `BuildOwner::buildCount()` is per-frame like `PipelineOwner`'s
+stats rather than cumulative.
+
+### Comments
+
+The narrative style has been cut back throughout. A comment that explains *why
+the obvious thing is wrong here* earns its place; one that restates the code, or
+argues for a decision this document already argues for, does not. Three pointed
+at identifiers that do not exist (`FLTR_CONFIG_FIELDS`, `widgets/widget.hpp`,
+`RenderAlignAnimated`), one described a `Watch` element as though it were
+written, and one in `stack.cpp` asserted a child's size was readable while the
+code beneath it hedged against exactly that.
+
+### Known and deliberate
+
+Every widget still repeats a constructor, `name()`, a `child()` accessor and an
+`Args args_` member. `Configure` cannot absorb them: it is the CRTP base, so
+`Derived::Args` is incomplete where the member would have to be declared. Every
+way around it — a macro, namespace-scope `XArgs` types, friendship into the
+element templates — costs more legibility than the four lines it saves, so the
+repetition stays until reflection makes it unnecessary.

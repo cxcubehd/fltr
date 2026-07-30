@@ -40,9 +40,8 @@ public:
     return std::string("fit=") + kFit[static_cast<int>(fit_)] + " align=" + dbg::str(alignment_);
   }
 
-  /// With StackFit::Expand the stack's size comes from its constraints alone,
-  /// never from its children -- so it is always a relayout boundary, and a child
-  /// changing size can never reach the stack's parent.
+  /// Under Expand the size comes from constraints alone, so the stack is always
+  /// a relayout boundary and a resizing child never reaches its parent.
   bool sizedByParent() const override { return fit_ == StackFit::Expand; }
 
   void setAlignment(Alignment a) {

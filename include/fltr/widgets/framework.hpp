@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <initializer_list>
 #include <memory>
@@ -33,11 +34,9 @@ constexpr WidgetType widgetTypeOf() noexcept {
   return typeTagOf<T>();
 }
 
-/// The arena widgets are built into.
-///
-/// Ambient rather than threaded through every call, because a widget expression
-/// nests arbitrarily deep and an explicit allocator parameter would put noise at
-/// exactly the call sites this framework optimises for legibility.
+/// The arena widgets are built into. Ambient rather than a parameter, because a
+/// widget expression nests arbitrarily deep and threading an allocator through
+/// it would put noise at exactly the call sites this framework optimises for.
 Arena* currentBuildArena() noexcept;
 
 /// Opens the window during which widgets may be created, and releases every one
@@ -60,11 +59,10 @@ bool isStaleGeneration(std::uint32_t generation) noexcept;
 
 /// A reference to arena-allocated widget configuration.
 ///
-/// It carries the identity it needs -- type and key -- rather than reading it
-/// back through the pointer, so a ref that outlived its arena can still be
-/// reconciled without being dereferenced. That case is not exotic: an element
-/// that rebuilds on its own re-emits the child ref it stored, which by then
-/// belongs to a released build.
+/// It carries type and key rather than reading them back through the pointer,
+/// so a ref that outlived its arena can still be reconciled without being
+/// dereferenced -- which is the ordinary case, not an exotic one: an element
+/// that rebuilds alone re-emits the child ref it stored from an earlier build.
 class WidgetRef {
 public:
   WidgetRef() = default;
@@ -74,14 +72,13 @@ public:
   WidgetType type() const noexcept { return type_; }
   Key key() const noexcept { return key_; }
 
-  /// True when this ref came from a build whose arena has been released. The
-  /// configuration behind it cannot have changed since -- the element holding it
-  /// copied it verbatim -- so the subtree it names needs no work at all.
+  /// From a build whose arena has been released. The configuration behind it
+  /// cannot have changed since, because the element holding it copied it
+  /// verbatim, so the subtree it names needs no work.
   bool stale() const noexcept { return widget_ != nullptr && isStaleGeneration(generation_); }
 
-  /// Identity across rebuilds. Matching type and key reconcile onto the same
-  /// element, which keeps its State and its render object; anything else
-  /// discards the element and inflates a new one.
+  /// Matching type and key reconcile onto the same element, keeping its State
+  /// and render object; anything else discards it and inflates afresh.
   bool canUpdate(const Widget& existing) const noexcept;
 
   const Widget* get() const;
@@ -102,12 +99,9 @@ WidgetRef newWidget(const Args& args) {
   return {*arena->create<W>(args), arena->generation()};
 }
 
-/// The children of a multi-child widget.
-///
-/// The braced list at the call site is a temporary, so the entries are copied
-/// into the build arena. Null refs are dropped, which is what makes a
-/// conditional entry -- `visible ? Badge::make({...}) : WidgetRef{}` -- work
-/// inside a children list.
+/// The children of a multi-child widget. The braced list at the call site is a
+/// temporary, so entries are copied into the build arena. Null refs are dropped,
+/// which makes `visible ? Badge::make({...}) : WidgetRef{}` work inline.
 class WidgetList {
 public:
   WidgetList() = default;
@@ -132,10 +126,10 @@ private:
 
 static_assert(std::is_trivially_destructible_v<WidgetList>);
 
-/// Immutable configuration. Widgets live for one build phase and are released
-/// wholesale, so they are never deleted and never destroyed polymorphically --
-/// hence the protected non-virtual destructor, which is also what keeps concrete
-/// widgets trivially destructible and therefore arena-safe.
+/// Immutable configuration, alive for one build phase and released wholesale.
+/// A widget is never deleted and never destroyed polymorphically, hence the
+/// protected non-virtual destructor -- which also keeps concrete widgets
+/// trivially destructible, and so arena-safe.
 class Widget {
 public:
   Key key() const noexcept { return key_; }
@@ -235,9 +229,9 @@ public:
   /// branch, so it reaches through intervening component elements.
   virtual void writeParentData(ParentDataSlot slot) const;
 
-  /// Removes this subtree's render objects from the render tree, destroying
-  /// them. Called once at the top of a subtree being discarded; `unmount` below
-  /// must therefore never touch a render object.
+  /// Destroys this subtree's render objects, called once at the top of a subtree
+  /// being discarded. `unmount` runs after it, and must therefore never touch a
+  /// render object.
   virtual void detachRenderObject();
 
 protected:
@@ -264,10 +258,9 @@ private:
   bool inDirtyList_ = false;
 };
 
-/// Holds the configuration by value, which is what gives an element a stable
-/// copy once the build arena that produced the widget is gone. An element is
-/// only ever updated with a widget of its own concrete type, so the member is
-/// always the right type and never needs resizing.
+/// Holds the configuration by value, so the element keeps a stable copy once
+/// the arena that produced the widget is gone. An element is only ever updated
+/// with a widget of its own concrete type, so the member is never the wrong one.
 template <class W, class Base>
 class ConfiguredElement : public Base {
 public:
@@ -293,12 +286,11 @@ protected:
 // Keyed reconciliation
 // ---------------------------------------------------------------------------
 
-/// An element's children, and the algorithm that reconciles them against a new
-/// widget list.
+/// An element's children and the algorithm that reconciles them against a new
+/// widget list. Unkeyed children reconcile by position; keyed children reconcile
+/// by key and so survive reordering with State and render object intact.
 ///
-/// Unkeyed children reconcile by position; keyed children reconcile by key and
-/// therefore survive reordering with their State and render object intact. The
-/// scratch buffers are members so a rebuild allocates nothing once the
+/// The scratch buffers are members, so a rebuild allocates nothing once the
 /// high-water mark is reached.
 class ChildList {
 public:
@@ -359,11 +351,9 @@ protected:
 template <class W>
 class StatefulElement;
 
-/// Mutable state with a lifetime tied to its element rather than to any widget.
-///
-/// `widget()` always reflects the newest configuration; `didUpdateWidget`
-/// receives the previous one, which is where a state object re-targets anything
-/// derived from configuration.
+/// Mutable state whose lifetime is its element's, not any widget's. `widget()`
+/// always reflects the newest configuration; `didUpdateWidget` receives the
+/// previous one, and is where derived values are re-targeted.
 template <class W>
 class State {
 public:
@@ -469,8 +459,7 @@ private:
 // ---------------------------------------------------------------------------
 
 /// The seam between the element tree and the render tree. The render tree owns
-/// its nodes; an element holds a raw pointer to the one it created and gives it
-/// up when the subtree is discarded.
+/// its nodes; an element holds a raw pointer to the one it created.
 class RenderObjectElement : public Element {
 public:
   RenderBox* renderObject() const noexcept final { return renderObject_; }
@@ -679,9 +668,9 @@ protected:
   ~MultiChildRenderObjectWidget() = default;
 };
 
-/// Supplies the three things every concrete widget would otherwise repeat: its
-/// runtime type, the element that carries it, and the arena-allocating factory
-/// that call sites use.
+/// Supplies what every concrete widget would otherwise repeat: its runtime
+/// type, the element that carries it, and the arena-allocating factory that call
+/// sites use.
 template <class Derived, class Base>
 class Configure : public Base {
 public:
@@ -695,7 +684,7 @@ public:
   }
 
   /// `Self` defers naming `Derived::Args` until the call, by which point the
-  /// derived widget is complete. It is never deduced: a braced initialiser is a
+  /// derived widget is complete. It never deduces: a braced initialiser is a
   /// non-deduced context, so the default always wins.
   template <class Self = Derived>
   static WidgetRef make(const typename Self::Args& args) {
@@ -726,8 +715,8 @@ public:
   bool needsBuild() const noexcept { return !dirty_.empty(); }
   std::size_t dirtyElementCount() const noexcept { return dirty_.size(); }
 
-  /// Rebuilds every dirty element, shallowest first, so a parent's rebuild
-  /// subsumes any of its descendants that were also dirty.
+  /// Rebuilds every dirty element shallowest first, so a parent's rebuild
+  /// subsumes dirty descendants.
   void flushBuild();
 
   int buildCount() const noexcept { return buildCount_; }

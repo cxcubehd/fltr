@@ -57,6 +57,16 @@ public:
   void paint(PaintingContext&, Offset) override { markNeedsLayout(); }
 };
 
+/// Deliberately illegal: re-enters the pipeline from inside its own layout.
+class RenderReentrantLayout final : public RenderBox {
+public:
+  const char* typeName() const override { return "ReentrantLayout"; }
+  void performLayout() override {
+    setSize(constraints_.constrain({10, 10}));
+    owner()->flushLayout();
+  }
+};
+
 /// Deliberately non-converging: dirties a partner every time it lays out, so a
 /// pair of them keeps re-dirtying each other. A node cannot spin on its own --
 /// it is still marked dirty while its own performLayout runs, so marking itself
@@ -516,13 +526,16 @@ TEST(pipeline_flushing_paint_with_layout_still_dirty_is_a_contract_violation) {
 }
 
 TEST(pipeline_reentering_a_phase_is_a_contract_violation) {
-  BasicTree t;
-  t.owner.drawFrame();
-  t.a->setPreferredSize({50, 20});
-  // Simulate being inside layout when a second flush is requested.
-  t.owner.setPhase(PipelinePhase::Layout);
-  CHECK_THROWS(t.owner.flushLayout());
-  t.owner.setPhase(PipelinePhase::Idle);
+  PipelineOwner owner;
+  auto view = make<RenderView>(Size{100, 100});
+  view->setChild(make<RenderReentrantLayout>());
+  owner.setRootNode(view.get());
+
+  CHECK_THROWS(owner.flushLayout());
+  // The scope restored the phase on the way out, so teardown is not a second
+  // confusing failure.
+  CHECK_EQ(owner.phase(), PipelinePhase::Idle);
+  owner.setRootNode(nullptr);
 }
 
 TEST(pipeline_a_node_still_needing_layout_cannot_be_painted) {

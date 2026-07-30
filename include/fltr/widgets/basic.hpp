@@ -1,5 +1,7 @@
 #pragma once
 
+#include <memory>
+#include <optional>
 #include <string_view>
 
 #include "fltr/render/boxes.hpp"
@@ -418,6 +420,7 @@ public:
     TextAlign align = TextAlign::Left;
     /// Zero means unlimited.
     int maxLines = 0;
+    TextOverflow overflow = TextOverflow::Clip;
   };
   using Render = RenderParagraph;
 
@@ -427,13 +430,14 @@ public:
 
   std::unique_ptr<RenderParagraph> createRenderObject(BuildContext& context) const {
     return std::make_unique<RenderParagraph>(&context.textService(), args_.text, args_.style,
-                                             args_.align, args_.maxLines);
+                                             args_.align, args_.maxLines, args_.overflow);
   }
   void updateRenderObject(BuildContext&, RenderParagraph& render) const {
     render.setText(args_.text);
     render.setStyle(args_.style);
     render.setAlign(args_.align);
     render.setMaxLines(args_.maxLines);
+    render.setOverflow(args_.overflow);
   }
 
 private:

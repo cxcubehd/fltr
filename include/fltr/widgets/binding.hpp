@@ -1,5 +1,7 @@
 #pragma once
 
+#include <utility>
+
 #include "fltr/render/object.hpp"
 #include "fltr/widgets/basic.hpp"
 
@@ -23,7 +25,7 @@ public:
   template <class BuildRoot>
   void attachRoot(BuildRoot&& buildRoot) {
     BuildScope scope(buildOwner_.arena());
-    mountRoot(View::make({.child = buildRoot()}));
+    mountRoot(View::make({.child = std::forward<BuildRoot>(buildRoot)()}));
   }
 
   void setSurface(Size surface);
@@ -34,9 +36,7 @@ public:
   /// and returns a Scene whose revision is unchanged.
   Scene drawFrame();
 
-  bool needsFrame() const noexcept {
-    return buildOwner_.needsBuild() || pipeline_.needsFrame();
-  }
+  bool needsFrame() const noexcept { return buildOwner_.needsBuild() || pipeline_.needsFrame(); }
 
   BuildOwner& buildOwner() noexcept { return buildOwner_; }
   PipelineOwner& pipeline() noexcept { return pipeline_; }
@@ -46,9 +46,12 @@ public:
 private:
   void mountRoot(WidgetRef root);
 
+  // Declaration order is teardown order: the element tree unmounts before the
+  // pipeline detaches, which is before the build owner drops the render tree.
   BuildOwner buildOwner_;
   PipelineOwner pipeline_;
   ElementPtr rootElement_;
+  RenderView* view_ = nullptr;
   Size surface_;
 };
 

@@ -504,3 +504,95 @@ TEST(render_tree_dump_is_stable_and_readable) {
            "      ConstrainedBox size=40x20 at=(0,32) extra=w[40..40] h[20..20]\n"
            "      ConstrainedBox size=30x10 at=(154,37) extra=w[30..30] h[10..10]\n");
 }
+
+// ---------------------------------------------------------------------------
+// Hit-test geometry
+//
+// Routing, the arena, and recognizers are M5. What the render tree owns is
+// resolving which boxes are under a point and in what space, which is what
+// these cover.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+/// A leaf that accepts hits, so a path has something to terminate at.
+class RenderOpaque final : public RenderBox {
+public:
+  explicit RenderOpaque(Size preferred) : preferred_(preferred) {}
+  const char* typeName() const override { return "Opaque"; }
+  bool hitTestSelf(Offset) const override { return true; }
+  void performLayout() override { setSize(constraints_.constrain(preferred_)); }
+
+private:
+  Size preferred_;
+};
+
+std::size_t hitCount(RenderBox& root, Offset at) {
+  HitTestResult result;
+  root.hitTest(result, at);
+  return result.path().size();
+}
+
+}  // namespace
+
+TEST(hit_test_misses_outside_the_box_and_on_the_exclusive_edges) {
+  auto box = make<RenderOpaque>(Size{20, 10});
+  box->layout(BoxConstraints::tight({20, 10}));
+
+  CHECK_EQ(hitCount(*box, {0, 0}), std::size_t{1});
+  CHECK_EQ(hitCount(*box, {19.9f, 9.9f}), std::size_t{1});
+  CHECK_EQ(hitCount(*box, {20, 5}), std::size_t{0});
+  CHECK_EQ(hitCount(*box, {5, 10}), std::size_t{0});
+  CHECK_EQ(hitCount(*box, {-1, 5}), std::size_t{0});
+}
+
+TEST(hit_test_reports_the_path_deepest_first_and_in_local_space) {
+  auto padding = make<RenderPadding>(EdgeInsets::only(8, 4, 0, 0));
+  padding->setChild(make<RenderOpaque>(Size{20, 10}));
+  padding->layout(BoxConstraints::loose({100, 100}));
+
+  HitTestResult result;
+  CHECK(padding->hitTest(result, {10, 6}));
+  CHECK_EQ(result.path().size(), std::size_t{2});
+  CHECK_EQ(std::string(result.path()[0].target->typeName()), std::string("Opaque"));
+  CHECK_EQ(std::string(result.path()[1].target->typeName()), std::string("Padding"));
+  // The shift is undone on the way down, so the leaf sees its own origin.
+  CHECK_EQ(result.path()[0].localPosition, (Offset{2, 2}));
+  CHECK_EQ(result.path()[1].localPosition, (Offset{10, 6}));
+}
+
+TEST(hit_test_inverts_a_transform_on_the_way_down) {
+  auto transform = make<RenderTransform>(Transform2D::scaling(2, 2), Alignment::topLeft());
+  transform->setChild(make<RenderOpaque>(Size{20, 10}));
+  transform->layout(BoxConstraints::tight({20, 10}));
+
+  HitTestResult result;
+  // Painted at 2x about the top-left, so (10,6) on screen is (5,3) to the child.
+  CHECK(transform->hitTest(result, {10, 6}));
+  CHECK_EQ(result.path()[0].localPosition, (Offset{5, 3}));
+
+  // A degenerate transform is not invertible, so the walk refuses to recurse
+  // rather than guessing.
+  auto collapsed = make<RenderTransform>(Transform2D::scaling(0, 0), Alignment::topLeft());
+  collapsed->setChild(make<RenderOpaque>(Size{20, 10}));
+  collapsed->layout(BoxConstraints::tight({20, 10}));
+  CHECK_EQ(hitCount(*collapsed, {5, 5}), std::size_t{0});
+}
+
+TEST(hit_test_resolves_overlapping_children_topmost_first) {
+  auto stack = make<RenderStack>(Alignment::topLeft(), StackFit::Expand);
+  stack->addChild(make<RenderOpaque>(Size{50, 50}));
+  stack->addChild(make<RenderOpaque>(Size{50, 50}),
+                  {.positioned = true, .left = 10.0f, .top = 0.0f});
+  layoutRoot(*stack, BoxConstraints::tight({50, 50}));
+
+  // Later children paint on top, so the second one wins where they overlap.
+  HitTestResult overlap;
+  CHECK(stack->hitTest(overlap, {20, 20}));
+  CHECK_EQ(overlap.path()[0].localPosition, (Offset{10, 20}));
+
+  // Left of the positioned child, only the first one is there.
+  HitTestResult single;
+  CHECK(stack->hitTest(single, {5, 20}));
+  CHECK_EQ(single.path()[0].localPosition, (Offset{5, 20}));
+}

@@ -11,18 +11,17 @@ WidgetBinding::~WidgetBinding() {
   pipeline_.setRootNode(nullptr);
 }
 
-RenderView* WidgetBinding::renderView() const noexcept {
-  return static_cast<RenderView*>(buildOwner_.rootRenderObject());
-}
+RenderView* WidgetBinding::renderView() const noexcept { return view_; }
 
 void WidgetBinding::mountRoot(WidgetRef root) {
   FLTR_EXPECTS(rootElement_ == nullptr, "the binding already has a root");
+  FLTR_EXPECTS(root.type() == widgetTypeOf<View>(), "the binding's root must be a View");
   rootElement_ = root->createElement();
   rootElement_->mount(nullptr, buildOwner_);
-  RenderView* view = renderView();
-  FLTR_ENSURES(view != nullptr, "the root widget must produce a RenderView");
-  view->setSurface(surface_);
-  pipeline_.setRootNode(view);
+  view_ = static_cast<RenderView*>(buildOwner_.rootRenderObject());
+  FLTR_ENSURES(view_ != nullptr, "mounting the root View produced no render object");
+  view_->setSurface(surface_);
+  pipeline_.setRootNode(view_);
 }
 
 void WidgetBinding::setSurface(Size surface) {
@@ -32,6 +31,7 @@ void WidgetBinding::setSurface(Size surface) {
 }
 
 Scene WidgetBinding::drawFrame() {
+  buildOwner_.resetBuildCount();
   buildOwner_.flushBuild();
   return pipeline_.drawFrame();
 }
