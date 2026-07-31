@@ -65,6 +65,8 @@ int main(int argc, char** argv) {
   const char* screenshot = nullptr;
   int frameLimit = 0;
   int startPage = 0;
+  int width = 1280;
+  int height = 800;
   bool overlayOn = false;
   for (int i = 1; i < argc; ++i) {
     if (std::strcmp(argv[i], "--font") == 0 && i + 1 < argc) {
@@ -78,13 +80,23 @@ int main(int argc, char** argv) {
       startPage = std::strcmp(name, "settings") == 0   ? static_cast<int>(fltrdemo::Page::Settings)
                   : std::strcmp(name, "servers") == 0  ? static_cast<int>(fltrdemo::Page::Servers)
                                                        : std::atoi(name);
+    } else if (std::strcmp(argv[i], "--size") == 0 && i + 1 < argc) {
+      // For checking that the layout is a layout and not a set of coordinates:
+      // every dimension in the demo comes from the theme, and the theme comes
+      // from this.
+      const char* size = argv[++i];
+      const char* x = std::strchr(size, 'x');
+      if (x != nullptr) {
+        width = std::atoi(size);
+        height = std::atoi(x + 1);
+      }
     } else if (std::strcmp(argv[i], "--overlay") == 0) {
       overlayOn = true;
     }
   }
 
   SetConfigFlags(FLAG_WINDOW_RESIZABLE | FLAG_MSAA_4X_HINT);
-  InitWindow(1280, 800, "fltr - Counter-Strike menu demo");
+  InitWindow(width, height, "fltr - Counter-Strike menu demo");
   SetExitKey(KEY_NULL);
 
   bool ownsFont = false;

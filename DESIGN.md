@@ -1413,3 +1413,87 @@ built eagerly, every rebuild of the list's owner. Slivers, viewports that build
 only what is visible, and scroll physics remain out of scope, and the demo's
 browser is deliberately sized so that the cost of *not* having them is visible in
 its debug overlay rather than hidden by it.
+
+### The overlay problem, and why it stayed outside the library
+
+A dropdown has to paint over the panel that contains it. Nothing in this
+framework lets a child paint outside its parent, and that is not an oversight:
+it is what makes a repaint boundary a boundary and a clip a clip.
+
+Flutter's answer is an `Overlay` — a stack near the root that entries are
+inserted into from anywhere, plus `GlobalKey`-style machinery to find where the
+anchoring widget ended up. Both halves are deferred here, so the demo built the
+small version instead: an `Anchor` render object publishes its box to a link once
+it has been laid out, and a `MenuHost` puts the menu in a `Stack` above the page
+at that rectangle, over an opaque barrier that turns an outside click into a
+dismiss.
+
+That is about ninety lines, and it is enough. What it cannot do is what the
+library would have to solve properly: an entry inserted from a subtree that is
+not an ancestor of the host, or an anchor under a transform (the resolution
+accumulates offsets, not matrices, and asserts rather than pretending). The
+conclusion for the library is that an overlay is worth adding when a second
+consumer needs one, and that it should be built on a real ancestor lookup rather
+than on the demo's single shared controller.
+
+### A hand-written driver has to read TickerMode
+
+The demo's server rows fade in when they arrive, driven by an `AnimationDriver`
+the row's `State` owns rather than by an implicit widget. Leaving a page left two
+hundred of those drivers subscribed to the frame clock: a hidden page was still
+asking for frames, and the demo's own test for "a hidden page holds no active
+tickers" is what caught it.
+
+The fix is one line in the row's build:
+
+```cpp
+driver_.setMuted(!TickerMode::of(context));
+```
+
+which is exactly what `ImplicitlyAnimatedState::build` does. Reading the
+inherited value is simultaneously the mute and the dependency that rebuilds this
+`State` when the page is hidden, so there is nothing else to wire up.
+
+It is worth being honest about what this is: an invariant the framework relies on
+its consumers to maintain, enforced by nothing. `TickerRegistry` cannot notice a
+driver that never asked about the mode. The alternatives are to make `Ticker`
+resolve `TickerMode` itself (which would require it to know its element, coupling
+the animation layer to the widget layer) or to leave it as a documented contract
+with a test that catches it. The second is the choice here, and the demo's test
+is that test.
+
+### What the demo did not need
+
+Worth recording, because it is evidence about the scope decisions rather than
+about the demo: three screens, a scrolling list of a couple of hundred rows,
+implicit animations everywhere, a sortable keyed list and a resizable layout
+needed no additions to the framework beyond the one constructor above. The
+things the demo built for itself — a scroll viewport, a drag router, an overlay
+— are all things the framework deliberately does not have yet, and each one was
+about a hundred lines written against the public interfaces rather than a fight
+with them.
+
+### What is verified
+
+Nine tests drive the real pages through the headless harness, with an explicit
+per-frame delta and no window:
+
+- An idle frame on each of the three screens does zero builds, zero layouts and
+  zero paints, and leaves `Scene::revision` unchanged.
+- Hovering a button repaints exactly one boundary and lays out nothing, and the
+  frames that follow rebuild nothing at all.
+- Interrupting a hover mid-flight is continuous: the reversal is re-based on the
+  colour on screen rather than jumping to either end.
+- A hidden page holds no active tickers — including the server browser, whose
+  two hundred row fades are all mid-flight when it is left.
+- Re-sorting the list permutes elements rather than rebuilding them, and a
+  refresh keeps every row that came back while discarding the ones that left.
+- A dropdown opens over the page and an outside click dismisses it.
+- A brightness change reaches a scrim at the root, stopping at three relayout
+  boundaries, from a panel that cannot see it.
+- No paragraph handle is outstanding once the tree is gone.
+
+Run on a screen as well: three pages at 1280x800, and the same server browser at
+640x480, 1600x420 and 520x900, warning-clean under the library's warning set on
+GCC 13.3. macOS and Windows are written for but unverified, which `demo/README.md`
+says out loud.
