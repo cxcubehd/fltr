@@ -70,11 +70,16 @@ private:
   Args args_;
 };
 
+/// DIVERGENCE from the paint-only animated properties: alignment is resolved
+/// during layout, so driving it from an animation lays out this subtree on every
+/// frame of it. It is correct, and it is the expensive one.
 class Align final : public Configure<Align, SingleChildRenderObjectWidget> {
 public:
   struct Args {
     Key key;
     Alignment alignment = Alignment::center();
+    /// Drives the alignment instead, from an animation or a pushed value.
+    ValueListenable<Alignment>* animation = nullptr;
     /// Negative means "fill the available space on this axis".
     float widthFactor = -1.0f;
     float heightFactor = -1.0f;
@@ -93,6 +98,7 @@ public:
   }
   void updateRenderObject(BuildContext&, RenderPositionedBox& render) const {
     render.setAlignment(args_.alignment);
+    render.setAnimation(args_.animation);
     render.setSizeFactors(args_.widthFactor, args_.heightFactor);
   }
 
@@ -159,6 +165,8 @@ public:
   struct Args {
     Key key;
     BoxDecoration decoration;
+    /// Drives the decoration instead. A frame of it repaints this object alone.
+    ValueListenable<BoxDecoration>* animation = nullptr;
     WidgetRef child;
   };
   using Render = RenderDecoratedBox;
@@ -173,6 +181,7 @@ public:
   }
   void updateRenderObject(BuildContext&, RenderDecoratedBox& render) const {
     render.setDecoration(args_.decoration);
+    render.setAnimation(args_.animation);
   }
 
 private:
@@ -184,6 +193,9 @@ public:
   struct Args {
     Key key;
     float opacity = 1.0f;
+    /// Drives the opacity instead. The render object observes it directly, so a
+    /// frame of animation is one repaint and no rebuild at all.
+    ValueListenable<float>* animation = nullptr;
     WidgetRef child;
   };
   using Render = RenderOpacity;
@@ -198,6 +210,7 @@ public:
   }
   void updateRenderObject(BuildContext&, RenderOpacity& render) const {
     render.setOpacity(args_.opacity);
+    render.setAnimation(args_.animation);
   }
 
 private:
@@ -209,6 +222,8 @@ public:
   struct Args {
     Key key;
     Transform2D transform = Transform2D::identity();
+    /// Drives the transform instead. A frame of it repaints this object alone.
+    ValueListenable<Transform2D>* animation = nullptr;
     Alignment origin = Alignment::center();
     WidgetRef child;
   };
@@ -224,6 +239,7 @@ public:
   }
   void updateRenderObject(BuildContext&, RenderTransform& render) const {
     render.setTransform(args_.transform);
+    render.setAnimation(args_.animation);
     render.setOrigin(args_.origin);
   }
 

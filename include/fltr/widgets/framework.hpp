@@ -23,6 +23,7 @@ class InheritedElementBase;
 class InheritedScope;
 class PointerBinding;
 class RenderObjectElement;
+class TickerRegistry;
 class Widget;
 
 using ElementPtr = std::unique_ptr<Element>;
@@ -169,6 +170,7 @@ public:
   BuildOwner& owner() const noexcept;
   TextService& textService() const noexcept;
   PointerBinding& pointerBinding() const noexcept;
+  TickerRegistry& tickers() const noexcept;
   bool mounted() const noexcept;
 
 private:
@@ -228,8 +230,9 @@ public:
   /// and nothing else. The scope is a snapshot rather than a path, so the lookup
   /// costs the same at any depth.
   ///
-  /// The subscription lasts until this element next rebuilds, which re-registers
-  /// whatever the new build actually read.
+  /// Only from a build, which is what re-registers the dependency: a read from
+  /// anywhere else would be dropped by the next rebuild and silently stop
+  /// updating.
   InheritedElementBase* dependOnInherited(WidgetType type);
 
   virtual void mount(Element* parent, BuildOwner& owner);
@@ -259,6 +262,11 @@ protected:
   /// will see. The default inherits the parent's scope unchanged.
   virtual void extendInheritedScope() {}
 
+  /// Runs once the element is linked and its ambient scope resolved, and still
+  /// before its first build -- so a State reaches the tree's services from
+  /// `initState` rather than having to wait for a build to acquire them.
+  virtual void didMount() {}
+
   RenderObjectElement* ancestorRenderObjectElement() const;
 
   ElementPtr updateChild(ElementPtr child, WidgetRef widget);
@@ -276,6 +284,7 @@ private:
   BuildOwner* owner_ = nullptr;
   int depth_ = 0;
   bool inDirtyList_ = false;
+  bool inBuild_ = false;
   /// One per ambient value this element's last build read. Intrusive, so
   /// dropping them all and re-registering costs no allocation.
   std::vector<Subscription> dependencies_;
@@ -420,11 +429,6 @@ public:
     state_->element_ = this;
   }
 
-  void mount(Element* parent, BuildOwner& owner) override {
-    state_->initState();
-    ComponentElement<W>::mount(parent, owner);
-  }
-
   void unmount() override {
     ComponentElement<W>::unmount();
     state_->dispose();
@@ -434,6 +438,8 @@ public:
   State<W>& state() const noexcept { return *state_; }
 
 protected:
+  void didMount() override { state_->initState(); }
+
   void adopt(const W& next) override {
     const W previous = this->config_;
     this->config_ = next;
@@ -726,8 +732,9 @@ protected:
 /// PipelineOwner does for layout and paint.
 class BuildOwner {
 public:
-  BuildOwner(TextService& textService, PointerBinding& pointerBinding) noexcept
-      : textService_(&textService), pointerBinding_(&pointerBinding) {}
+  BuildOwner(TextService& textService, PointerBinding& pointerBinding,
+             TickerRegistry& tickers) noexcept
+      : textService_(&textService), pointerBinding_(&pointerBinding), tickers_(&tickers) {}
   ~BuildOwner();
 
   BuildOwner(const BuildOwner&) = delete;
@@ -735,10 +742,11 @@ public:
 
   Arena& arena() noexcept { return arena_; }
 
-  /// The ambient services a widget builds against. Both are supplied by the
-  /// consumer and neither is owned here.
+  /// The ambient services a widget builds against. None is owned here: the text
+  /// service comes from the consumer, and the other two from the binding.
   TextService& textService() const noexcept { return *textService_; }
   PointerBinding& pointerBinding() const noexcept { return *pointerBinding_; }
+  TickerRegistry& tickers() const noexcept { return *tickers_; }
 
   bool needsBuild() const noexcept { return !dirty_.empty(); }
   std::size_t dirtyElementCount() const noexcept { return dirty_.size(); }
@@ -765,6 +773,7 @@ private:
   Arena arena_;
   TextService* textService_;
   PointerBinding* pointerBinding_;
+  TickerRegistry* tickers_;
   std::unique_ptr<RenderBox> rootRenderObject_;
   int buildCount_ = 0;
 };
@@ -775,6 +784,9 @@ inline TextService& BuildContext::textService() const noexcept {
 }
 inline PointerBinding& BuildContext::pointerBinding() const noexcept {
   return element_->owner()->pointerBinding();
+}
+inline TickerRegistry& BuildContext::tickers() const noexcept {
+  return element_->owner()->tickers();
 }
 inline bool BuildContext::mounted() const noexcept { return element_->mounted(); }
 

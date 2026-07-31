@@ -2,6 +2,7 @@
 
 #include <utility>
 
+#include "fltr/animation/ticker.hpp"
 #include "fltr/gestures/binding.hpp"
 #include "fltr/gestures/events.hpp"
 #include "fltr/render/object.hpp"
@@ -37,19 +38,21 @@ public:
   /// them. Unrelated to the frame: an event is delivered when it arrives.
   void dispatchPointer(const PointerEvent& event);
 
-  /// One frame. Builds what is dirty, then lays out and paints what that made
-  /// dirty. A frame with nothing dirty does no work in any of the three phases
-  /// and returns a Scene whose revision is unchanged.
-  Scene drawFrame();
+  /// One frame, given the time the consumer's loop measured since the last one.
+  /// Advances animations, then builds what is dirty, then lays out and paints
+  /// what that made dirty. A frame in which no time passed and nothing is dirty
+  /// does no work in any phase and returns a Scene whose revision is unchanged.
+  Scene drawFrame(float seconds = 0.0f);
 
   bool needsFrame() const noexcept {
     return buildOwner_.needsBuild() || pipeline_.needsFrame() ||
-           pointers_.mouseTracker().needsResolve();
+           pointers_.mouseTracker().needsResolve() || tickers_.hasActiveTickers();
   }
 
   BuildOwner& buildOwner() noexcept { return buildOwner_; }
   PipelineOwner& pipeline() noexcept { return pipeline_; }
   PointerBinding& pointers() noexcept { return pointers_; }
+  TickerRegistry& tickers() noexcept { return tickers_; }
   Element* rootElement() const noexcept { return rootElement_.get(); }
   RenderView* renderView() const noexcept;
 
@@ -58,9 +61,10 @@ private:
 
   // Declaration order is teardown order: the element tree unmounts before the
   // pipeline detaches, which is before the build owner drops the render tree --
-  // and a region being dropped withdraws from the pointer binding, so that
-  // outlives them all.
+  // and a region being dropped withdraws from the pointer binding, while a State
+  // being disposed releases its ticker, so those two outlive them all.
   PointerBinding pointers_;
+  TickerRegistry tickers_;
   BuildOwner buildOwner_;
   PipelineOwner pipeline_;
   ElementPtr rootElement_;

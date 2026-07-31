@@ -1046,9 +1046,13 @@ rule every widget field already follows — and equality-comparable, since an
 unchanged value must notify nobody. `updateShouldNotify` is that comparison; a
 `Theme` with a defaulted `operator==` gets it for nothing.
 
-Reading before the element is mounted — from `initState`, where the scope is not
-yet resolved — is a contract violation naming that, rather than the misleading
-"no provider above this widget".
+Reading from anywhere other than a build — from `initState`, from a callback —
+is a contract violation naming that, rather than the misleading "no provider
+above this widget". The reason is the clearing above: a dependency registered
+outside a build is dropped by the next one, so the read would keep working and
+silently stop updating. (M7 tightened this check from "the element is mounted",
+which stopped being the right question once `initState` began running on a
+mounted element.)
 
 ### What is verified
 
@@ -1075,3 +1079,282 @@ yet resolved — is a contract violation naming that, rather than the misleading
 
 Verified on GCC 13.3 and Clang 18.1, and under ASan + UBSan: 169 tests, 712
 checks. The library also compiles clean with `FLTR_ENABLE_CHECKS=OFF`.
+
+---
+
+## Milestone 7 — animation
+
+Animation is assumed to be running constantly and on many elements at once, so
+the layering exists to make a frame of it cost as little as a frame of nothing.
+
+```cpp
+driver.forward();                  // or reverse, retarget, repeat
+Scene scene = binding.drawFrame(dt);
+```
+
+### Time is a delta the consumer measured
+
+`drawFrame(seconds)` takes the elapsed time the game loop measured, and a frame
+in which no time passed does no ticking at all — which is why the 169 tests
+written before this milestone still call `frame()` and still do nothing.
+
+DIVERGENCE: Flutter's `Ticker` receives an absolute elapsed duration and carries
+a start offset, which it has to re-base whenever the ticker is muted and
+unmuted. **Ours receives a per-frame delta.** That makes muting exact rather
+than approximately right: a muted ticker is simply not subscribed, so it resumes
+where it stopped with no elapsed time to reconcile and no offset to keep. The
+cost is that a driver cannot answer "how long have you been running", which
+nothing here asks.
+
+### DIVERGENCE: the frame clock is a Listenable, not a list of tickers
+
+`TickerRegistry` holds the current frame's delta and a `Notifier`; a `Ticker` is
+a `Subscription` on it plus three flags — started, muted, attached — that one
+`sync()` turns into subscribed or not.
+
+Flutter's `SchedulerBinding` keeps a map of ticker callbacks and re-entrancy is
+handled per call site. Reusing the observer core from M1 gets three things for
+nothing: starting or stopping a ticker from inside a tick is already safe (the
+cursor chain), a stopped ticker is *provably* holding nothing, and the
+"an animation in a hidden panel costs nothing" requirement becomes
+`activeTickerCount()` — a number a test reads rather than a claim a comment
+makes.
+
+### The driver: duration is the whole range
+
+`AnimationDriver` runs 0..1 and `duration` is the time for the *whole* range, so
+a shorter journey takes proportionally less time. That single decision is what
+makes interruption behave: reversing from 0.3 takes 30% of the duration rather
+than all of it, so the pointer entering and leaving repeatedly neither drifts
+nor slows down. `animation_repeated_interruption_accumulates_no_error` runs 40
+interrupted round trips at irregular frame times and then asserts that one clean
+run still lands exactly on 1.0.
+
+Value and status are separate channels — `Listenable` for the value,
+`statusChanges()` for the status — because a status listener wants the two
+transitions, not the two hundred frames between them.
+
+`Dismissed` and `Completed` mean settled at the bottom and the top of the range.
+Settling in between reports the end it was travelling toward, which is Flutter's
+behaviour and the only wart in the enum.
+
+### Curves are function pointers, and reversal is where they bite
+
+A `Curve` is one function pointer, so it copies into a widget configuration for
+free and stays trivially destructible like everything else in the arena. Seven
+of them, analytic: linear, quadratic and cubic ease-in/out/in-out. A
+cubic-bezier curve needs per-instance state and is not here, because nothing has
+asked for one.
+
+A driver has a forward curve and an optional reverse curve. **Leaving the
+reverse curve unset is the continuous choice**: with one curve in both
+directions, reversing mid-flight is exactly continuous, because the value is the
+same function of the same progress. A distinct reverse curve changes the value
+at the instant of the reversal — a discontinuity Flutter has too.
+`animation_a_reverse_curve_is_the_one_case_reversing_is_not_continuous` pins
+that down rather than leaving it to be discovered.
+
+### Interpolation is a concept, not a hierarchy
+
+```cpp
+template <class T>
+concept Interpolatable = requires(const T& a, const T& b, float t) {
+  { lerp(a, b, t) } -> std::convertible_to<T>;
+};
+```
+
+M1 already defined `lerp` next to every geometry and paint type, so every type
+the widget layer uses satisfies this without adding anything, and a consumer's
+own type joins by defining one beside itself. Flutter's `Tween<T>` is a class to
+subclass per type; ours is a `{from, to}` aggregate with an `at(t)`.
+
+Composing interpolation with easing is `tween.at(driver.value())` — the driver
+applies the curve, so there is no `CurvedAnimation` between them.
+
+The one sharp edge: a scalar has no associated namespace, so `lerp(float, ...)`
+has to be visible where the concept is *defined* rather than where it is used.
+`static_assert(Interpolatable<float>)` sits next to the concept so that a
+missing include fails there instead of somewhere confusing.
+
+### One observable interface, two sources, two sinks
+
+M6 asked whether animated values and reactivity should share an abstraction.
+They share `ValueListenable<T>` — value plus notification — and nothing more:
+
+|  | changes because | consumed by rebuilding | consumed by repainting |
+|---|---|---|---|
+| `Observable<T>` | the game pushed | `Watch<T>` | `observeForPaint` |
+| `AnimatedValue<T>` | time passed | `Watch<T>` | `observeForPaint` |
+
+`Watch<T>` needed one word changed — `Observable<T>*` became
+`ValueListenable<T>*` — to become the general animation path as well as the
+reactivity one. The rebuild-versus-repaint distinction stays where M1 put it, in
+the subscriber, and is now measured on both rows:
+`animation_advancing_a_paint_only_animation_rebuilds_nothing_and_relayouts_nothing`
+against `animation_the_same_value_drives_a_rebuild_through_watch`, on the same
+`AnimatedValue`.
+
+A render object's animated property is an `Animatable<T>`: a constant and an
+optional source, where a source shadows the constant. That is what lets one
+`Opacity` widget cover `.opacity = 0.5f` and `.animation = &fade` instead of
+needing two, and setting the shadowed constant invalidates nothing.
+
+### Where a frame ticks
+
+`drawFrame` is: tick, settle hover, build, layout, paint.
+
+Ticking has to precede the build, because the general consumption path turns a
+tick into `setState`; ticking after `flushBuild` would show every `Watch` over an
+animation one frame stale. The visible consequence is that a state change and
+the animation it starts land in the frame they happened, showing the value the
+animation starts *from*, and advance from the next frame — the elapsed time this
+frame reports belongs to the interval before the animation existed.
+
+`needsFrame()` includes "any ticker is active", so a consumer that only draws
+when the framework asks still animates.
+
+### What is verified
+
+- A driver arrives exactly on its target however coarse the last step, reports
+  that it settled, and then does nothing however much more time passes.
+- Frame durations are irregular and the total is what matters.
+- Value and status are notified independently, and neither fires once settled.
+- Reversing mid-flight does not move the value at the instant of the reversal,
+  and takes time proportional to how far it has to come back.
+- Forty interrupted round trips stay in range and leave no residue.
+- Retargeting to an interior value proceeds from the current one.
+- A repeating driver wraps; a ping-pong one reflects, and its status flips.
+- A stopped, settled or muted driver holds no subscription at all, and a muted
+  one resumes exactly where it stopped.
+- A driver started before it has a clock begins when it gets one.
+- Every curve is pinned at both ends, stays in range, and never doubles back.
+- Interpolation is checked against hand-computed midpoints for the scalar,
+  colour, offset, size, rect, insets, alignment, radius, transform and
+  decoration types.
+- A tick that does not move the interpolated value notifies nobody — thirty
+  frames of a slow colour animation cause four rebuilds, not thirty.
+- The render-attached path: zero builds, zero layouts, one boundary repainted.
+- The rebuild path: the same value through `Watch`, which does relayout,
+  because that is what it is for.
+- An animation in an unmounted subtree consumes no time and holds no ticker, and
+  a State releases its ticker on unmount rather than on destruction.
+- A frame of animation allocates nothing.
+
+---
+
+## Milestone 8 — implicit animations and the render-attached widgets
+
+This is the layer most UI code is written against, so it is the one whose
+ergonomics were designed first:
+
+```cpp
+AnimatedOpacity::make({
+  .opacity = hovered ? 1.0f : 0.35f,
+  .animation = {.duration = 0.12f, .curve = Curves::easeOut},
+  .child = badge(),
+})
+```
+
+Nothing else. No controller to own, no ticker to dispose, no tween to declare.
+
+### DIVERGENCE: no `forEachTween`; the animated value goes down the tree
+
+Flutter's `ImplicitlyAnimatedWidgetState` visits a set of tweens on every
+configuration change, rebuilding the subtree on every tick of the resulting
+animation because what it passes down is a *sample* of the value.
+
+**Chosen:** the State passes down the `AnimatedValue<T>` itself, and the render
+object observes it. So the configuration change is the last build; every frame
+after it invalidates exactly one render object.
+`implicit_ticking_rebuilds_nothing_and_relayouts_nothing` asserts zero builds,
+zero layouts and one repainted boundary on every one of eight frames.
+
+That collapses the machinery too. `ImplicitlyAnimatedState<W>` is one template of
+about twenty lines, and a widget joins by naming its value type, its target, its
+timing, and a static `compose` that assembles the widget it wraps:
+
+```cpp
+static WidgetRef compose(const AnimatedOpacity& self, ValueListenable<float>& value) {
+  return Opacity::make({.animation = &value, .child = self.args_.child});
+}
+```
+
+### Re-basing, not retargeting
+
+On a configuration change the interval is rebuilt as `{value on screen, new
+target}` and the driver restarts from zero. The *value* therefore proceeds from
+where it was — which is what the brief asks for — while the driver's normalized
+progress does restart, which is what makes the curve apply to the whole of the
+new journey rather than to a fragment of an old one.
+
+Two consequences worth stating. An interrupted animation takes the full duration
+to cover the remaining distance, so it is slower than the velocity-preserving
+`animateTo` the driver offers for explicit use; that is Flutter's behaviour and
+it reads better than a fast twitch. And an interval from a value to itself is
+not an animation:
+`implicit_a_target_that_changes_and_changes_back_leaves_nothing_running` changes
+a target and changes it back before a frame passes, and no ticker survives it.
+
+### Four properties, and the one that is not free
+
+`AnimatedOpacity`, `AnimatedTransform` and `AnimatedDecoration` observe through
+`observeForPaint`. `AnimatedAlign` observes through `observeForLayout` — the
+layout-invalidating counterpart M1 deliberately left absent until something
+animated a layout property. Alignment resolves during layout in this framework,
+so every frame of it lays out the subtree below.
+
+The brief asks that the call site make the cheap and expensive obvious. It is
+one class comment and one structural difference — the expensive one is the only
+widget whose render object calls `observeForLayout` — and it is measured:
+`implicit_an_animated_alignment_lays_out_every_frame_and_says_so` asserts
+`layouts > 0` and hand-checks where the child lands, next to three tests
+asserting `layouts == 0` for the others.
+
+### Muting a hidden subtree
+
+`TickerMode` is an inherited widget, so it costs an O(1) scope lookup and the
+implicit state reads it in `build` — where a change wakes exactly the readers,
+by M6's machinery. A tree with no `TickerMode` in it registers no dependency and
+pays nothing.
+
+Muting detaches the ticker subscription, so a hidden panel keeps its state, its
+subscriptions and its position but does not appear in `activeTickerCount()`, does
+not make `needsFrame()` true, and resumes at the value it was frozen at.
+
+### What `initState` needed, and what that cost
+
+A State creates its driver in `initState`, which needs the tree's services — and
+`initState` ran *before* the element was linked, so it had no owner and no way to
+reach them.
+
+`Element::mount` now links the element, resolves its ambient scope, calls
+`didMount`, and then builds; `StatefulElement` runs `initState` from that hook.
+This is Flutter's order, and it makes `State::mounted()` true in `initState`,
+where it was previously false.
+
+The one thing that ordering paid for: `dependOnInherited` used to be guarded by
+"the element is mounted", which after the change no longer excluded `initState`.
+It is now guarded by "an element is building", which is both the real reason and
+a stronger check — it catches a read from a callback too. The guard is a flag set
+by `Element::rebuild` for the length of `performRebuild`, released however that
+build is left, the way `PipelineOwner::PhaseScope` already does for the pipeline.
+
+### What is verified
+
+- A configuration change animates to the new value, and the first configuration
+  animates from nothing.
+- An interruption continues from the value on screen, and thirty interruptions
+  in a row still settle exactly on the target.
+- Ticking rebuilds nothing and relayouts nothing, for opacity, transform and
+  decoration; animating alignment does relayout, and moves the child where hand
+  computation says.
+- A hidden subtree holds no ticker, asks for no frames, and resumes where it
+  stopped.
+- A State unmounted but not yet destroyed has already released its ticker —
+  which is the window a subtree teardown actually spends, since every element in
+  it unmounts before any of them is destroyed.
+- A steady frame of implicit animation allocates nothing.
+
+Verified on GCC 13.3 and Clang 18.1, and under ASan + UBSan: 207 tests, 1245
+checks. The library and the animation headers also compile clean with
+`FLTR_ENABLE_CHECKS=OFF` on both compilers.

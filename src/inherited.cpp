@@ -48,9 +48,9 @@ InheritedElementBase* InheritedScope::find(WidgetType type) const noexcept {
 }
 
 InheritedElementBase* Element::dependOnInherited(WidgetType type) {
-  FLTR_EXPECTS(mounted(),
-               "an ambient value may only be read once the element is mounted, so not from "
-               "initState");
+  FLTR_EXPECTS(inBuild_,
+               "an ambient value may only be read from a build, which is what re-registers the "
+               "dependency -- a read from initState or a callback would stop updating");
   InheritedElementBase* node = inheritedScope_ ? inheritedScope_->find(type) : nullptr;
   if (node == nullptr) return nullptr;
 

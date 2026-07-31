@@ -117,11 +117,14 @@ protected:
   /// of the concrete render object, so the subscription's lifetime is exactly
   /// the render object's with no shared ownership.
   void observeForPaint(Subscription& slot, Listenable* source) {
-    slot.detach();
-    if (source) {
-      source->subscribe(
-          slot, [](void* p) { static_cast<RenderObject*>(p)->markNeedsPaint(); }, this);
-    }
+    observe(slot, source, [](void* p) { static_cast<RenderObject*>(p)->markNeedsPaint(); });
+  }
+
+  /// The same, for a property that genuinely moves boxes. Animating one is
+  /// possible and correctly invalidated -- and visibly the expensive path, since
+  /// every frame of it runs layout for this object's subtree.
+  void observeForLayout(Subscription& slot, Listenable* source) {
+    observe(slot, source, [](void* p) { static_cast<RenderObject*>(p)->markNeedsLayout(); });
   }
 
   std::uint32_t layoutCount_ = 0;
@@ -136,6 +139,11 @@ protected:
 private:
   friend class PipelineOwner;
   friend class PaintingContext;
+
+  void observe(Subscription& slot, Listenable* source, Subscription::Fn invalidate) {
+    slot.detach();
+    if (source) source->subscribe(slot, invalidate, this);
+  }
 
   void redepthChild(RenderObject* child);
   void resetRelayoutBoundarySubtree();

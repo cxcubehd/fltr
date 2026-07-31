@@ -124,6 +124,39 @@ WidgetRef ThemedState::build(BuildContext&) {
   return Ambient<Theme>::make({.value = theme_, .child = widget().child()});
 }
 
+class Eager;
+
+/// Reads the ambient theme from initState, where the dependency it registers
+/// would be dropped by the very first build and silently stop updating.
+class EagerState final : public State<Eager> {
+public:
+  void initState() override;
+  WidgetRef build(BuildContext&) override { return SizedBox::make({.size = {5, 5}}); }
+};
+
+class Eager final : public Configure<Eager, StatefulWidget> {
+public:
+  struct Args {
+    Key key;
+    Reads* into = nullptr;
+  };
+
+  explicit Eager(const Args& args) : Configure(args.key), args_(args) {}
+
+  const char* name() const noexcept override { return "Eager"; }
+  Reads& reads() const noexcept { return *args_.into; }
+
+  std::unique_ptr<State<Eager>> createState() const { return std::make_unique<EagerState>(); }
+
+private:
+  Args args_;
+};
+
+void EagerState::initState() {
+  BuildContext context = this->context();
+  widget().reads().theme = Ambient<Theme>::of(context);
+}
+
 class Closing;
 
 /// Reports its own closing by pushing a value, the way a panel telling the game
@@ -601,6 +634,14 @@ TEST(reactivity_reading_an_ambient_that_is_not_there_is_trapped) {
   Harness h;
   Reads reader;
   CHECK_THROWS(h.attach([&] { return ThemeReader::make({.into = &reader}); }));
+}
+
+TEST(reactivity_reading_an_ambient_outside_a_build_is_trapped) {
+  Harness h;
+  Reads reader;
+  CHECK_THROWS(h.attach([&] {
+    return Ambient<Theme>::make({.value = Theme{}, .child = Eager::make({.into = &reader})});
+  }));
 }
 
 TEST(reactivity_an_ambient_scope_is_a_snapshot_not_a_chain) {

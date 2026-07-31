@@ -160,6 +160,14 @@ inline void Subscription::adopt(Subscription&& o) noexcept {
   o.ctx_ = nullptr;
 }
 
+/// A notification channel an object can own and hand out, so one object can have
+/// more than one: an animation notifies its value every tick and its status only
+/// at the transitions, and a listener picks the channel it cares about.
+class Notifier final : public Listenable {
+public:
+  using Listenable::notifyListeners;
+};
+
 /// Subscribe `obj->*M` to `l`. Keeps call sites free of lambda plumbing.
 template <class T, void (T::*M)()>
 inline void subscribeMember(Listenable& l, Subscription& s, T* obj) {
