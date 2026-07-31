@@ -50,6 +50,7 @@ add_library(fltr_demo_ui STATIC
   ui/scroll.cpp
   ui/drag.cpp
   ui/button.cpp
+  ui/controls.cpp
   ui/panel.cpp
   app/servers.cpp
   app/page_title.cpp
