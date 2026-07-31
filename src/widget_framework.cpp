@@ -67,6 +67,27 @@ WidgetList::WidgetList(std::initializer_list<WidgetRef> widgets) {
   generation_ = arena->generation();
 }
 
+WidgetList WidgetList::generate(std::size_t count, FunctionRef<WidgetRef(std::size_t)> build) {
+  Arena* arena = currentBuildArena();
+  FLTR_EXPECTS(arena != nullptr, "widget lists may only be created during a build scope");
+
+  // Sized up front and never grown, which is what lets the builder allocate
+  // from the same arena: everything it creates lands after this array.
+  WidgetRef* items =
+      static_cast<WidgetRef*>(arena->allocate(sizeof(WidgetRef) * count, alignof(WidgetRef)));
+  std::size_t kept = 0;
+  for (std::size_t i = 0; i < count; ++i) {
+    const WidgetRef widget = build(i);
+    if (widget) items[kept++] = widget;
+  }
+
+  WidgetList list;
+  list.items_ = items;
+  list.size_ = kept;
+  list.generation_ = arena->generation();
+  return list;
+}
+
 // ---------------------------------------------------------------------------
 // Element
 // ---------------------------------------------------------------------------

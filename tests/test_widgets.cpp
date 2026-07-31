@@ -526,6 +526,75 @@ TEST(widgets_a_null_entry_in_a_children_list_is_dropped) {
   CHECK_EQ(a.inits, 1);
 }
 
+TEST(widgets_a_generated_children_list_takes_its_length_from_data) {
+  Harness h;
+  std::vector<Life> lives(5);
+  std::size_t count = lives.size();
+
+  ScriptedRoot root(h, [&] {
+    return Column::make({
+        .children = WidgetList::generate(count,
+                                         [&](std::size_t i) {
+                                           // Odd entries are null, to show that a generated
+                                           // list drops them exactly as a braced one does.
+                                           if (i % 2 != 0) return WidgetRef{};
+                                           return Tracked::make({.key = Key::of(static_cast<int>(i)),
+                                                                 .life = &lives[i]});
+                                         }),
+    });
+  });
+  h.frame();
+
+  CHECK_EQ(flexIn(h.view()).childCount(), std::size_t{3});
+
+  count = 3;
+  root.rebuild();
+  h.frame();
+
+  CHECK_EQ(flexIn(h.view()).childCount(), std::size_t{2});
+  // The entries that left were disposed; the ones that stayed kept their State.
+  CHECK_EQ(lives[4].disposes, 1);
+  CHECK_EQ(lives[0].disposes, 0);
+  CHECK_EQ(lives[0].inits, 1);
+}
+
+TEST(widgets_a_generated_list_reconciles_a_permutation_by_key) {
+  Harness h;
+  std::vector<Life> lives(4);
+  std::vector<int> order{0, 1, 2, 3};
+
+  ScriptedRoot root(h, [&] {
+    return Column::make({
+        .children = WidgetList::generate(
+            order.size(),
+            [&](std::size_t i) {
+              const int id = order[i];
+              return Tracked::make({.key = Key::of(id),
+                                    .life = &lives[static_cast<std::size_t>(id)],
+                                    .width = 10.0f + static_cast<float>(id)});
+            }),
+    });
+  });
+  h.frame();
+
+  std::vector<int> serials;
+  for (const Life& life : lives) serials.push_back(life.builtBy);
+
+  // A sort, expressed the only way a data-driven list can express one: the same
+  // keys in a different order.
+  order = {3, 0, 2, 1};
+  root.rebuild();
+  h.frame();
+
+  for (std::size_t i = 0; i < lives.size(); ++i) {
+    CHECK_EQ(lives[i].builtBy, serials[i]);
+    CHECK_EQ(lives[i].inits, 1);
+    CHECK_EQ(lives[i].disposes, 0);
+  }
+  CHECK_EQ(childColors(flexIn(h.view())).size(), std::size_t{4});
+  CHECK_EQ(flexIn(h.view()).childAt(0).size().width, 13.0f);
+}
+
 TEST(widgets_a_single_child_slot_accepts_null) {
   Harness h;
   Life life;

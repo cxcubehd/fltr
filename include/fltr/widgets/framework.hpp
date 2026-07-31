@@ -112,6 +112,19 @@ public:
   WidgetList() = default;
   WidgetList(std::initializer_list<WidgetRef> widgets);
 
+  /// A list whose length comes from data rather than from the source text.
+  ///
+  /// `build` is called once per index, in order, before this returns; the refs
+  /// it returns are stored exactly as a braced list's are, and a null one is
+  /// dropped the same way. A named factory rather than a second constructor,
+  /// because `.children = {...}` is the shape every call site has, and an
+  /// overload that also matched two arguments in braces would make which one
+  /// ran a matter of what `WidgetRef` happens to be constructible from.
+  ///
+  /// Every child is built here and now: this is not a lazy or windowed list, and
+  /// `count` elements means `count` elements in the tree.
+  static WidgetList generate(std::size_t count, FunctionRef<WidgetRef(std::size_t)> build);
+
   std::size_t size() const noexcept { return size_; }
   bool empty() const noexcept { return size_ == 0; }
   bool stale() const noexcept { return size_ != 0 && isStaleGeneration(generation_); }

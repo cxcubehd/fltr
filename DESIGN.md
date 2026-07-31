@@ -1358,3 +1358,58 @@ build is left, the way `PipelineOwner::PhaseScope` already does for the pipeline
 Verified on GCC 13.3 and Clang 18.1, and under ASan + UBSan: 207 tests, 1245
 checks. The library and the animation headers also compile clean with
 `FLTR_ENABLE_CHECKS=OFF` on both compilers.
+
+---
+
+## The demo, and what it asked of the library
+
+The interactive demo (`demo/`, built with `-DFLTR_BUILD_DEMO=ON`) is the first
+consumer of this framework that was not written by the framework's own tests. It
+exists to be evidence — that layout, reactivity, animation and hit-testing hold
+up on a real screen, and that an idle frame costs nothing — and to be a worked
+example of how UI is authored here. What it needed and did not find is recorded
+below, because a library's gaps are most visible from outside it.
+
+### A child list whose length comes from data
+
+`WidgetList` had exactly one authoring entry point, `std::initializer_list`,
+which fixes the number of children at the call site. That is right for the shape
+almost every widget has, and wrong for the one the demo's server browser is: a
+few hundred rows that come from a vector, get re-sorted, and must keep their
+per-row `State` across the sort.
+
+The workaround — chunking rows into nested fixed-size `Column`s — does not work,
+and the reason is worth stating because it is a real constraint rather than an
+inconvenience: keys reconcile only within one parent's child list, so a sort that
+moves a row from one chunk to another destroys its element and its `State`. That
+is the correct behaviour (cross-parent reparenting is what global keys are for,
+and those are deferred), but it means a data-driven list has to be one list.
+
+The gap was in the authoring surface only. `WidgetList`'s representation is
+already `{const WidgetRef* items_; std::size_t size_; std::uint32_t generation_}`
+filled from a runtime-sized arena allocation, `ChildList::update` already
+reconciles arbitrary lengths by key, and `FunctionRef` already exists. So the
+change is one static factory:
+
+```cpp
+static WidgetList generate(std::size_t count, FunctionRef<WidgetRef(std::size_t)> build);
+```
+
+It allocates the array up front, calls `build` once per index, drops null refs
+exactly as the braced form does, and stamps the same arena generation. No
+invariant, ownership rule or reconciliation behaviour changes; `stale()` still
+means what it meant.
+
+Two deliberate choices inside that one line. It is a named factory rather than a
+second constructor: `.children = {...}` is the shape every call site has, and an
+overload that also matched two braced arguments would make which one runs depend
+on what `WidgetRef` happens to be constructible from — a bad thing to have to
+reason about at a call site. And the builder runs *now*, inside the same arena
+scope, which is what allows the array to be sized once and never grown; every
+widget the builder creates lands after it.
+
+What this is not is lazy building. `count` children means `count` elements,
+built eagerly, every rebuild of the list's owner. Slivers, viewports that build
+only what is visible, and scroll physics remain out of scope, and the demo's
+browser is deliberately sized so that the cost of *not* having them is visible in
+its debug overlay rather than hidden by it.
