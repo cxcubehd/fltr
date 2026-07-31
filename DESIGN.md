@@ -695,3 +695,226 @@ Every widget still repeats a constructor, `name()`, a `child()` accessor and an
 way around it — a macro, namespace-scope `XArgs` types, friendship into the
 element templates — costs more legibility than the four lines it saves, so the
 repetition stays until reflection makes it unnecessary.
+
+---
+
+## Milestone 5 — pointer routing, the gesture arena, and hover
+
+M2 left the render tree able to answer *which boxes lie under a point, and in
+what space*. M5 is everything above that: what an event means, who gets to claim
+it, and the entirely separate question of what the cursor is currently over.
+
+Three mechanisms, deliberately not one:
+
+| | resolved by | contested? | driven by |
+|---|---|---|---|
+| gesture routing | pointer id → recognizer | yes, in the arena | consumer events |
+| hover | diffing hit-test results | never | events *and* the frame |
+| hit testing | the render tree (M2) | — | both of the above |
+
+`PointerBinding` owns all three and is where the consumer pushes events. Hover
+never touches the arena — nothing competes for a hover, so there is nothing to
+win — and the arena never hit tests.
+
+### The event
+
+`PointerEvent` is `{phase, pointer, kind, position}` and nothing else. No button
+mask: the game decides what counts as a press, exactly as it decides what counts
+as a frame. No timestamp: nothing in this layer reads a clock, and adding a field
+that nothing sets and nothing reads is the mistake the M1–M4 review found in
+`TextOverflow`. Time enters the framework with the ticker in M7, and the one
+thing that wants it is named below.
+
+`kind` *is* read — the mouse tracker ignores anything that is not a mouse — so it
+earns its place.
+
+### DIVERGENCE: routes, not a cached hit-test path
+
+Flutter caches the hit-test path per pointer at down and dispatches every later
+event of that gesture along it. We hit test only for the down event and route
+everything after it by pointer id, to the recognizers that claimed it.
+
+Two reasons, one of which is a use-after-free:
+
+- a cached path is a list of raw render-object pointers held **across frames**,
+  and a rebuild can destroy one mid-gesture. This is the M3 lesson again — a
+  guard cannot skip an entry without dereferencing it. A route is instead owned
+  by the recognizer that registered it and withdrawn in its destructor, so no
+  container ever holds a pointer to a dead node.
+- a recognizer must keep receiving events after the pointer leaves the region it
+  started in — press a button, slide off, release — which routing by pointer
+  gives directly and a path does not.
+
+**What it costs:** a render object cannot receive raw move or up events without
+going through a recognizer. Flutter's `Listener` has no equivalent here. The
+catalogue's interaction widget is defined in terms of gestures and hover, so
+nothing wants that today, and adding a raw-event recognizer later is additive.
+
+### Hit-test behaviour
+
+`HitTestBehavior` is Flutter's, unchanged, because the three cases are exactly
+the ones a HUD needs: `DeferToChild` (hit only where a child was hit),
+`Opaque` (hit anywhere within bounds, and nothing behind is reachable),
+`Translucent` (take part without hiding what is behind). `RenderPointerRegion`
+overrides `hitTest` rather than `hitTestSelf`, because translucency is the case
+where a box adds itself to the path *and* returns false.
+
+### The arena
+
+Members join while the down event travels the path, which is deepest-first, so
+join order is inner-to-outer. `close` — after the whole path has seen the down —
+resolves at once if only one member joined. Otherwise the decision waits for
+`sweep` on pointer up, which awards the first member still standing: the
+innermost region under the point.
+
+Two things the implementation has to get right, both re-encounters of hazards
+from earlier milestones:
+
+- **Storage.** A `std::vector` of members per pointer would be allocated and
+  freed on every press, which is per-input heap churn in a game loop. Memberships
+  live in one flat list shared by every arena, and resolving returns storage to
+  the arena rather than to the allocator. `gestures_dispatching_a_pointer_in_the_steady_state_allocates_nothing`
+  is what caught this; it failed with exactly one allocation per gesture.
+- **Re-entrancy.** A loser's callback can destroy another contender, which
+  withdraws it from the very list being walked. Withdrawal nulls a slot rather
+  than erasing it and the walk re-reads the list each step — the same shape as
+  the pipeline's dirty lists in M3 and the build scratch in M4. The arena is
+  dropped *before* the winner is told, so neither winner nor loser can find
+  anything still claiming the pointer.
+
+**Decision: withdrawing a member never awards the gesture to anyone.** Flutter's
+`GestureRecognizer.dispose` resolves as rejected, which can promote the remaining
+contender. Ours is called from `~GestureRecognizer`, and firing a game callback
+out of a destructor — during tree teardown, into state that is going away — is
+worse than the alternative. The remaining contender is left to the sweep it was
+already waiting for. The cost is that a two-contender arena that loses one member
+mid-gesture resolves at up rather than immediately.
+
+### Tap, and the one thing that needs a clock
+
+`onTapDown` fires when the recognizer **wins** the pointer, not when the pointer
+goes down, so a region that turns out to have lost never shows press feedback it
+has to take back. With a single contender that is the same instant.
+
+DIVERGENCE: Flutter also fires tap-down after a 100 ms press timeout, so a region
+still competing can show feedback before the contest ends. That needs a clock and
+a timer, and this layer has neither — the consumer's events are the only thing
+that moves. Until the ticker lands, a *contested* tap shows its feedback on
+release. Uncontested taps, which is what a HUD button is, are unaffected.
+
+Travel beyond `kTouchSlop` cancels, before or after winning. After winning there
+is no arena left to tell, so the recognizer runs the cancellation itself; that
+asymmetry is the whole of `giveUp()`.
+
+### Callbacks inside a widget configuration
+
+A widget config is arena scratch and must stay trivially destructible, and the
+lambda at a call site is a temporary that dies with the build expression — so
+`FunctionRef` would dangle and `std::function` would allocate and would not be
+trivially destructible.
+
+`Callback<Sig>` copies the callable into inline storage (four pointers) and
+static-asserts that it is trivially copyable and destructible. A lambda capturing
+by reference or by trivial value passes; one capturing a `std::string` names the
+rule it broke. This is the same constraint `Arena::create` already enforces on
+widgets, reaching one level further in.
+
+```cpp
+Pointer::make({
+  .behavior = HitTestBehavior::Opaque,
+  .onEnter = [&] { state.hovered = true; },
+  .onExit  = [&] { state.hovered = false; },
+  .onTap   = [&] { fire(); },
+  .child   = Panel(...),
+})
+```
+
+### Hover: re-resolving, and knowing when to
+
+Enter and exit are diffed out of hit-test results, never recognized. The tracker
+holds the set of regions under the cursor and, on each new resolution, exits what
+dropped out and enters what appeared. It publishes the new set *before* running
+any callback, so a callback asking what is hovered gets the current answer.
+
+The brief's harder half is re-resolving when the tree changes beneath a
+**stationary** cursor. The trigger is precise rather than conservative:
+
+> re-resolve after a frame in which **layout ran**.
+
+Layout is what moves boxes. A paint-only change cannot alter what lies under the
+cursor — which is exactly the invariant that makes `markNeedsPaint` the cheap
+path, now doing a second job. So an opacity animation ticking every frame (M7's
+render-attached path) costs zero hit tests, while a panel appearing costs one.
+`setBehavior` invalidates directly, since it changes hit testing without touching
+either phase.
+
+The re-resolution runs at the **start** of `drawFrame`, not the end. The tree it
+tests against is the one the previous frame left laid out, and anything an enter
+or exit callback dirties is built by *that same frame* rather than the next. The
+observable contract is: a tree change that moves a region under a stationary
+cursor produces enter/exit on the following frame.
+
+A frame where nothing moved does no hit test at all, which
+`gestures_a_frame_that_changes_nothing_runs_no_hit_test` asserts directly.
+
+**A region destroyed while hovered is dropped without an exit callback.** It
+deregisters in its destructor, which is what keeps the tracker free of dangling
+pointers. Firing exit there would call into state that is being destroyed
+alongside it; there is nothing left to un-highlight.
+
+The tracker follows **one cursor**. A game has one mouse, and a touch pointer
+never hovers.
+
+### The seam
+
+`RenderBox::asPointerRegion()` returns null for every box but one. It is the
+render tree's only mention of the gesture layer — a forward declaration, no
+include — and it is what both routing and hover use to pick their targets out of
+a path without RTTI, the same no-`dynamic_cast` approach as `WidgetType` and
+`ParentDataSlot`.
+
+`RenderPointerRegion` itself lives in `gestures/`, not `render/`, so the render
+tree keeps the property it was built with in M2: no dependency on gestures, and
+testable without them.
+
+`PointerBinding` is supplied to widgets through `BuildOwner`, exactly as
+`TextService` is, and is declared before it in `WidgetBinding` so it outlives the
+render tree whose regions withdraw from it.
+
+### What is verified
+
+- The three hit-test behaviours, including a translucent region letting the one
+  behind it into the path.
+- The arena directly: an uncontested arena resolves at close; a contested one
+  waits and awards the first member; rejecting all but one awards the survivor;
+  cancel awards nobody; withdrawal awards nobody and leaves the sweep to decide.
+- Press then release fires tap-down then tap; a press outside every region
+  reaches nobody.
+- Travel beyond the slop cancels; travel within it does not; a release *outside*
+  the region it started in still taps, which is the routing divergence doing its
+  job.
+- A cancelled pointer cancels a press already won, and the pointer is finished:
+  a later release is nobody's.
+- Overlapping regions resolve to the innermost recognizer, and neither shows
+  press feedback while the contest is open. The loser has nothing to take back.
+- A region destroyed mid-press withdraws its routes and its arena entry, and
+  nothing fires out of a destructor.
+- Hover enters and exits across regions; moving within one region is not a
+  change; a cancelled pointer leaves nothing hovered; a touch pointer never
+  hovers.
+- Hover is re-resolved when the tree moves beneath a stationary cursor, in
+  exactly one hit test.
+- A region destroyed while hovered leaves no dangling reference and no exit.
+- A frame that changes nothing runs no hit test and reports no work to do.
+- A hover, press, move and release in the steady state allocate nothing.
+- A callback that pushes another event re-enters dispatch, and is trapped.
+  Dispatching and settling both record into one hit-test list, so a nested walk
+  would reallocate the list the outer one is holding; `DispatchScope` names it
+  the way `PipelineOwner::PhaseScope` names a phase violation.
+
+The widget-test harness — `Harness`, `Scripted`, `ScriptedRoot`, `elementFor` —
+moved to `tests/widget_harness.hpp`, since the gesture tests drive the binding
+exactly the way the widget tests do.
+
+Verified on GCC 13.3 and Clang 18.1, and under ASan + UBSan: 153 tests, 647
+checks. The library also compiles clean with `FLTR_ENABLE_CHECKS=OFF`.
