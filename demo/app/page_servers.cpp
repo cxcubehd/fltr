@@ -97,6 +97,13 @@ public:
   }
 
   WidgetRef build(BuildContext& context) override {
+    // A State that owns a driver has to opt into TickerMode itself, exactly as
+    // the library's implicit widgets do: reading it here is both the mute and
+    // the dependency that rebuilds this row when the page is hidden. Without
+    // this line the fade below would keep asking for frames from behind a page
+    // nobody is looking at.
+    driver_.setMuted(!TickerMode::of(context));
+
     const Theme& theme = themeOf(context);
     const Columns columns = columnsOf(theme);
     const ServerInfo& server = widget().info();

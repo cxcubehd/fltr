@@ -44,7 +44,10 @@ WidgetRef buildScrim(BuildContext&, const float& brightness) {
   // Always a box, never nothing: a *component* that builds a null child has no
   // render object, and a container child must have one. (A null entry in a
   // WidgetList is a different thing -- those are dropped from the list.)
-  return DecoratedBox::make({.decoration = {.color = colour.withAlpha(alpha)}});
+  // Keyed so the demo's tests can point at it by name rather than by counting
+  // their way down the tree.
+  return DecoratedBox::make({.key = Key::of("scrim"),
+                             .decoration = {.color = colour.withAlpha(alpha)}});
 }
 
 // ---------------------------------------------------------------------------

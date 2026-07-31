@@ -86,3 +86,14 @@ target_compile_options(fltr_demo PRIVATE ${FLTR_DEMO_WARNINGS})
 # source and no window at all.
 
 
+
+if(FLTR_BUILD_TESTS)
+  add_executable(fltr_demo_tests
+    ${PROJECT_SOURCE_DIR}/tests/main.cpp
+    tests/test_demo.cpp
+  )
+  target_link_libraries(fltr_demo_tests PRIVATE fltr_demo_ui)
+  target_include_directories(fltr_demo_tests PRIVATE ${PROJECT_SOURCE_DIR}/tests)
+  target_compile_options(fltr_demo_tests PRIVATE ${FLTR_DEMO_WARNINGS})
+  add_test(NAME fltr_demo_tests COMMAND fltr_demo_tests)
+endif()
