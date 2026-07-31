@@ -3,7 +3,7 @@
 namespace fltr {
 
 WidgetBinding::WidgetBinding(Size surface, TextService& textService)
-    : buildOwner_(textService, pointers_), surface_(surface) {}
+    : buildOwner_(textService, pointers_, tickers_), surface_(surface) {}
 
 WidgetBinding::~WidgetBinding() {
   // Unmount before anything is destroyed, so every State sees dispose().
@@ -35,7 +35,12 @@ void WidgetBinding::dispatchPointer(const PointerEvent& event) {
   pointers_.dispatch(event, *view_);
 }
 
-Scene WidgetBinding::drawFrame() {
+Scene WidgetBinding::drawFrame(float seconds) {
+  // Animations advance before the build, because a tick on the general
+  // consumption path becomes a setState -- ticking after flushBuild would leave
+  // every Watch over an animation showing the previous frame's value.
+  if (seconds > 0.0f) tickers_.tick(seconds);
+
   // Hover is settled before the build, not after it: the answer is re-resolved
   // against the tree the previous frame left laid out, so whatever an enter or
   // exit callback changes is built in this frame rather than the next.

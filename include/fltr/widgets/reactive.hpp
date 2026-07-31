@@ -22,7 +22,7 @@ public:
   void initState() override { listen(); }
 
   void didUpdateWidget(const Watch<T>& previous) override {
-    if (&previous.observable() != &this->widget().observable()) listen();
+    if (&previous.source() != &this->widget().source()) listen();
   }
 
   /// Not left to the Subscription's destructor: a subtree unmounts entirely
@@ -31,12 +31,12 @@ public:
   void dispose() override { subscription_.detach(); }
 
   WidgetRef build(BuildContext& context) override {
-    return this->widget().builder()(context, this->widget().observable().value());
+    return this->widget().builder()(context, this->widget().source().value());
   }
 
 private:
   void listen() {
-    subscribeMember<WatchState, &WatchState::onChanged>(this->widget().observable(), subscription_,
+    subscribeMember<WatchState, &WatchState::onChanged>(this->widget().source(), subscription_,
                                                         this);
   }
 
@@ -52,8 +52,14 @@ private:
 /// Rebuilds its own subtree, and nothing else, when the value it watches
 /// changes. A push of an equal value never reaches here at all.
 ///
-/// The observable belongs to the game and must outlive the widget, which is the
-/// same rule the pointer callbacks already follow.
+/// This is the general consumption path, and it does not care why the value
+/// moved: a game-pushed `Observable<T>` and an `AnimatedValue<T>` are the same
+/// thing to it. Use it when the structure of the subtree changes with the value;
+/// when only the painting does, hand the value to a render object instead and
+/// skip the rebuild entirely.
+///
+/// The value belongs to the game or to a State and must outlive the widget,
+/// which is the same rule the pointer callbacks already follow.
 ///
 /// ```cpp
 /// Watch<int>::make({
@@ -68,7 +74,7 @@ public:
 
   struct Args {
     Key key;
-    Observable<T>* value = nullptr;
+    ValueListenable<T>* value = nullptr;
     Builder builder;
   };
 
@@ -78,7 +84,7 @@ public:
   }
 
   const char* name() const noexcept override { return "Watch"; }
-  Observable<T>& observable() const noexcept { return *args_.value; }
+  ValueListenable<T>& source() const noexcept { return *args_.value; }
   const Builder& builder() const noexcept { return args_.builder; }
 
   std::unique_ptr<State<Watch<T>>> createState() const {

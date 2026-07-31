@@ -921,7 +921,8 @@ TEST(widgets_the_build_arena_is_reused_rather_than_regrown) {
 TEST(widgets_a_widget_from_a_released_build_is_trapped) {
   MonospaceTextService text;
   PointerBinding pointers;
-  BuildOwner owner(text, pointers);
+  TickerRegistry tickers;
+  BuildOwner owner(text, pointers, tickers);
 
   WidgetRef escaped;
   {

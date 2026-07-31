@@ -5,6 +5,7 @@
 #include <string>
 #include <string_view>
 
+#include "fltr/core/observable.hpp"
 #include "fltr/paint/text.hpp"
 #include "fltr/render/box.hpp"
 #include "fltr/debug/format.hpp"
@@ -107,13 +108,18 @@ public:
       : alignment_(alignment), widthFactor_(widthFactor), heightFactor_(heightFactor) {}
 
   const char* typeName() const override { return "Align"; }
-  std::string describe() const override { return "align=" + dbg::str(alignment_); }
-  Alignment alignment() const noexcept { return alignment_; }
+  std::string describe() const override { return "align=" + dbg::str(alignment()); }
+  Alignment alignment() const noexcept { return alignment_.value(); }
   void setAlignment(Alignment a) {
-    if (a == alignment_) return;
-    alignment_ = a;
     // The child moves but nothing resizes; still a layout invalidation, because
     // the offset is computed during layout.
+    if (alignment_.set(a)) markNeedsLayout();
+  }
+  /// The layout-affecting corner of the render-attached path: every frame of
+  /// this animation lays out this subtree, unlike opacity or a transform.
+  void setAnimation(ValueListenable<Alignment>* source) {
+    if (!alignment_.setSource(source)) return;
+    observeForLayout(subscription_, source);
     markNeedsLayout();
   }
   void setSizeFactors(float w, float h) {
@@ -134,11 +140,12 @@ public:
     setSize(constraints_.constrain(
         {shrinkWidth ? childSize.width * (widthFactor_ >= 0.0f ? widthFactor_ : 1.0f) : kInf,
          shrinkHeight ? childSize.height * (heightFactor_ >= 0.0f ? heightFactor_ : 1.0f) : kInf}));
-    childOffset_ = alignment_.inscribe(childSize, size_);
+    childOffset_ = alignment().inscribe(childSize, size_);
   }
 
 protected:
-  Alignment alignment_;
+  Animatable<Alignment> alignment_;
+  Subscription subscription_;
   float widthFactor_;
   float heightFactor_;
 };
@@ -183,24 +190,29 @@ public:
   explicit RenderDecoratedBox(BoxDecoration decoration = {}) : decoration_(decoration) {}
 
   const char* typeName() const override { return "DecoratedBox"; }
-  std::string describe() const override { return "fill=" + dbg::str(decoration_.color); }
-  const BoxDecoration& decoration() const noexcept { return decoration_; }
+  std::string describe() const override { return "fill=" + dbg::str(decoration().color); }
+  const BoxDecoration& decoration() const noexcept { return decoration_.value(); }
   void setDecoration(const BoxDecoration& d) {
-    if (d == decoration_) return;
-    decoration_ = d;
-    markNeedsPaint();  // decoration never affects layout
+    if (decoration_.set(d)) markNeedsPaint();  // decoration never affects layout
+  }
+  void setAnimation(ValueListenable<BoxDecoration>* source) {
+    if (!decoration_.setSource(source)) return;
+    observeForPaint(subscription_, source);
+    markNeedsPaint();
   }
 
   void paint(PaintingContext& context, Offset offset) override {
-    if (decoration_.isVisible()) {
-      context.list().drawRRect(Rect::fromOriginSize(offset, size_), decoration_.radius,
-                               decoration_.color, decoration_.borderColor, decoration_.borderWidth);
+    const BoxDecoration& d = decoration();
+    if (d.isVisible()) {
+      context.list().drawRRect(Rect::fromOriginSize(offset, size_), d.radius, d.color,
+                               d.borderColor, d.borderWidth);
     }
     RenderProxyBox::paint(context, offset);
   }
 
 protected:
-  BoxDecoration decoration_;
+  Animatable<BoxDecoration> decoration_;
+  Subscription subscription_;
 };
 
 // ---------------------------------------------------------------------------
@@ -212,22 +224,28 @@ public:
   explicit RenderOpacity(float opacity = 1.0f) : opacity_(opacity) {}
 
   const char* typeName() const override { return "Opacity"; }
-  std::string describe() const override { return "opacity=" + dbg::str(opacity_); }
-  float opacity() const noexcept { return opacity_; }
+  std::string describe() const override { return "opacity=" + dbg::str(opacity()); }
+  float opacity() const noexcept { return opacity_.value(); }
   void setOpacity(float v) {
-    if (v == opacity_) return;
-    opacity_ = v;
-    markNeedsPaint();  // never layout
+    if (opacity_.set(v)) markNeedsPaint();  // never layout
+  }
+  /// The cheap path, and the one animation is meant to take: a tick repaints
+  /// this object and touches no element and no layout.
+  void setAnimation(ValueListenable<float>* source) {
+    if (!opacity_.setSource(source)) return;
+    observeForPaint(subscription_, source);
+    markNeedsPaint();
   }
 
   void paint(PaintingContext& context, Offset offset) override {
-    context.pushOpacity(opacity_, [this, offset](PaintingContext& c) {
+    context.pushOpacity(opacity(), [this, offset](PaintingContext& c) {
       RenderProxyBox::paint(c, offset);
     });
   }
 
 protected:
-  float opacity_;
+  Animatable<float> opacity_;
+  Subscription subscription_;
 };
 
 // ---------------------------------------------------------------------------
@@ -241,12 +259,16 @@ public:
       : transform_(transform), origin_(origin) {}
 
   const char* typeName() const override { return "Transform"; }
-  std::string describe() const override { return "xf=" + dbg::str(transform_); }
-  const Transform2D& transform() const noexcept { return transform_; }
+  std::string describe() const override { return "xf=" + dbg::str(transform()); }
+  const Transform2D& transform() const noexcept { return transform_.value(); }
   void setTransform(const Transform2D& t) {
-    if (t == transform_) return;
-    transform_ = t;
-    markNeedsPaint();  // never layout: a transform does not change the box
+    // Never layout: a transform does not change the box, only where it lands.
+    if (transform_.set(t)) markNeedsPaint();
+  }
+  void setAnimation(ValueListenable<Transform2D>* source) {
+    if (!transform_.setSource(source)) return;
+    observeForPaint(subscription_, source);
+    markNeedsPaint();
   }
   void setOrigin(Alignment a) {
     if (a == origin_) return;
@@ -256,20 +278,21 @@ public:
 
   void paint(PaintingContext& context, Offset offset) override {
     const Offset pivot = offset + origin_.inscribe(Size::zero(), size_);
-    context.pushTransform(transform_, pivot,
+    context.pushTransform(transform(), pivot,
                           [this, offset](PaintingContext& c) { RenderProxyBox::paint(c, offset); });
   }
 
   bool hitTestChildren(HitTestResult& result, Offset position) override {
     if (!child_) return false;
     const Offset pivot = origin_.inscribe(Size::zero(), size_);
-    const Transform2D m = Transform2D::aroundOrigin(transform_, pivot);
+    const Transform2D m = Transform2D::aroundOrigin(transform(), pivot);
     return result.addWithPaintTransform(
         m, position, [this](HitTestResult& r, Offset p) { return child_->hitTest(r, p); });
   }
 
 protected:
-  Transform2D transform_;
+  Animatable<Transform2D> transform_;
+  Subscription subscription_;
   Alignment origin_;
 };
 

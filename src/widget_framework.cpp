@@ -7,6 +7,20 @@ namespace {
 
 thread_local Arena* tBuildArena = nullptr;
 
+/// Set for as long as an element is building, however that build is left --
+/// including on a contract violation, which throws.
+class BuildFlag {
+public:
+  explicit BuildFlag(bool& flag) noexcept : flag_(flag) { flag_ = true; }
+  ~BuildFlag() { flag_ = false; }
+
+  BuildFlag(const BuildFlag&) = delete;
+  BuildFlag& operator=(const BuildFlag&) = delete;
+
+private:
+  bool& flag_;
+};
+
 }  // namespace
 
 Arena* currentBuildArena() noexcept { return tBuildArena; }
@@ -64,6 +78,7 @@ void Element::mount(Element* parent, BuildOwner& owner) {
   depth_ = parent ? parent->depth_ + 1 : 0;
   inheritedScope_ = parent ? parent->inheritedScope_ : nullptr;
   extendInheritedScope();
+  didMount();
   rebuild();
 }
 
@@ -88,6 +103,7 @@ void Element::rebuild() {
   // The build about to run re-registers whatever it reads, so an ambient value
   // this element stops reading stops reaching it.
   dependencies_.clear();
+  const BuildFlag building(inBuild_);
   performRebuild();
 }
 

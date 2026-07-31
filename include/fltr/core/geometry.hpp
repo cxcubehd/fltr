@@ -13,6 +13,10 @@ inline constexpr float kInf = std::numeric_limits<float>::infinity();
 
 inline constexpr float lerpF(float a, float b, float t) noexcept { return a + (b - a) * t; }
 
+/// The scalar overload of the interpolation every other type here provides, so
+/// `lerp` is the one name an animated value needs whatever it carries.
+inline constexpr float lerp(float a, float b, float t) noexcept { return lerpF(a, b, t); }
+
 inline bool nearlyEqual(float a, float b, float eps = 1e-4f) noexcept {
   if (a == b) return true;  // handles inf == inf
   return std::fabs(a - b) <= eps;

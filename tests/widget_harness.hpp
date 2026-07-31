@@ -20,7 +20,9 @@ public:
     binding_.attachRoot([this] { return root_->build(); });
   }
 
-  fltr::Scene frame() { return binding_.drawFrame(); }
+  /// A frame, optionally with time having passed since the last one -- which is
+  /// how animation is driven here: explicitly, not from a real clock.
+  fltr::Scene frame(float seconds = 0.0f) { return binding_.drawFrame(seconds); }
 
   fltr::WidgetBinding& binding() noexcept { return binding_; }
   fltr::BuildOwner& buildOwner() noexcept { return binding_.buildOwner(); }
