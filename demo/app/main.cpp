@@ -74,7 +74,10 @@ int main(int argc, char** argv) {
     } else if (std::strcmp(argv[i], "--frames") == 0 && i + 1 < argc) {
       frameLimit = std::atoi(argv[++i]);
     } else if (std::strcmp(argv[i], "--page") == 0 && i + 1 < argc) {
-      startPage = std::atoi(argv[++i]);
+      const char* name = argv[++i];
+      startPage = std::strcmp(name, "settings") == 0   ? static_cast<int>(fltrdemo::Page::Settings)
+                  : std::strcmp(name, "servers") == 0  ? static_cast<int>(fltrdemo::Page::Servers)
+                                                       : std::atoi(name);
     } else if (std::strcmp(argv[i], "--overlay") == 0) {
       overlayOn = true;
     }

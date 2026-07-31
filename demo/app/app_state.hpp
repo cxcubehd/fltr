@@ -4,6 +4,7 @@
 #include "fltr/core/geometry.hpp"
 #include "fltr/core/observable.hpp"
 #include "ui/drag.hpp"
+#include "ui/menu.hpp"
 #include "ui/strings.hpp"
 
 namespace fltrdemo {
@@ -60,6 +61,9 @@ public:
   ServerBrowser& servers() noexcept { return servers_; }
   FrameStrings& strings() noexcept { return strings_; }
   PointerRouter& router() noexcept { return router_; }
+  /// Outlives every page, so a menu opened on one screen is closed by leaving
+  /// it rather than by the screen going away underneath it.
+  MenuController& menus() noexcept { return menus_; }
 
 private:
   fltr::Observable<Page> page_{Page::Title};
@@ -67,6 +71,7 @@ private:
   ServerBrowser servers_;
   FrameStrings strings_;
   PointerRouter router_;
+  MenuController menus_;
   bool quit_ = false;
 };
 

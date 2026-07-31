@@ -78,6 +78,51 @@ private:
 };
 
 // ---------------------------------------------------------------------------
+// TabStrip
+// ---------------------------------------------------------------------------
+
+class TabStripState final : public State<TabStrip> {
+public:
+  WidgetRef build(BuildContext& context) override {
+    const Theme& theme = themeOf(context);
+    const int selected = widget().selected();
+
+    return Column::make({
+        .crossAxisAlignment = CrossAxisAlignment::Stretch,
+        .mainAxisSize = MainAxisSize::Min,
+        .children =
+            {
+                Row::make({
+                    .mainAxisSize = MainAxisSize::Min,
+                    // One tab per entry in the caller's array: the length is
+                    // data, so the list is generated.
+                    .children = WidgetList::generate(
+                        widget().count(),
+                        [this, &theme, selected](std::size_t i) {
+                          return Button::make({
+                              .key = Key::of(static_cast<int>(i)),
+                              .label = widget().labels()[i],
+                              .onPressed =
+                                  Callback<void()>([this, i] { choose(static_cast<int>(i)); }),
+                              .selected = static_cast<int>(i) == selected,
+                              .kind = ButtonKind::Tab,
+                              .width = theme.tabWidth(),
+                          });
+                        }),
+                }),
+                divider(theme),
+            },
+    });
+  }
+
+private:
+  void choose(int index) {
+    if (index == widget().selected()) return;
+    widget().onSelected()(index);
+  }
+};
+
+// ---------------------------------------------------------------------------
 // Slider
 // ---------------------------------------------------------------------------
 
@@ -190,6 +235,10 @@ private:
 
 std::unique_ptr<State<Toggle>> Toggle::createState() const {
   return std::make_unique<ToggleState>();
+}
+
+std::unique_ptr<State<TabStrip>> TabStrip::createState() const {
+  return std::make_unique<TabStripState>();
 }
 
 std::unique_ptr<State<Slider>> Slider::createState() const {
