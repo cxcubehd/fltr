@@ -10,6 +10,7 @@
 #include "fltr/core/arena.hpp"
 #include "fltr/core/function_ref.hpp"
 #include "fltr/core/key.hpp"
+#include "fltr/core/listenable.hpp"
 #include "fltr/core/type_tag.hpp"
 #include "fltr/paint/text.hpp"
 #include "fltr/render/box.hpp"
@@ -18,6 +19,8 @@ namespace fltr {
 
 class BuildOwner;
 class Element;
+class InheritedElementBase;
+class InheritedScope;
 class PointerBinding;
 class RenderObjectElement;
 class Widget;
@@ -220,6 +223,15 @@ public:
 
   void markNeedsBuild();
 
+  /// Reads the ambient value introduced by the nearest enclosing widget of
+  /// `type`, and subscribes this element to it: a change rebuilds this element
+  /// and nothing else. The scope is a snapshot rather than a path, so the lookup
+  /// costs the same at any depth.
+  ///
+  /// The subscription lasts until this element next rebuilds, which re-registers
+  /// whatever the new build actually read.
+  InheritedElementBase* dependOnInherited(WidgetType type);
+
   virtual void mount(Element* parent, BuildOwner& owner);
   virtual void unmount();
   virtual void update(WidgetRef widget) = 0;
@@ -242,6 +254,11 @@ protected:
   virtual void performRebuild() = 0;
   virtual RenderObjectElement* asRenderObjectElement() noexcept { return nullptr; }
 
+  /// Runs once the element is linked to its parent and before it builds, so an
+  /// element that introduces an ambient value can extend the scope its subtree
+  /// will see. The default inherits the parent's scope unchanged.
+  virtual void extendInheritedScope() {}
+
   RenderObjectElement* ancestorRenderObjectElement() const;
 
   ElementPtr updateChild(ElementPtr child, WidgetRef widget);
@@ -249,6 +266,7 @@ protected:
   void deactivate(ElementPtr child);
 
   bool dirty_ = true;
+  const InheritedScope* inheritedScope_ = nullptr;
 
 private:
   friend class BuildOwner;
@@ -258,6 +276,9 @@ private:
   BuildOwner* owner_ = nullptr;
   int depth_ = 0;
   bool inDirtyList_ = false;
+  /// One per ambient value this element's last build read. Intrusive, so
+  /// dropping them all and re-registering costs no allocation.
+  std::vector<Subscription> dependencies_;
 };
 
 /// Holds the configuration by value, so the element keeps a stable copy once

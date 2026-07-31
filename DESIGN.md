@@ -918,3 +918,160 @@ exactly the way the widget tests do.
 
 Verified on GCC 13.3 and Clang 18.1, and under ASan + UBSan: 153 tests, 647
 checks. The library also compiles clean with `FLTR_ENABLE_CHECKS=OFF`.
+
+---
+
+## Milestone 6 — reactivity and ambient propagation
+
+Game state changes at arbitrary times and is pushed in from the game loop. The
+API for that is deliberately blunt: the consumer pushes its whole state every
+frame and the framework decides what that implies for work.
+
+```cpp
+shield.set(player.shield);   // unchanged: returns, notifies nobody
+ammo.set(weapon.ammo);       // changed: dirties the subtrees that read it
+Scene scene = binding.drawFrame();
+```
+
+Two mechanisms, and they are not the same shape:
+
+| | reaches | invalidates | keyed by |
+|---|---|---|---|
+| `Observable<T>` + `Watch<T>` | whoever subscribed | that element's subtree | the value's identity |
+| `Ambient<T>` | descendants that read it | those elements only | the widget's type |
+
+### One observable, two sinks
+
+`Observable<T>` is `Listenable` plus a value and an equality check. It adds
+nothing to the observer core built in M1 — which is the point. The brief asks
+whether animated values and reactivity should share an abstraction; they share
+this one, and the rebuild-versus-repaint distinction stays where M1 put it, in
+the subscriber:
+
+- a `Watch` element subscribes and marks *itself* needing build;
+- a render object subscribes through `observeForPaint` and marks *itself*
+  needing paint — no element, no reconciliation, no widget allocation.
+
+Both are exercised against the same `Observable` in M6's tests, because the
+claim is worth nothing if only one sink exists. The second is the path M7's
+animations take, and it already costs zero builds and zero layouts per push.
+
+`set` compares before it stores, so an unchanged push is a load, a compare and a
+return. That is what makes the per-frame-push API affordable: the consumer does
+not have to track what changed, and the framework does not have to diff a tree
+to find out.
+
+### Watch is a StatefulWidget, not a new element kind
+
+`Watch<T>` needed nothing new: `initState` subscribes, `didUpdateWidget`
+re-subscribes when it is pointed at a different value, `dispose` detaches, and
+the notification calls `setState` with an empty change — the value it builds
+from lives outside it, so there is nothing of its own to mutate.
+
+`dispose` detaching matters, and is not merely tidy. Removing a subtree unmounts
+every element in it before destroying any of them, so a sibling's `dispose` —
+a panel reporting its own closing by pushing a value, which is ordinary game
+code — runs while an already-unmounted `Watch` is still alive. Left to the
+`Subscription` destructor, that push would reach a `State` whose element has no
+tree, and `setState`'s precondition would trap.
+`reactivity_a_watch_stops_listening_when_it_unmounts_not_when_it_is_destroyed`
+fails without the explicit detach.
+
+### DIVERGENCE: the ambient scope is a snapshot, not a persistent map
+
+Flutter gives each element an `_inheritedElements` map, structurally shared with
+its parent through a `PersistentHashMap` and copied on write by inherited
+elements. Structural sharing needs a GC: the shared interior nodes have no
+single owner.
+
+**Chosen:** an `InheritedScope` is a flat open-addressed table owned by the
+element that introduced it. An inherited element copies its parent's entries and
+adds its own, once, at mount; every other element stores a pointer to its
+parent's scope — one pointer store in `mount`, which is where the cost of the
+whole mechanism lives for the elements that never provide anything.
+
+A scope holds **no link to the one it extends**. That is the property worth
+having, and it makes the O(1) claim structural rather than a benchmark: a lookup
+*cannot* degrade into an ancestor walk, because there is no chain to walk.
+`reactivity_an_ambient_scope_is_a_snapshot_not_a_chain` asserts it directly on
+three scopes with no tree around them.
+
+**What it costs:** copying k entries per inherited element mount, where k is the
+number of *distinct ambient types in scope* — 2 or 3 in a HUD, not the tree
+depth. Flutter's copy-on-write path copies less; ours copies a handful of
+pointers once per provider, not per frame.
+
+**What it buys:** unambiguous ownership, no shared interior nodes, no
+refcounting — the same constraint that produced every other divergence here.
+
+### Dependents are subscriptions, which decides when they are dropped
+
+An inherited element *is* a `Listenable`, and a reader's dependency is an
+ordinary `Subscription` stored on the reading element. There is no dependent set
+and no reverse index: the intrusive list is both.
+
+That changes what is affordable. Flutter clears an element's dependencies before
+each rebuild and lets the build re-register what it actually reads; with a
+dependent *set* on the provider, that is a removal from a container holding
+every reader in the subtree. Here `clear()` is k detaches of two pointer stores
+each, and re-registering is two more. So `Element::rebuild` clears
+unconditionally, and an element that stops reading a value stops being woken by
+it — precision Flutter pays for and we get for free.
+
+`markNeedsBuild` is the notification target directly, so a change touches only
+the dirty list. Readers are marked while the provider adopts its new
+configuration, which is *before* the subtree beneath it is reconciled. That
+ordering is what makes the interesting case work: a wrapper that rebuilds alone
+re-emits the child ref it adopted, that ref is stale, and reconciliation skips
+the entire subtree — while the readers inside it, reached by subscription rather
+than by cascade, are rebuilt in the same frame.
+`reactivity_an_ambient_change_rebuilds_its_readers_and_nothing_else` measures
+exactly that: two elements built, the provider and the one reader, with a
+`Column` and a `Padding` between them untouched.
+
+### Ambient values are typed, not subclassed
+
+Flutter has you subclass `InheritedWidget` per ambient value. `Ambient<T>` is
+one class template instead, keyed by `widgetTypeOf<Ambient<T>>()`, so a theme
+costs a struct rather than a widget:
+
+```cpp
+Ambient<Theme>::make({.value = theme, .child = hud()});
+...
+const Theme& theme = Ambient<Theme>::of(context);   // depends, and rebuilds
+```
+
+`T` is copied into the build arena, so it must be trivially destructible — the
+rule every widget field already follows — and equality-comparable, since an
+unchanged value must notify nobody. `updateShouldNotify` is that comparison; a
+`Theme` with a defaulted `operator==` gets it for nothing.
+
+Reading before the element is mounted — from `initState`, where the scope is not
+yet resolved — is a contract violation naming that, rather than the misleading
+"no provider above this widget".
+
+### What is verified
+
+- The whole state pushed every frame with nothing changed: no build, no layout,
+  no paint, an unchanged revision, and `needsFrame()` false.
+- A changed value rebuilds exactly one element and its subtree; the sibling
+  watching a different value is not built.
+- Several pushes between frames coalesce into one build.
+- A `Watch` removed from the tree holds no subscription, and a later push does
+  nothing at all; retargeted at another value, it follows it and drops the first.
+- A value consumed by a render object repaints one boundary with zero builds and
+  zero layouts — the other consumption path, on the same abstraction.
+- A value pushed from a hover callback is built by that same frame, which is
+  what M5's start-of-frame re-resolution was for.
+- Pushing a value and pushing an ambient value both allocate nothing in the
+  steady state, including the dependency re-registration a rebuild performs.
+- An ambient value is found at any depth, the nearest one shadows an outer one,
+  and an equal one notifies nobody.
+- An ambient change rebuilds its readers and nothing else, through a subtree
+  reconciliation skips entirely.
+- An element that stops reading an ambient value stops being rebuilt by it, and
+  one that leaves the tree leaves no dependency behind.
+- Reading an ambient value that is not there is trapped.
+
+Verified on GCC 13.3 and Clang 18.1, and under ASan + UBSan: 169 tests, 712
+checks. The library also compiles clean with `FLTR_ENABLE_CHECKS=OFF`.

@@ -62,14 +62,18 @@ void Element::mount(Element* parent, BuildOwner& owner) {
   parent_ = parent;
   owner_ = &owner;
   depth_ = parent ? parent->depth_ + 1 : 0;
+  inheritedScope_ = parent ? parent->inheritedScope_ : nullptr;
+  extendInheritedScope();
   rebuild();
 }
 
 void Element::unmount() {
   visitChildren([](Element& child) { child.unmount(); });
+  dependencies_.clear();
   if (inDirtyList_) owner_->stopTracking(*this);
   owner_ = nullptr;
   parent_ = nullptr;
+  inheritedScope_ = nullptr;
 }
 
 void Element::markNeedsBuild() {
@@ -81,6 +85,9 @@ void Element::markNeedsBuild() {
 void Element::rebuild() {
   if (!dirty_ || !mounted()) return;
   dirty_ = false;
+  // The build about to run re-registers whatever it reads, so an ambient value
+  // this element stops reading stops reaching it.
+  dependencies_.clear();
   performRebuild();
 }
 
