@@ -527,9 +527,11 @@ TEST(widgets_a_null_entry_in_a_children_list_is_dropped) {
 }
 
 TEST(widgets_a_generated_children_list_takes_its_length_from_data) {
-  Harness h;
+  // Before the harness, so it is still alive when the harness tears the tree
+  // down: a State's dispose runs then, and this is what it writes to.
   std::vector<Life> lives(5);
   std::size_t count = lives.size();
+  Harness h;
 
   ScriptedRoot root(h, [&] {
     return Column::make({
@@ -559,9 +561,9 @@ TEST(widgets_a_generated_children_list_takes_its_length_from_data) {
 }
 
 TEST(widgets_a_generated_list_reconciles_a_permutation_by_key) {
-  Harness h;
   std::vector<Life> lives(4);
   std::vector<int> order{0, 1, 2, 3};
+  Harness h;
 
   ScriptedRoot root(h, [&] {
     return Column::make({

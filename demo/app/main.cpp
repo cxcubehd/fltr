@@ -109,6 +109,12 @@ int main(int argc, char** argv) {
   fltrdemo::RaylibTextService text;
   text.setFont(0, font);
 
+  // For the same reason, and it is the same reason: the application's state
+  // outlives the tree that reads it. A scroll controller, a pointer router and
+  // a menu's anchor are all referred to by render objects, and render objects
+  // are destroyed when the binding is.
+  fltrdemo::AppState app;
+
   {
     fltr::WidgetBinding binding(
         {static_cast<float>(GetScreenWidth()), static_cast<float>(GetScreenHeight())}, text);
@@ -117,7 +123,6 @@ int main(int argc, char** argv) {
     fltrdemo::DebugOverlay overlay(font);
     overlay.setVisible(overlayOn);
 
-    fltrdemo::AppState app;
     app.surface().set(
         {static_cast<float>(GetScreenWidth()), static_cast<float>(GetScreenHeight())});
     if (startPage > 0 && startPage < fltrdemo::kPageCount) {

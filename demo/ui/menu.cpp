@@ -13,6 +13,10 @@ using namespace fltr;
 // Anchors
 // ---------------------------------------------------------------------------
 
+AnchorLink::~AnchorLink() {
+  if (box_ != nullptr) box_->link_ = nullptr;
+}
+
 RenderAnchor::~RenderAnchor() {
   if (link_ != nullptr && link_->box_ == this) link_->box_ = nullptr;
 }

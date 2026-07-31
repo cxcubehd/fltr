@@ -46,12 +46,21 @@ long checkCount() { return g_checks; }
 void reportFailure(const char* file, int line, const std::string& msg) {
   ++g_failures;
   const char* base = std::strrchr(file, '/');
-  std::printf("    FAIL %s:%d\n      %s\n", base ? base + 1 : file, line, msg.c_str());
+  // Leading newline because the test's name has already been printed, without
+  // one, by the runner below.
+  std::printf("\n    FAIL %s:%d\n      %s\n", base ? base + 1 : file, line, msg.c_str());
 }
 
 }  // namespace fltrtest
 
 int main(int argc, char** argv) {
+  // Unbuffered, and the name goes out before the test runs: a test that takes
+  // the whole process down with it is then named by the last line of output
+  // rather than lost inside a buffer that never got flushed. Finding that out
+  // the hard way, from a heap corruption on a platform with no debugger to
+  // hand, is what this line is for.
+  std::setvbuf(stdout, nullptr, _IONBF, 0);
+
   const char* filter = argc > 1 ? argv[1] : nullptr;
   int ran = 0;
   int failedTests = 0;
@@ -60,6 +69,7 @@ int main(int argc, char** argv) {
     if (filter && std::strstr(t.name, filter) == nullptr) continue;
     const int before = fltrtest::failureCount();
     ++ran;
+    std::printf("%-72s ", t.name);
     try {
       t.fn();
     } catch (const std::exception& e) {
@@ -69,7 +79,7 @@ int main(int argc, char** argv) {
     }
     const bool failed = fltrtest::failureCount() != before;
     if (failed) ++failedTests;
-    std::printf("%s %s\n", failed ? "[FAIL]" : "[ ok ]", t.name);
+    std::printf("%s\n", failed ? "[FAIL]" : "[ ok ]");
   }
 
   std::printf("\n%d test(s), %ld check(s), %d failure(s) in %d test(s)\n", ran,

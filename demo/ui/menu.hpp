@@ -21,14 +21,27 @@ namespace fltrdemo {
 /// raw pointer it does not own; the render object clears it on the way out, so
 /// a link to something no longer in the tree reads as unresolved rather than as
 /// a dangling box.
+class RenderAnchor;
+
 class AnchorLink {
 public:
-  fltr::RenderBox* box() const noexcept { return box_; }
+  AnchorLink() = default;
+
+  /// The link and its render object point at each other, and either may go
+  /// first: a link owned by a `State` is destroyed when that State is, which
+  /// happens while the render tree it belongs to is still standing. So both
+  /// ends detach, and neither is left holding an address that has been freed.
+  ~AnchorLink();
+
+  AnchorLink(const AnchorLink&) = delete;
+  AnchorLink& operator=(const AnchorLink&) = delete;
+
+  RenderAnchor* box() const noexcept { return box_; }
   bool resolved() const noexcept { return box_ != nullptr; }
 
 private:
   friend class RenderAnchor;
-  fltr::RenderBox* box_ = nullptr;
+  RenderAnchor* box_ = nullptr;
 };
 
 class RenderAnchor final : public fltr::RenderProxyBox {
@@ -40,6 +53,7 @@ public:
   void setLink(AnchorLink& link);
 
 private:
+  friend class AnchorLink;
   AnchorLink* link_ = nullptr;
 };
 
