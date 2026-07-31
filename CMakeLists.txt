@@ -27,12 +27,19 @@ if(FLTR_ENABLE_CHECKS)
   target_compile_definitions(fltr PUBLIC FLTR_CHECKS=1)
 endif()
 
-set(FLTR_WARNINGS
-  -Wall -Wextra -Wpedantic -Wshadow -Wnon-virtual-dtor
-  # Designated initialisers with omitted trailing fields are the authoring
-  # style; the omitted fields take their in-class defaults by design.
-  -Wno-missing-field-initializers
-)
+if(MSVC)
+  # /permissive- because the authoring style leans on two-phase lookup being
+  # right, and /utf-8 because the sources are UTF-8 and MSVC otherwise guesses
+  # from the system code page.
+  set(FLTR_WARNINGS /W4 /permissive- /utf-8)
+else()
+  set(FLTR_WARNINGS
+    -Wall -Wextra -Wpedantic -Wshadow -Wnon-virtual-dtor
+    # Designated initialisers with omitted trailing fields are the authoring
+    # style; the omitted fields take their in-class defaults by design.
+    -Wno-missing-field-initializers
+  )
+endif()
 target_compile_options(fltr PRIVATE ${FLTR_WARNINGS})
 
 if(FLTR_BUILD_TESTS)

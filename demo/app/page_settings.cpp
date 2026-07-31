@@ -1,5 +1,7 @@
 #include "app/pages.hpp"
 
+#include <iterator>
+
 #include "fltr/widgets/basic.hpp"
 #include "fltr/widgets/reactive.hpp"
 #include "ui/button.hpp"

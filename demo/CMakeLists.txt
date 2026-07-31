@@ -27,13 +27,10 @@ else()
   FetchContent_MakeAvailable(raylib)
 endif()
 
-if(MSVC)
-  # The library's warning set is written for GCC and Clang; /utf-8 is what MSVC
-  # needs to read these sources, which are UTF-8.
-  set(FLTR_DEMO_WARNINGS /W4 /permissive- /utf-8)
-else()
-  set(FLTR_DEMO_WARNINGS ${FLTR_WARNINGS})
-endif()
+# The same set the library builds with, which the top level already chose for
+# this compiler. The demo holds itself to the library's standard rather than to
+# a relaxed one.
+set(FLTR_DEMO_WARNINGS ${FLTR_WARNINGS})
 
 # ---------------------------------------------------------------------------
 # The demo's own UI, which knows nothing about raylib

@@ -1,5 +1,6 @@
 #include "app/pages.hpp"
 
+#include <iterator>
 #include <optional>
 
 #include "fltr/widgets/animated.hpp"

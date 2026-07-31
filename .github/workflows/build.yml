@@ -1,0 +1,141 @@
+# Builds the demo into one executable per platform.
+#
+# Only first-party actions are used (checkout, upload-artifact); everything
+# else is CMake and the compiler the runner already has. raylib is not a
+# dependency of this workflow -- the demo's own CMakeLists finds it or fetches
+# the pinned release, which is what happens on a developer's machine too.
+
+name: build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  demo:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-x86_64
+            os: ubuntu-latest
+            # The C++ runtime goes into the binary, so it does not depend on the
+            # libstdc++ of whatever distribution it lands on. glibc, X11 and GL
+            # stay dynamic on purpose: they are the system's, and a statically
+            # linked GL loader would not find the system's drivers.
+            cmake_args: '-DCMAKE_EXE_LINKER_FLAGS="-static-libgcc -static-libstdc++"'
+
+          - target: macos-universal
+            os: macos-latest
+            # One binary with both slices, so a single file runs on Apple
+            # silicon and on Intel.
+            cmake_args: '-DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0'
+
+          - target: windows-x86_64
+            os: windows-latest
+            # The static CRT, so the executable does not need the Visual C++
+            # redistributable installed.
+            cmake_args: '-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded'
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install the X11 and GL headers raylib's GLFW builds against
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgl1-mesa-dev libx11-dev libxrandr-dev libxinerama-dev \
+            libxcursor-dev libxi-dev
+
+      - name: Configure
+        shell: bash
+        run: >
+          cmake -S . -B build
+          -DCMAKE_BUILD_TYPE=Release
+          -DFLTR_BUILD_DEMO=ON
+          -DFLTR_BUILD_EXAMPLES=OFF
+          ${{ matrix.cmake_args }}
+
+      - name: Build
+        shell: bash
+        run: cmake --build build --config Release --parallel 4
+
+      # Both suites are headless: the library's, and the demo's, which drives
+      # the real pages through the widget harness with no window at all. This is
+      # what makes the macOS and Windows jobs more than a compile check.
+      - name: Test
+        shell: bash
+        run: ctest --test-dir build --build-config Release --output-on-failure
+
+      - name: Stage the executable
+        shell: bash
+        run: |
+          mkdir -p dist
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            cp build/demo/Release/fltr_demo.exe "dist/fltr_demo-${{ matrix.target }}.exe"
+          else
+            cp build/demo/fltr_demo "dist/fltr_demo-${{ matrix.target }}"
+            if [ "$RUNNER_OS" = "macOS" ]; then
+              strip -x "dist/fltr_demo-${{ matrix.target }}"
+            else
+              strip "dist/fltr_demo-${{ matrix.target }}"
+            fi
+          fi
+          ls -l dist
+
+      # The claim on the tin is "one file". These print what the binary actually
+      # needs, and fail if the C++ runtime is not inside it.
+      - name: Show what the binary links against
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          binary="dist/fltr_demo-${{ matrix.target }}"
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            lipo -info "$binary"
+            otool -L "$binary"
+          else
+            ldd "$binary"
+            if ldd "$binary" | grep -q libstdc++; then
+              echo "::error::the C++ runtime is still dynamic"
+              exit 1
+            fi
+          fi
+
+      # A window, a frame, a screenshot: the one place the raylib backend itself
+      # is exercised. Software GL under a virtual display, because a CI runner
+      # has no GPU and no screen.
+      - name: Run it headless
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get install -y --no-install-recommends xvfb
+          LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a -s "-screen 0 1280x800x24" \
+            ./dist/fltr_demo-${{ matrix.target }} \
+            --page servers --frames 45 --overlay --screenshot smoke.png
+          test -s smoke.png
+
+      - name: Upload the screenshot
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v7
+        with:
+          name: screenshot-${{ matrix.target }}
+          path: smoke.png
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: fltr_demo-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
