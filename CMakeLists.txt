@@ -13,6 +13,9 @@ endif()
 option(FLTR_BUILD_TESTS "Build the fltr test suite" ON)
 option(FLTR_BUILD_EXAMPLES "Build the fltr example screens" ON)
 option(FLTR_ENABLE_CHECKS "Enable layout-protocol contract checks" ON)
+# Off by default, and deliberately not a precondition for anything above: the
+# library and its tests configure and build with no network and no raylib.
+option(FLTR_BUILD_DEMO "Build the raylib interactive demo" OFF)
 
 file(GLOB FLTR_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp)
 
@@ -40,6 +43,10 @@ if(FLTR_BUILD_TESTS)
   target_include_directories(fltr_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
   target_compile_options(fltr_tests PRIVATE ${FLTR_WARNINGS})
   add_test(NAME fltr_tests COMMAND fltr_tests)
+endif()
+
+if(FLTR_BUILD_DEMO)
+  add_subdirectory(demo)
 endif()
 
 if(FLTR_BUILD_EXAMPLES)
