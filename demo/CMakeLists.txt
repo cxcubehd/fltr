@@ -49,6 +49,13 @@ add_library(fltr_demo_ui STATIC
   ui/strings.cpp
   ui/scroll.cpp
   ui/drag.cpp
+  ui/button.cpp
+  ui/panel.cpp
+  app/servers.cpp
+  app/page_title.cpp
+  app/page_settings.cpp
+  app/page_servers.cpp
+  app/root.cpp
 )
 target_link_libraries(fltr_demo_ui PUBLIC fltr)
 target_include_directories(fltr_demo_ui PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
@@ -62,6 +69,7 @@ add_executable(fltr_demo
   platform/raylib_text.cpp
   platform/raylib_renderer.cpp
   platform/input.cpp
+  platform/overlay.cpp
   app/main.cpp
 )
 target_link_libraries(fltr_demo PRIVATE fltr_demo_ui raylib)

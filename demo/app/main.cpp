@@ -2,13 +2,20 @@
 #include <cstring>
 #include <iterator>
 
+#include "app/app_state.hpp"
+#include "app/root.hpp"
 #include "fltr/widgets/binding.hpp"
 #include "platform/input.hpp"
+#include "platform/overlay.hpp"
 #include "platform/raylib_renderer.hpp"
 #include "platform/raylib_text.hpp"
 #include "raylib.h"
-#include "ui/drag.hpp"
 #include "ui/theme.hpp"
+
+// `using namespace fltr` is deliberately absent from this file: raylib declares
+// a global `Color`, and this is the one translation unit where the two
+// namespaces meet. Everything under ui/ and app/ is free of raylib and says
+// `using namespace fltr` at the top of the file.
 
 namespace {
 
@@ -27,12 +34,13 @@ const char* const kFontCandidates[] = {
 };
 
 /// A real font, because the demo has to prove the TextService boundary carries
-/// one. No font is vendored: the demo finds one, or falls back to raylib's own
-/// bitmap font, which is still a real font with real per-glyph advances.
-Font loadUiFont(const char* override, bool& owned) {
+/// one. None is vendored: the demo finds one, or falls back to raylib's own
+/// bitmap font -- which is still a real font with real per-glyph advances, so
+/// the layout stays correct and only the looks suffer.
+Font loadUiFont(const char* preferred, bool& owned) {
   const char* paths[1 + std::size(kFontCandidates)] = {};
   std::size_t count = 0;
-  if (override) paths[count++] = override;
+  if (preferred) paths[count++] = preferred;
   for (const char* candidate : kFontCandidates) paths[count++] = candidate;
 
   for (std::size_t i = 0; i < count; ++i) {
@@ -56,65 +64,81 @@ int main(int argc, char** argv) {
   const char* fontPath = nullptr;
   const char* screenshot = nullptr;
   int frameLimit = 0;
+  int startPage = 0;
+  bool overlayOn = false;
   for (int i = 1; i < argc; ++i) {
-    if (std::strcmp(argv[i], "--font") == 0 && i + 1 < argc) fontPath = argv[++i];
-    else if (std::strcmp(argv[i], "--screenshot") == 0 && i + 1 < argc) screenshot = argv[++i];
-    else if (std::strcmp(argv[i], "--frames") == 0 && i + 1 < argc) frameLimit = std::atoi(argv[++i]);
+    if (std::strcmp(argv[i], "--font") == 0 && i + 1 < argc) {
+      fontPath = argv[++i];
+    } else if (std::strcmp(argv[i], "--screenshot") == 0 && i + 1 < argc) {
+      screenshot = argv[++i];
+    } else if (std::strcmp(argv[i], "--frames") == 0 && i + 1 < argc) {
+      frameLimit = std::atoi(argv[++i]);
+    } else if (std::strcmp(argv[i], "--page") == 0 && i + 1 < argc) {
+      startPage = std::atoi(argv[++i]);
+    } else if (std::strcmp(argv[i], "--overlay") == 0) {
+      overlayOn = true;
+    }
   }
 
   SetConfigFlags(FLAG_WINDOW_RESIZABLE | FLAG_MSAA_4X_HINT);
-  InitWindow(1280, 800, "fltr - raylib demo");
+  InitWindow(1280, 800, "fltr - Counter-Strike menu demo");
   SetExitKey(KEY_NULL);
-  SetTargetFPS(0);
 
   bool ownsFont = false;
   const Font font = loadUiFont(fontPath, ownsFont);
 
-  {
-    // The service outlives the binding, both ends: RenderParagraph releases its
-    // handle from a destructor that runs while the element tree is being torn
-    // down. Constructed before, destroyed after -- which the scope makes
-    // structural rather than a comment.
-    fltrdemo::RaylibTextService text;
-    text.setFont(0, font);
+  // The service outlives the binding at both ends: RenderParagraph acquires a
+  // handle during layout and releases it from a destructor that runs while the
+  // element tree is being torn down. Declared before, destroyed after -- which
+  // the nesting makes structural rather than a comment.
+  fltrdemo::RaylibTextService text;
+  text.setFont(0, font);
 
+  {
     fltr::WidgetBinding binding(
         {static_cast<float>(GetScreenWidth()), static_cast<float>(GetScreenHeight())}, text);
     fltrdemo::RaylibRenderer renderer(text);
     fltrdemo::InputPump input;
-    fltrdemo::PointerRouter router;
+    fltrdemo::DebugOverlay overlay(font);
+    overlay.setVisible(overlayOn);
 
-    // `using namespace fltr` is deliberately absent from this file: raylib
-    // declares a global `Color`, and main is the one place where the two
-    // namespaces meet. Everything under ui/ and app/ is free of raylib and says
-    // `using namespace fltr` at the top.
-    binding.attachRoot([] {
-      return fltr::Column::make({
-          .mainAxisAlignment = fltr::MainAxisAlignment::Center,
-          .spacing = 16.0f,
-          .children = {
-              fltr::DecoratedBox::make({
-                  .decoration = {.color = fltr::Color::argb(0xFF2A3326),
-                                 .radius = fltr::BorderRadius::all(4.0f),
-                                 .borderColor = fltr::Color::argb(0xFF6F8163),
-                                 .borderWidth = 1.0f},
-                  .child = fltr::SizedBox::make({.size = {320.0f, 90.0f}}),
-              }),
-              fltr::Text::make({.text = "fltr / raylib", .style = {.size = 32.0f}}),
-          },
-      });
-    });
+    fltrdemo::AppState app;
+    app.surface().set(
+        {static_cast<float>(GetScreenWidth()), static_cast<float>(GetScreenHeight())});
+    if (startPage > 0 && startPage < fltrdemo::kPageCount) {
+      app.goTo(static_cast<fltrdemo::Page>(startPage));
+    }
+    binding.attachRoot([&app] { return fltrdemo::DemoApp::make({.state = &app}); });
 
     int frames = 0;
-    while (!WindowShouldClose()) {
-      input.syncSurface(binding);
-      input.pump(binding, router, 48.0f);
+    while (!WindowShouldClose() && !app.quitRequested()) {
+      // The one point in the frame where nothing can still be holding a
+      // formatted string: every build that mentions one runs inside drawFrame,
+      // below.
+      app.beginFrame();
 
+      input.syncSurface(binding);
+      if (IsWindowResized()) {
+        app.surface().set(
+            {static_cast<float>(GetScreenWidth()), static_cast<float>(GetScreenHeight())});
+      }
+      const fltrdemo::Theme theme = fltrdemo::Theme::forSurface(app.surface().value());
+      input.pump(binding, app.router(), theme.rowHeight() * 3.0f);
+      if (IsKeyPressed(KEY_ESCAPE)) app.goBack();
+      if (IsKeyPressed(KEY_F3)) overlay.toggle();
+
+      const double before = GetTime();
       const fltr::Scene scene = binding.drawFrame(GetFrameTime());
+      const double after = GetTime();
 
       BeginDrawing();
-      ClearBackground(Color{15, 19, 16, 255});
+      ClearBackground(Color{0, 0, 0, 255});
       renderer.submit(scene);
+      // Drawn straight to raylib, after the scene and outside the widget tree:
+      // an overlay that reported the frame's cost by *being* part of the frame
+      // would dirty the tree every frame and never read zero.
+      overlay.draw(binding, app, scene, renderer, text,
+                   static_cast<float>((after - before) * 1000.0));
       EndDrawing();
 
       ++frames;
@@ -124,6 +148,9 @@ int main(int argc, char** argv) {
       }
     }
   }
+
+  // The binding is gone, so every RenderParagraph has released its handle.
+  FLTR_ENSURES(text.liveParagraphs() == 0, "a paragraph handle outlived the widget tree");
 
   if (ownsFont) UnloadFont(font);
   CloseWindow();
