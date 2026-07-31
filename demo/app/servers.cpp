@@ -103,14 +103,13 @@ void ServerBrowser::sortBy(ServerColumn column) {
 }
 
 void ServerBrowser::select(std::uint32_t id) {
-  if (selected_ == id) return;
-  selected_ = id;
-  revision_.set(revision_.value() + 1);
+  // Deliberately not a revision bump: the list did not change.
+  selected_.set(id);
 }
 
 const ServerInfo* ServerBrowser::selectedServer() const noexcept {
   for (const ServerInfo* server : view_) {
-    if (server->id == selected_) return server;
+    if (server->id == selected_.value()) return server;
   }
   return nullptr;
 }

@@ -55,7 +55,11 @@ public:
   bool ascending() const noexcept { return ascending_; }
 
   void select(std::uint32_t id);
-  std::uint32_t selected() const noexcept { return selected_; }
+  /// Observable on its own, so selecting does not disturb the list: every row
+  /// hears about it, the two whose answer changed rebuild themselves, and the
+  /// other two hundred do nothing at all.
+  fltr::ValueListenable<std::uint32_t>& selection() noexcept { return selected_; }
+  std::uint32_t selected() const noexcept { return selected_.value(); }
   const ServerInfo* selectedServer() const noexcept;
 
   /// The filtered, sorted view. Pointers into storage that only `refresh()`
@@ -79,7 +83,7 @@ private:
   ServerTab tab_ = ServerTab::Internet;
   ServerColumn column_ = ServerColumn::Ping;
   bool ascending_ = true;
-  std::uint32_t selected_ = 0;
+  fltr::Observable<std::uint32_t> selected_{0};
   std::uint32_t nextId_ = 1;
   std::uint32_t seed_ = 0x5eed1337u;
   int players_ = 0;

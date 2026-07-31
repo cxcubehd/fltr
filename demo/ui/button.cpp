@@ -41,7 +41,9 @@ public:
                   : (lit || pressed_) ? theme.textBright
                                       : theme.text;
 
-    const float padX = theme.unit() * (widget().kind() == ButtonKind::Menu ? 2.0f : 1.5f);
+    const float padX = theme.unit() * (widget().kind() == ButtonKind::Menu   ? 2.0f
+                                       : widget().kind() == ButtonKind::Tab ? 1.0f
+                                                                            : 1.5f);
     WidgetRef body = AnimatedDecoration::make({
         .decoration = decoration,
         .animation = kHover,
