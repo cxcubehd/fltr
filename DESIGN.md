@@ -1494,6 +1494,19 @@ per-frame delta and no window:
 - No paragraph handle is outstanding once the tree is gone.
 
 Run on a screen as well: three pages at 1280x800, and the same server browser at
-640x480, 1600x420 and 520x900, warning-clean under the library's warning set on
-GCC 13.3. macOS and Windows are written for but unverified, which `demo/README.md`
-says out loud.
+640x480, 1600x420 and 520x900, warning-clean under the library's warning set.
+
+Since `.github/workflows/build.yml` exists, all of this is also run on Linux,
+macOS and Windows on every push -- both suites on all three, and the window
+itself on Linux under a virtual display. The first Windows run paid for itself
+immediately by failing with a heap corruption where Linux had been silent: a
+test's vector of records outlived by the harness that wrote to it during
+teardown, and, once ASan was pointed at the demo as well, a render object
+reading an `AnchorLink` owned by a `State` that had already been destroyed.
+
+The second one is worth keeping in mind when writing a render object: a `State`
+is destroyed while the render tree it belongs to is still standing, so anything
+a render object points at that a `State` owns needs both ends to detach. The
+demo's own `main` had the same ordering wrong for the whole of `AppState`, which
+is why it is now declared before the binding -- the same rule the text service
+was already following.

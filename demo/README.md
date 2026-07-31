@@ -56,14 +56,33 @@ sudo dnf install gcc-c++ cmake mesa-libGL-devel libX11-devel libXrandr-devel \
 
 ### Platforms
 
-Verified here: **Linux, GCC 13.3, x86-64**, both windowed and headless (under
-`xvfb-run` with software GL), warning-clean with the library's warning set.
+All three are built and tested on every push by `.github/workflows/build.yml`,
+which is where the claims below come from:
 
-Not verified here: macOS and Windows/MSVC. The demo is written to build on
-both — C++23, no POSIX calls, no compiler-specific attributes outside a
-`printf`-format annotation that is guarded, MSVC's warning set wired up in
-`CMakeLists.txt` — but "should" is not "did", and this file will say so until
-someone runs it.
+| | builds | both test suites | opens a window |
+| --- | --- | --- | --- |
+| Linux x86-64 (GCC) | yes | yes | yes, under `xvfb-run` with software GL |
+| macOS universal (Apple Clang) | yes | yes | not on a CI runner |
+| Windows x86-64 (MSVC) | yes | yes | not on a CI runner |
+
+The demo's test suite is headless — it drives the real pages through the widget
+harness — so "tested" on macOS and Windows means the whole framework and the
+whole demo minus the raylib backend. The backend itself is exercised on Linux,
+where the workflow runs the built binary and takes a screenshot.
+
+Each job produces one executable, and each is as self-contained as its platform
+allows:
+
+- **Linux** — the C++ runtime is linked in, so the binary does not depend on the
+  distribution's libstdc++. glibc, X11 and GL stay dynamic: they belong to the
+  system, and a statically linked GL loader could not find the system's drivers.
+  The job fails if `ldd` still shows libstdc++.
+- **macOS** — one binary with both the arm64 and the x86_64 slice, against the
+  system frameworks and libc++ only.
+- **Windows** — the static CRT, so no Visual C++ redistributable is needed.
+
+Locally, the demo has also been run at 640x480, 1600x420 and 520x900 to check
+that the layout is a layout and not a set of coordinates.
 
 ## Running it
 
