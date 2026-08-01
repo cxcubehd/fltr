@@ -2346,7 +2346,7 @@ half off it is never what was wanted.
 
 ### What is verified
 
-`tests/test_overlay.cpp`, 18 tests:
+`tests/test_overlay.cpp`, 19 tests:
 
 - An entry paints after the base and is offered the pointer before it, while
   the base still answers everywhere the entry is not.
@@ -2367,6 +2367,9 @@ half off it is never what was wanted.
   confirmed by removing the notification and watching this one test fail.
 - An anchor moved without laying out leaves its entry where it was, and
   `markMoved` puts it right.
+- An entry with a focus scope of its own keeps the keyboard to itself, and
+  hands it back to the screen's scope when it closes -- M11's answer, reached
+  from an overlay.
 - An entry destroyed part way through the build that would have rebuilt it is
   not called into -- the test that found the pointer-shaped host's
   use-after-free, and still the one that would find it again.
@@ -2467,5 +2470,5 @@ was showing and resumes when it is shown again.
 - A frame of exit animation builds nothing and allocates nothing.
 
 Verified on GCC 13.3 and Clang 18.1 with zero warnings under `-Wall -Wextra
--Wpedantic -Wshadow -Wnon-virtual-dtor`, and under ASan + UBSan: 374 tests,
-2067 checks. The library also compiles clean with `FLTR_ENABLE_CHECKS=OFF`.
+-Wpedantic -Wshadow -Wnon-virtual-dtor`, and under ASan + UBSan: 375 tests,
+2075 checks. The library also compiles clean with `FLTR_ENABLE_CHECKS=OFF`.

@@ -5,6 +5,7 @@
 
 #include "fltr/harness.hpp"
 #include "fltr/widgets/binding.hpp"
+#include "fltr/widgets/focus.hpp"
 #include "fltr/widgets/overlay.hpp"
 #include "widget_harness.hpp"
 
@@ -476,6 +477,68 @@ TEST(overlay_an_entry_put_back_builds_a_fresh_subtree) {
   // resume the State it had.
   CHECK_EQ(life.inits, 2);
   CHECK_EQ(life.disposes, 1);
+}
+
+TEST(overlay_an_entry_can_keep_the_keyboard_to_itself) {
+  Harness h(kSurface);
+  OverlayState* overlay = nullptr;
+  FocusScopeNode screen;
+  FocusScopeNode menu;
+  FocusNode behind;
+  FocusNode first;
+  FocusNode second;
+
+  const auto item = [](FocusNode* node, bool autofocus = false) {
+    return Focus::make({
+        .node = node,
+        .autofocus = autofocus,
+        .child = SizedBox::make({.size = {40, 20}}),
+    });
+  };
+
+  OverlayEntry entry([&](BuildContext&) {
+    // A scope of its own is all a menu needs to trap traversal, which is M11's
+    // property reached from an overlay rather than from the tree below it.
+    return FocusScope::make({
+        .node = &menu,
+        .child = Column::make({
+            .mainAxisSize = MainAxisSize::Min,
+            .children = {item(&first, true), item(&second)},
+        }),
+    });
+  });
+
+  ScriptedRoot root(h, [&] {
+    return FocusScope::make({
+        .node = &screen,
+        .child = Overlay::make({
+            .child = Probe::make({.found = &overlay, .child = item(&behind, true)}),
+        }),
+    });
+  });
+  h.frame();
+  CHECK(behind.hasPrimaryFocus());
+
+  overlay->insert(entry);
+  h.frame();
+  CHECK(first.hasPrimaryFocus());
+
+  h.binding().dispatchKey({.type = KeyEventType::Down, .logical = LogicalKey::Tab});
+  CHECK(second.hasPrimaryFocus());
+  h.binding().dispatchKey({.type = KeyEventType::Down, .logical = LogicalKey::Tab});
+  CHECK(first.hasPrimaryFocus());
+
+  // Closing it leaves the focus on the screen's own scope -- M11's answer for a
+  // focused subtree going away -- so the next key moves within the screen again
+  // rather than into something that is gone.
+  entry.remove();
+  h.frame();
+  CHECK(!menu.attached());
+  CHECK(!first.hasFocus());
+  CHECK(screen.hasFocus());
+
+  h.binding().dispatchKey({.type = KeyEventType::Down, .logical = LogicalKey::Tab});
+  CHECK(behind.hasPrimaryFocus());
 }
 
 // ---------------------------------------------------------------------------
