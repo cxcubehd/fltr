@@ -13,9 +13,9 @@ drags, a field they can type into, a list that keeps its scroll position. We
 have none of those, and — more importantly — we are missing several of the
 *mechanisms* they are built out of, not just the widgets themselves.
 
-This document inventories what is missing, evaluates each candidate against
-what it costs and what it unblocks, and proposes an order. It does not commit
-to a scope: the final milestone list is chosen from the options at the end.
+This document inventories what is missing and evaluates each candidate against
+what it costs and what it unblocks. The scope chosen out of that evaluation is
+recorded at the end, as milestones 9 through 15.
 
 The rule from `INSTRUCTIONS.md` still stands and is restated here because this
 phase is where it will be most tempting to break it: **be parallel to Flutter
@@ -612,44 +612,79 @@ ride along with whichever milestone has room.
 
 ---
 
-## Recommended shape
+## The committed plan
 
-If the goal is "usable as fast as possible without leaving debt", the ordering
-that gets there is:
+Decided. Milestones 9 through 15, in this order. Each is independently
+verifiable before the next begins, as in phase one.
 
-- **M9 — Input foundations.** A, plus surgery items 1, 2, 6, 7. Small, and
-  everything else is gated on it.
-- **M10 — Scrolling.** B and G, with the smooth-wheel divergence; probably C
-  as well, since the stretch is nearly free once the position exists.
-- **M11 — Focus and keyboard.** D, including directional traversal.
-- **M12 — Component behaviours.** E, plus the `IgnorePointer`/`AbsorbPointer`
-  half of I that it needs.
-- **M13 — Catalogue and text polish.** The rest of I, plus H and K.
-- **M14 — Integration screens.** The original milestone 9: a HUD, a scoreboard,
-  and now a settings menu that scrolls and has real controls — which is the
-  only honest test of whether any of this is actually usable.
+**M9 — Input foundations.** Workstream A, plus surgery items 1, 2, 6 and 7.
+Drag recognizers with slop, a real velocity tracker, long press, double tap,
+pointer signals for wheel and trackpad pan, mouse-cursor requests, buttons and
+modifiers on `PointerEvent`, a key-event surface on `WidgetBinding`, and
+`applyPaintTransform` / `getTransformTo` on `RenderObject`. Small, and
+everything below is gated on it.
 
-with F (lazy children), J (overlay and exit animations) and M (text editing)
-picked up afterwards, in whichever order the first real screen demands.
+**M10 — Scrolling.** Workstreams B, G and C together. `ScrollPosition`,
+activities, physics as a policy object, friction/spring/clamping/bouncing
+simulations, a consumer-owned `ScrollController`, drag-to-fling, smooth wheel
+against an accumulating target, overscroll stretch through the existing
+render-attached transform path, a raw scrollbar, and `ensureVisible`.
 
----
+**Non-lazy box viewport only.** One child, unbounded main axis, painted at a
+negative offset inside a clip — the same choice Flutter made for
+`SingleChildScrollView`. No build-during-layout, no hole in phase separation,
+no arena-lifetime change. Position, physics, activities, controller, wheel,
+overscroll and scrollbar are all identical whether or not children are lazy, so
+workstream F stays available later without revisiting any of M10. The accepted
+cost, stated plainly: a scroll view builds and lays out every child once, so a
+few hundred children are fine and a few thousand are not.
 
-## Open decisions
+**M11 — Focus and keyboard.** Workstream D, including directional traversal for
+D-pad and stick. Before components, deliberately: every component is then
+written once, with keyboard activation, focus state and gamepad navigation
+designed in rather than retrofitted. This is slower to the first visible
+button and correct.
 
-These change the plan materially and are not mine to make:
+**M12 — Component behaviours.** Workstream E. `WidgetStates` and its
+controller, then `RawButton`, `RawToggle` (checkbox, switch, radio),
+`RawSlider`, `RawProgress`, and whatever list-item behaviour the first menu
+needs. Behaviour, hit regions, focus and keyboard only — no style. Resolve the
+builder-versus-observable call-site question at the start of this milestone,
+not during it. Pulls in the `IgnorePointer` / `AbsorbPointer` piece of
+workstream I, which the disabled state needs.
 
-1. **How much lands in the next milestone** — the whole input+scrolling block,
-   or a narrower slice.
-2. **Lazy children.** Non-lazy box viewport only (cheap, fine to a few hundred
-   children), reduced lazy list (moderate, needs build-during-layout), or the
-   full sliver protocol (expensive, buys pinned headers and mixed scrolling).
-3. **Focus before or after components.** Pointer-only components ship sooner
-   but get touched twice; focus-first is slower to first visible result and
-   means gamepad and keyboard work from day one.
-4. **How far the component layer goes** — behaviour-only, or behaviour plus
-   one worked example skin in the tests so consumers have something to copy.
-5. **Text editing in this phase or the next**, and if this phase, whether it
-   is scoped to single-line without IME.
-6. **Overlay and exit animations** — the overlay alone is cheap; retaining a
-   removed subtree until it finishes animating is the expensive half and can
-   be split off.
+**M13 — Overlay and portals.** The cheap half of workstream J: an overlay layer
+painted and hit-tested above the main tree, entries insertable from anywhere,
+and anchoring an entry to a widget's rectangle — which is why surgery item 1
+lands in M9. Unblocks tooltips, dropdowns, context menus, and the ghost that
+drag-and-drop needs.
+
+**M14 — Exit animations.** The expensive half of workstream J, and the item
+`INSTRUCTIONS.md` warned about by name: the element tree retains a removed
+subtree, still mounted and still ticking, until its animation completes.
+Separate from M13 because it is the only item in this phase that touches
+reconciliation, and it should be able to fail without taking the overlay with
+it.
+
+**M15 — Integration screens.** The original milestone 9, now worth more: a HUD,
+a tab scoreboard, and a settings menu that scrolls, has real controls, is fully
+navigable by gamepad, and animates its panels in and out. The only honest test
+of whether any of this is usable.
+
+### Deferred, with the reason
+
+- **Lazy children and slivers (F).** Revisit when a target screen genuinely has
+  thousands of rows. Prefer the reduced lazy list over the full sliver protocol
+  when that day comes.
+- **Text editing (M).** Not in this phase. One thing is still owed now:
+  extending `TextService` with byte-to-caret, range boxes and cluster
+  boundaries is cheap today and a breaking change later, so it should land
+  whenever the interface is next touched, ahead of any implementation.
+- **The layout catalogue and text polish (H, I, K).** Not a milestone. The rule
+  from `INSTRUCTIONS.md` applies unchanged — *add widgets when a target screen
+  needs them, not speculatively* — so `Center`, a `Container`-equivalent,
+  `Wrap`, a grid, aligned columns for the scoreboard, rich text spans, an
+  ambient `DefaultTextStyle` and baseline flex alignment get pulled in by
+  whichever milestone first needs them, and M15 will need several. The only
+  pieces with a fixed home are `IgnorePointer` / `AbsorbPointer` in M12.
+- **Everything in section L**, unchanged.
