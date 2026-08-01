@@ -242,7 +242,7 @@ public:
 
   std::size_t size() const noexcept { return size_; }
   const Shortcut* begin() const noexcept { return items_; }
-  const Shortcut* end() const noexcept { return items_ + size_; }
+  const Shortcut* end() const noexcept { return items_ ? items_ + size_ : items_; }
 
 private:
   const Shortcut* items_ = nullptr;
