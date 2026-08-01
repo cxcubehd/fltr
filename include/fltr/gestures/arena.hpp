@@ -37,6 +37,13 @@ public:
   /// Forces a decision on pointer up: the first member still standing wins.
   void sweep(PointerId pointer);
 
+  /// Defers the sweep. A recognizer whose gesture is not over when the pointer
+  /// comes up -- a double tap waiting for the second one -- holds the arena so
+  /// the sweep cannot award it to a contender in the meantime.
+  void hold(PointerId pointer);
+  /// Ends a hold, performing the sweep that arrived while it was in effect.
+  void release(PointerId pointer);
+
   /// Drops the arena without awarding it, telling anyone still contending that
   /// they lost. A cancelled pointer leaves nothing behind whether or not every
   /// member withdrew itself on the way through.
@@ -57,6 +64,8 @@ private:
   struct Entry {
     PointerId pointer = 0;
     bool closed = false;
+    bool held = false;
+    bool pendingSweep = false;
   };
   /// One membership. Held in a flat list shared by every arena rather than a
   /// vector per pointer, so resolving a gesture returns storage to the arena

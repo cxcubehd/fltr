@@ -1,6 +1,7 @@
 #include "fltr/gestures/recognizer.hpp"
 
 #include "fltr/gestures/tap.hpp"
+#include "fltr/render/box.hpp"
 
 namespace fltr {
 
@@ -8,14 +9,20 @@ GestureRecognizer::~GestureRecognizer() {
   // Routes first: nothing may reach an object whose derived half is already
   // gone. Withdrawing from the arena calls nothing back, by design.
   binding_->removeRoutes(*this);
+  binding_->cancelTimeouts(*this);
   binding_->arena().remove(*this);
 }
 
 void GestureRecognizer::addPointer(const PointerEvent& down) {
   FLTR_EXPECTS(down.phase == PointerPhase::Down, "addPointer expects a pointer-down event");
+  if (!down.buttons.hasAny(allowedButtons)) return;
   binding_->addRoute(down.pointer, *this);
   binding_->arena().add(down.pointer, *this);
   handleEvent(down);
+}
+
+Offset GestureRecognizer::toLocal(Offset global) const {
+  return space_ ? space_->globalToLocal(global) : global;
 }
 
 void GestureRecognizer::stopTracking(PointerId pointer) {

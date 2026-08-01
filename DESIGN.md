@@ -1358,3 +1358,444 @@ build is left, the way `PipelineOwner::PhaseScope` already does for the pipeline
 Verified on GCC 13.3 and Clang 18.1, and under ASan + UBSan: 207 tests, 1245
 checks. The library and the animation headers also compile clean with
 `FLTR_ENABLE_CHECKS=OFF` on both compilers.
+
+---
+
+## Milestone 9 — input foundations
+
+Everything M10 through M12 needs from the pointer and the keyboard, and nothing
+that reads from either. Scrolling wants drag, velocity and the wheel; the
+component layer wants long press, double tap, cursors and buttons; focus wants a
+key surface; and all three want to ask a render object where it is.
+
+### Time enters the gesture layer through the frame
+
+M5 recorded that a contested tap could not show press feedback early "because
+that needs a clock, and nothing in this layer has one". A long press has the same
+problem in a sharper form: no pointer event arrives while a finger rests, so
+nothing but a clock can ever fire it.
+
+DIVERGENCE: Flutter stamps every `PointerEvent` with a platform timestamp and
+schedules recognizer deadlines on `Timer`. `PointerBinding` instead owns a single
+monotonic value that `WidgetBinding::drawFrame` advances by the frame's elapsed
+seconds, and recognizers both measure durations and set deadlines against it.
+Three things follow:
+
+- there is one clock, so a deadline and a velocity sample cannot disagree about
+  when something happened;
+- a test makes a long press fire by passing `0.6f` to a frame, with no wall time
+  and no flake — the same bargain the ticker already makes;
+- a game pumps its input queue at a frame boundary anyway, so a per-event
+  timestamp would usually be the frame's timestamp with extra steps.
+
+The cost is resolution: a deadline lands on the next frame boundary rather than
+exactly, and several events between two frames share one instant. The second is
+the one that matters, because it is what the velocity tracker sees, so
+`addSample` *replaces* a sample whose time is unchanged rather than adding a
+second one — otherwise one instant would be weighted by however many events the
+consumer happened to pump into it. If sub-frame timestamps are ever wanted,
+adding one to `PointerEvent` is additive and nothing above has to change.
+
+`needsFrame()` is true while any deadline is pending, so a consumer that draws
+only when asked still fires long presses.
+
+### Velocity is fitted, not differenced
+
+`VelocityTracker` keeps twenty samples in a ring, discards anything more than
+100ms older than the newest, and fits a degree-2 polynomial per axis by solving
+the 3x3 normal equations, taking the slope at the moment of release. This is
+Flutter's approach and it is worth the arithmetic: a finger that decelerates into
+a release produces a large *final* delta, and a two-sample difference turns that
+into a fling the hand did not throw. The test for it holds the pointer still for
+the last three samples and asserts the estimate falls under the fling threshold.
+
+The fit also reports confidence — how much of the variance it explains — so a
+gesture that reversed mid-flight is distinguishable from one that did not. Below
+three distinct samples, or with a singular system, it falls back to the secant
+over the window, which is all the evidence supports.
+
+### A render object can finally say where it is
+
+The gap surgery item 1 named: `visitChildrenWithOffsets` walks down, hit testing
+resolves positions on the way down, and nothing walked up. `RenderObject` now has
+Flutter's pair — `applyPaintTransform(child, transform)` and
+`getTransformTo(ancestor)` — plus `localToGlobal`, `globalToLocal` and a rect
+form, with a null ancestor meaning the root.
+
+The default `applyPaintTransform` reads the child's offset out of
+`visitChildrenWithOffsets`, so every shifting object in the framework — padding,
+alignment, flex, stack — got it right without being touched. Only
+`RenderTransform` overrides it, and it now derives painting, hit testing and the
+ancestor walk from one `childTransform()`, so the three cannot disagree about
+where the pivot is. The cost, recorded rather than hidden: the default is a
+linear scan of the parent's children per level, where Flutter's parent-data
+pointer is O(1). `getTransformTo` is therefore O(depth x siblings), which is
+fine for the handful of calls per gesture that use it and would not be fine per
+frame per node.
+
+**This lifts the M5 limitation.** `HitTestResult` still records resolved local
+positions rather than transforms, and still should — but a recognizer no longer
+needs the path to answer "where is this in my own space". It asks the region that
+owns it, which walks up. A drag inside a scaled or rotated subtree now reports
+correct local positions, and there is a test that drives one through a 2x scale.
+
+### Signals do not enter the arena
+
+A wheel notch is not contested: the pointer is not pressed and no gesture is
+forming. `dispatchSignal` hit tests, then offers the signal to each region
+innermost-first until one returns true, and reports whether any did — so a
+consumer whose UI declined the wheel can scroll its own world with it. This is
+what a browser does when a list scrolled to its end lets the page move, and it is
+what M10 will hang smooth wheel scrolling on. It is the second hit-testing entry
+point `PointerBinding` grew; the per-frame hover resolution was the first.
+
+### The arena learned to be held
+
+A double tap has to survive the first tap's *up*, and the sweep that up triggers
+would award the pointer to whoever else is contending. `GestureArena::hold` and
+`release` defer the sweep, exactly as Flutter's do. The visible consequence,
+which is Flutter's too: a region with both `onTap` and `onDoubleTap` fires its
+single tap one double-tap timeout late, because until that timeout elapses the
+first tap may still turn out to be half of one. The test says so in its name.
+
+### Recognizers are created on demand
+
+`RenderPointerRegion` previously held a `TapGestureRecognizer` by value. With
+four recognizer kinds that would make every region pay for all of them, so each
+now lives behind a `unique_ptr` created when a callback wants it and destroyed
+when none does. `recognizerCount()` makes "a region that only asks for a cursor
+holds nothing" a number a test reads rather than a claim.
+
+The same region carries the cursor. `MouseTracker` resolves the innermost hovered
+region with an opinion, `Defer` being the absence of one, and `Basic` when
+nothing under the pointer has any. The consumer reads `WidgetBinding::cursor()`
+once a frame and applies it, since it owns the window.
+
+### Two behaviours worth pinning down because they surprise people
+
+Both are Flutter's, and both are tests rather than comments:
+
+- **An uncontested drag begins at the down.** An arena with one member resolves
+  the moment it closes, so a region whose only gesture is a drag starts dragging
+  before anything has moved. That is what a scroll view wants — content follows
+  the finger from the first pixel — and the slop only exists once something
+  competes.
+- **`DragStartBehavior::Start` swallows the travel before the accepting event,
+  not the accepting event's own delta.** With input at 60Hz or better the
+  residual is a few pixels. The two settings are tested with the same event
+  sequence so the difference between them is exactly the ten pixels one of them
+  swallows.
+
+### DIVERGENCE: one drag recognizer with an axis
+
+Flutter has `VerticalDragGestureRecognizer`, `HorizontalDragGestureRecognizer`
+and `PanGestureRecognizer` as three classes. What differs between them is which
+distance is compared against which slop and which component is reported, so this
+is one recognizer with a `DragAxis`. The arena behaviour is identical, and a
+widget that has to choose at runtime instantiates one type instead of three.
+
+A constrained drag also reports only its own axis, so a consumer never has to
+remember to discard the other one.
+
+### The keyboard is a surface, not routing
+
+`KeyboardBinding` holds what is physically held, the current modifiers, and an
+ordered list of handlers, each of which may consume an event. There is no notion
+of focus in it: M11's focus manager will register as one more handler, which is
+what keeps a tree with no focus scope in it holding nothing.
+
+The held-key set earns its place on its own — a game reads it directly for
+movement, where an event stream is the wrong shape — and `clearPressed()` covers
+losing the window, where the ups will never arrive.
+
+Physical and logical keys are separate enums, as in Flutter and for the same
+reason: movement binds to the position so WASD survives AZERTY, while a shortcut
+binds to the meaning. The produced code point travels on the event rather than
+being derived from the key, because which one it is depends on the layout and the
+IME, both of which live on the consumer's side.
+
+### What is verified
+
+- A nested box maps its own space into an ancestor's, and stopping at an
+  intermediate ancestor answers in that ancestor's space.
+- The ancestor walk and hit testing agree through a scale, having derived the
+  matrix from the same place; a degenerate transform reports the origin rather
+  than a wrong point.
+- Velocity is fitted over a window: a pointer that stopped before release is not
+  a fling, samples sharing an instant are merged rather than weighted twice, and
+  samples outside the horizon are not evidence.
+- A contested drag waits for the slop and an uncontested one does not; a tap
+  inside a draggable region is still a tap; dragging out of a tappable one
+  cancels the tap and keeps the drag; nested drags are decided by which axis
+  cleared its slop first.
+- A drag inside a scaled subtree reports its own space.
+- A long press fires from the clock while the pointer holds still, lifting early
+  is a tap instead, drifting abandons it, and the deadline is withdrawn with the
+  gesture.
+- Two taps in the same place are a double tap; one too late is two single taps,
+  the first of them delayed by exactly the timeout; one too far away is neither.
+- A signal is offered innermost-first, chains outward when declined, is reported
+  unconsumed when nothing wants it, and never enters the arena.
+- The innermost region with an opinion decides the cursor; recognizers appear and
+  disappear with the callbacks that want them; a cursor-only region holds none.
+- A gesture answers only to the buttons it was given, so a secondary-button menu
+  and a primary-button tap coexist on overlapping regions.
+- A handler that consumes a key ends the walk; modifiers and the produced
+  character travel with the event; losing the window releases everything held.
+- A steady frame with a drag in flight allocates nothing, and neither does a
+  frame that fires a deadline — which is why the deadline list is partitioned and
+  insertion-sorted by hand rather than with `std::stable_partition` and
+  `std::stable_sort`, both of which take a temporary buffer from the heap.
+- A tree with nothing pending asks for no frames, and one with a press pending
+  asks for them until it fires.
+
+Verified on GCC 13.3 and Clang 18.1, and under ASan + UBSan: 246 tests, 1361
+checks. The library also compiles clean with `FLTR_ENABLE_CHECKS=OFF`.
+
+---
+
+## Milestone 10 — scrolling
+
+The centrepiece of this phase, and the first subsystem that spends M9 rather
+than building on it: the velocity tracker feeds the fling, `dispatchSignal`
+returning a bool is the wheel path, and `getTransformTo` is what makes
+`ensureVisible` answerable.
+
+### Scrolling is a paint operation, and that is measured
+
+`RenderViewport` lays its child out once with the scroll axis released, then
+*paints* it at a negative offset inside a clip. The offset reaches painting and
+hit testing and nothing else, so moving it runs no layout at all. The viewport
+observes the position through `observeForPaint` — the render-attached path M7
+built — and is itself a repaint boundary with the scrolled content wrapped in
+another, so a frame of scrolling re-records exactly three commands: the clip,
+one `DrawList` referring to the content, and the pop. There is a test that
+counts them, and one that asserts `layouts == 0` and `buildCount == 0` for a
+frame that moved the offset.
+
+Hit testing needs no clipping of its own: `RenderBox::hitTest` has already
+rejected anything outside the viewport's own bounds before the child is asked.
+
+### Physics is a policy object, and owns no state
+
+`ScrollMetrics` is what the rules are allowed to see — four numbers — and
+`ScrollPhysics` answers three questions about them: how much of a user's push
+becomes offset, how much of a proposed offset the boundary refuses, and what
+simulation a release implies. Because an instance holds nothing, the framework
+ships them as shared constants and a consumer that wants its own writes one and
+hands out a pointer. Nothing allocates a physics object per scrollable, and
+`defaultScrollPhysics()` is a function-local static.
+
+DIVERGENCE: Flutter composes physics by chaining (`AlwaysScrollableScrollPhysics
+().applyTo(BouncingScrollPhysics())`), with each override delegating to a
+parent. We do not. The cost is that mixing two behaviours means writing a class
+that does both rather than composing two that each do one; the benefit is that
+`physics->applyBoundaryConditions(...)` is one virtual call rather than a chain
+whose length is a runtime property.
+
+### The four simulations, and where `Simulation` lives
+
+`AnimationDriver` is normalized 0..1 over a duration. A simulation is unbounded
+in value and ends by tolerance, so `Simulation` stands *alongside* the driver in
+`animation/` rather than changing it — which is what workstream G asked for, and
+what a spring-based implicit animation would reuse later without touching
+scrolling.
+
+All four are Flutter's, in closed form rather than integrated, so a frame is a
+handful of transcendentals with no accumulated error:
+
+- **friction** — exponential decay, the iOS fling and the first half of the
+  bouncing one. It can also answer `finalX` and `timeAtX`, which is how the
+  bouncing simulation knows when to hand over without integrating to find out.
+- **spring** — the three damping cases solved separately, with
+  `withDampingRatio` naming the useful parameter rather than the raw one.
+- **clamping** — Android's power-law curve over a finite duration, kept with its
+  original constants so it is recognisably the platform's rather than an
+  approximation of it. Unlike the others it genuinely *stops*.
+- **bouncing** — friction until it reaches the edge, then a spring that inherits
+  the friction's velocity (capped, or an unclamped transfer throws the content
+  most of a screen past the end) and pulls it back.
+
+A fling allocates one simulation. That is once per gesture, not once per frame,
+and the test that a frame of fling allocates nothing measures the part that
+matters.
+
+### DIVERGENCE: activities are a value with a tag, not a hierarchy
+
+Flutter models idle, drag, ballistic and driven scrolling as `ScrollActivity`
+subclasses a consumer can extend. This is one `Activity` value with a
+`ScrollActivityKind` and the fields each mode needs, and `tick` is a switch.
+
+Two reasons. The set is closed — there is no extension point for activities
+anywhere in this framework, so the polymorphism would buy nothing. And a
+hierarchy allocates on every transition, where this allocates only for the
+ballistic simulation: beginning a drag, taking a wheel notch, or going idle
+costs nothing at all, which is what the steady-state rule wants from the two
+that happen during a gesture.
+
+The cost, stated: adding a sixth mode edits a switch rather than adding a class,
+and a consumer cannot supply an activity of its own.
+
+### Smooth wheel, against a target that keeps moving
+
+Flutter applies a wheel delta to `pixels` immediately — a jump per notch. The
+wheel activity holds a *target* instead: each notch adds to it, clamped by the
+range, and each frame closes on it by `1 - exp(-dt/tau)`.
+
+The exponential is not decoration. Our clock is a consumer-supplied variable
+delta, so a fixed-duration tween would be wrong at any other frame rate, and
+notches keep arriving mid-flight — which is the same "retarget from the current
+value rather than restarting" requirement M7 met for `AnimationDriver`, applied
+to a different quantity. A test spins the wheel twice with a frame in between
+and asserts the two notches land on one target rather than the second one
+restarting from where the first had got to.
+
+Trackpad pans are not notches: they are already physical displacements, so
+`PointerSignalKind::Pan` is applied directly with no easing.
+
+**Not done, with the reason.** The brief asked for a fling from a trackpad pan's
+own velocity. `PointerSignalEvent` has no phase, so nothing in the surface says
+when a pan *ended*, and a fling has no moment to start at. The fix is one field
+— Flutter has `PointerPanZoomStart/Update/End` — and it is additive; nothing
+above would change. Pan therefore scrolls but does not throw.
+
+### `ensureVisible`, and what surgery item 1 bought
+
+`RenderViewport::offsetToReveal` maps the target's paint bounds into the
+viewport's space with `localToGlobalRect(bounds, viewport)` — the M9 ancestor
+walk — and adds the current offset to convert back into content space. That last
+step is what makes the answer independent of where the view already is, which a
+test pins by asking from two different offsets and getting the same number.
+
+`alignment` is 0 for the leading edge and 1 for the trailing one. Flutter's
+`ScrollPositionAlignmentPolicy` (keep-visible-at-start / at-end) is not here;
+M11's directional traversal is what will want it, and it is a policy on top of
+this, not a change to it.
+
+### DIVERGENCE: no `ScrollNotification`
+
+The principle stated at the top of this phase, now paid for. Flutter bubbles
+scroll and overscroll notifications up the element tree as a second dispatch
+path. We do not add one, and everything *inside* the scrollable reads the
+position from `ScrollScope` in O(1) with subscription lifetimes that are already
+correct.
+
+The consequence is real and lands squarely on the two indicators: a scrollbar
+and an overscroll stretch have to be drawn *outside* the scrollable, and an
+ancestor cannot passively observe a descendant. So they are handed a
+`ScrollController` — the object that already exists for reaching a scroll view
+from outside — and they watch it, not just the position it holds, because it has
+none until the scrollable below has built. `NestedScrollView`-style coordination
+stays off the table until something wants it.
+
+### Two objects that know each other, and clear the link
+
+`ScrollController` and `ScrollPosition` hold each other, and each nulls the
+other's pointer in its destructor. So does `RenderViewport` with the position.
+This is not defensive coding: a consumer's controller is a local whose scope
+ends in whatever order it happens to end in relative to the tree that used it,
+and the first version of this got a use-after-free at teardown that only the
+UBSan build caught. `RenderScrollbarThumb` uses the subscription itself as the
+liveness token, which is the same idea spelled with the mechanism M6 already
+provides.
+
+### Overscroll is what the boundary refused
+
+Under clamping physics the offset never leaves its range, so there is nothing in
+`pixels` for a stretch to read. `ScrollPosition` therefore accumulates what
+`applyBoundaryConditions` refused into `overscroll()` — saturating, so leaning on
+an edge approaches a limit rather than winding up — and lets it decay once no
+finger is holding it.
+
+That makes the indicator a pure function with no state of its own: it scales the
+view by `1 + fraction * maxStretch` along the scroll axis, anchored at the edge
+*opposite* the one being pushed, as Flutter's `StretchingOverscrollIndicator`
+does. The scale is an `Observable<Transform2D>` the `Transform` render object
+subscribes to, so a frame of stretching repaints one object and rebuilds
+nothing; only the pivot lives in the widget, and it changes once per overscroll
+episode rather than once per frame.
+
+Physics that let the offset leave its range produce no refusal and therefore no
+stretch. That is deliberate: bouncing and stretching are two treatments of the
+same event, and showing both at once would double-count. There is a test for
+each half.
+
+### The scrollbar
+
+Behaviour and geometry, no style. `ScrollbarGeometry::resolve` is the whole of
+the mathematics — thumb extent from the visible fraction with a floor a pointer
+can actually hold, thumb position from how far through the range the offset is —
+and both the render object that paints it and the state that interprets a drag
+read the same function, so they cannot disagree about where the thumb is.
+
+`RenderScrollbarThumb` observes the position for paint, so scrolling moves the
+thumb with no rebuild. The track strip is an opaque pointer region rather than
+the thumb itself: an auto-hiding bar that only answered to the pointer while
+visible could never be revealed. A press on the track away from the thumb is not
+a grab, so the offset does not leap to wherever the pointer landed.
+
+The fade-out needs a delay, and neither the driver nor the gesture clock has
+one, so the state counts idle seconds on a `Ticker` of its own and reverses the
+fade when the count passes. It stops that ticker when the fade completes, which
+is what lets `needsFrame()` go quiet again.
+
+### The lifecycle wrinkle worth writing down
+
+An indicator wrapping a scrollable is built *first*, so its controller has no
+position yet, and the attach that happens while its own subtree is mounting
+arrives in a later build generation — by which point the `WidgetRef` it holds
+for its child belongs to a released arena.
+
+The framework already handles that (`updateChild` skips a stale ref whose
+element is unchanged), but only if the child stays in the same slot. So
+`Scrollbar` builds its `Stack` unconditionally and puts a null in the track's
+place until there is something to draw, rather than switching between "just the
+child" and "a stack". Any widget whose shape depends on state that arrives after
+its first build has this constraint; it is cheap to satisfy and expensive to
+discover.
+
+### Non-lazy, and what that costs
+
+One child, laid out once. A scroll view builds and lays out every child whether
+or not it is visible, so a few hundred are fine and a few thousand are not.
+Nothing about the position, physics, activities, controller, wheel, overscroll
+or scrollbar would change if lazy children arrived: workstream F replaces only
+the child-management half, which is the same bet Flutter made when
+`SingleChildScrollView` and `Viewport` came out differently.
+
+### What is verified
+
+- Friction decays toward a rest it only reaches in the limit and can say when it
+  passes a point; a critically damped spring arrives without overshooting and an
+  underdamped one rings; the clamping fling stops at a finite time and stays
+  stopped; a bouncing fling carries past the edge and is pulled back.
+- A viewport reports the extents its content implies, and content that fits
+  reports nothing to scroll and declines the wheel.
+- Moving the offset paints, never lays out and never rebuilds; the frame
+  re-records a clip, one reference and a pop.
+- Content that shrank under the offset springs back into range rather than
+  jumping.
+- Dragging moves the content with the pointer; a release with speed keeps going
+  and settles inside the range; a slow release stops where it was let go.
+- The boundary refuses what is pushed past it and reports how much, and lets it
+  go when released; bouncing physics leaves its range instead, resisting more
+  the further out it is; physics that refuse everything keep the view still.
+- A wheel notch eases rather than jumping, notches in flight accumulate into one
+  target, a wheel at the end declines so the signal chains outward, and a
+  trackpad pan is applied directly.
+- A controller holds its offset before it has a scrollable and is inert after it
+  loses one; either object may be destroyed first.
+- `ensureVisible` brings a descendant to the edge it was asked for and says the
+  same thing wherever the view already is; `animateTo` arrives over the time it
+  was given.
+- The thumb is sized by the visible fraction with a floor, drags the content
+  further than itself, ignores a press on the track away from it, appears when
+  something moves and fades when nothing does, and stays up and widens under a
+  resting pointer.
+- A refused push stretches the view and lays nothing out; a view that bounces
+  never stretches as well.
+- A frame of fling allocates nothing, and a settled view asks for no frames.
+
+Verified on GCC 13.3 and Clang 18.1 with zero warnings under `-Wall -Wextra
+-Wpedantic -Wshadow -Wnon-virtual-dtor`, and under ASan + UBSan: 283 tests,
+1676 checks. The library also compiles clean with `FLTR_ENABLE_CHECKS=OFF`.

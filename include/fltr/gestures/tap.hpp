@@ -1,13 +1,11 @@
 #pragma once
 
 #include "fltr/core/callback.hpp"
+#include "fltr/gestures/constants.hpp"
 #include "fltr/gestures/events.hpp"
 #include "fltr/gestures/recognizer.hpp"
 
 namespace fltr {
-
-/// How far a pointer may travel and still be a tap.
-inline constexpr float kTouchSlop = 18.0f;
 
 /// Press and release without travelling far.
 ///
@@ -18,9 +16,9 @@ inline constexpr float kTouchSlop = 18.0f;
 ///
 /// DIVERGENCE: Flutter also fires tap-down after a press timeout, so a region
 /// still competing with, say, a drag recognizer can show feedback before the
-/// contest ends. That needs a clock, and nothing in this layer has one -- time
-/// enters the framework with the ticker. Until then a contested tap shows its
-/// feedback on release.
+/// contest ends. The gesture clock now exists and could carry that, but it would
+/// mean a tap next to a scrollable lights up before the finger has committed to
+/// either. A contested tap shows its feedback on release.
 class TapGestureRecognizer final : public GestureRecognizer {
 public:
   using GestureRecognizer::GestureRecognizer;

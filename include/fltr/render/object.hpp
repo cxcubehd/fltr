@@ -56,6 +56,31 @@ public:
   /// Extra detail for the headless dump only.
   virtual std::string describe() const { return {}; }
 
+  // --- coordinate spaces --------------------------------------------------
+
+  /// Pre-multiplies the mapping from `child`'s space into this object's onto
+  /// `transform`, which is what lets the walk below accumulate downward. The
+  /// default covers everything that merely shifts its children, reading the
+  /// offset from `visitChildrenWithOffsets`; anything that scales or rotates
+  /// overrides it.
+  virtual void applyPaintTransform(const RenderObject& child, Transform2D& transform) const;
+
+  /// Maps this object's local space into `ancestor`'s. A null ancestor means the
+  /// root of this tree, which is what "global" means to a consumer pushing
+  /// pointer events in view coordinates.
+  Transform2D getTransformTo(const RenderObject* ancestor = nullptr) const;
+
+  Offset localToGlobal(Offset local, const RenderObject* ancestor = nullptr) const {
+    return getTransformTo(ancestor).apply(local);
+  }
+  Rect localToGlobalRect(Rect local, const RenderObject* ancestor = nullptr) const {
+    return getTransformTo(ancestor).applyToRect(local);
+  }
+  /// The inverse. A degenerate transform -- a subtree scaled to nothing -- has no
+  /// inverse and therefore no answer, so this reports the origin rather than a
+  /// wrong point.
+  Offset globalToLocal(Offset global, const RenderObject* ancestor = nullptr) const;
+
   void attach(PipelineOwner* owner);
   /// Detaches this whole subtree from its pipeline and purges any of its nodes
   /// from the owner's dirty lists, so nothing left there can outlive its node.

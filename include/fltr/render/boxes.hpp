@@ -277,20 +277,30 @@ public:
   }
 
   void paint(PaintingContext& context, Offset offset) override {
-    const Offset pivot = offset + origin_.inscribe(Size::zero(), size_);
-    context.pushTransform(transform(), pivot,
+    context.pushTransform(transform(), offset + localPivot(),
                           [this, offset](PaintingContext& c) { RenderProxyBox::paint(c, offset); });
   }
 
   bool hitTestChildren(HitTestResult& result, Offset position) override {
     if (!child_) return false;
-    const Offset pivot = origin_.inscribe(Size::zero(), size_);
-    const Transform2D m = Transform2D::aroundOrigin(transform(), pivot);
     return result.addWithPaintTransform(
-        m, position, [this](HitTestResult& r, Offset p) { return child_->hitTest(r, p); });
+        childTransform(), position,
+        [this](HitTestResult& r, Offset p) { return child_->hitTest(r, p); });
+  }
+
+  void applyPaintTransform(const RenderObject&, Transform2D& transform) const override {
+    transform = childTransform().then(transform);
   }
 
 protected:
+  Offset localPivot() const noexcept { return origin_.inscribe(Size::zero(), size_); }
+  /// The one matrix this object means: what maps its child's space into its own.
+  /// Painting, hit testing and the ancestor walk all read it, so they cannot
+  /// disagree about where the pivot is.
+  Transform2D childTransform() const noexcept {
+    return Transform2D::aroundOrigin(transform(), localPivot());
+  }
+
   Animatable<Transform2D> transform_;
   Subscription subscription_;
   Alignment origin_;
