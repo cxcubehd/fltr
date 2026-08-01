@@ -1,5 +1,6 @@
 #include "testing.hpp"
 
+#include <memory>
 #include <string>
 
 #include "fltr/harness.hpp"
@@ -461,6 +462,48 @@ TEST(focus_removing_the_focused_node_leaves_the_focus_on_its_scope) {
   // And traversal starts over from the top rather than from a node that is gone.
   h.binding().dispatchKey(press(LogicalKey::Tab));
   CHECK(a.hasPrimaryFocus());
+}
+
+TEST(focus_a_scope_node_destroyed_under_a_live_tree_leaves_the_focus_nowhere) {
+  FocusNode a;
+  Harness h;
+  auto owned = std::make_unique<FocusScopeNode>();
+  FocusScopeNode* scope = owned.get();
+  ScriptedRoot root(h, [&] {
+    return FocusScope::make({.node = scope,
+                             .child = screen({box(&a, Rect::fromLTWH(0, 0, 40, 20))})});
+  });
+  h.frame();
+  a.requestFocus();
+  CHECK(a.hasPrimaryFocus());
+
+  owned.reset();
+
+  // The manager outlived the node it was built around and is still registered
+  // for keys, so it must walk nothing rather than what is gone.
+  CHECK(!a.attached());
+  CHECK(!a.hasFocus());
+  CHECK(a.rect().isEmpty());
+  CHECK(!h.binding().dispatchKey(press(LogicalKey::Tab)));
+}
+
+TEST(focus_a_node_that_outlived_its_widget_answers_nothing_rather_than_reading_it) {
+  FocusNode a;
+  {
+    Harness h;
+    ScriptedRoot root(h, [&] {
+      return FocusScope::make({.child = screen({box(&a, Rect::fromLTWH(0, 0, 40, 20))})});
+    });
+    h.frame();
+    a.requestFocus();
+    CHECK(a.hasPrimaryFocus());
+    CHECK_EQ(a.rect(), Rect::fromLTWH(0, 0, 40, 20));
+  }
+
+  // The element this node was told about is gone with the tree, so the node has
+  // nothing left to measure and must not go looking.
+  CHECK(!a.attached());
+  CHECK(a.rect().isEmpty());
 }
 
 TEST(focus_a_node_notifies_only_when_its_own_state_moved) {

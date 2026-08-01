@@ -52,7 +52,17 @@ FocusManager::~FocusManager() {
 }
 
 void FocusManager::forgetRoot(const FocusNode& node) noexcept {
-  if (root_ == &node) root_ = nullptr;
+  if (root_ != &node) return;
+  root_ = nullptr;
+  // The tree this manager was built around is going, so there is nowhere left
+  // for the focus to be. Stated here rather than left to the children detaching
+  // on the way down: those would land the focus on `node.enclosingScope()`, and
+  // the only reason that is not this dying node is that `asScope()` is already
+  // answering as the base class by the time a destructor orphans its children.
+  // Depending on that is depending on the vptr, so the invariant is written
+  // instead. Nothing is notified -- every listener that would hear it is being
+  // destroyed alongside the tree.
+  primary_ = nullptr;
 }
 
 // ---------------------------------------------------------------------------

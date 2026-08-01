@@ -88,10 +88,10 @@ public:
   /// from an ordinary node without RTTI.
   virtual FocusScopeNode* asScope() noexcept { return nullptr; }
 
-  /// Where this node is, in the render tree's root space. Empty until the
-  /// element it names has been laid out. Directional traversal and scrolling a
-  /// focused node into view both read it, and both are what surgery item 1 of
-  /// this phase paid for.
+  /// Where this node is, in the render tree's root space. Empty while detached,
+  /// and until the element it names has been laid out. Directional traversal and
+  /// scrolling a focused node into view both read it, and both are what surgery
+  /// item 1 of this phase paid for.
   Rect rect() const;
   void setElement(const Element* element) noexcept { element_ = element; }
 

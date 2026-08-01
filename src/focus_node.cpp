@@ -94,7 +94,10 @@ FocusScopeNode* FocusNode::enclosingScope() const noexcept {
 }
 
 Rect FocusNode::rect() const {
-  if (!element_) return Rect::zero();
+  // The element is only known to be alive while this node is part of a tree: a
+  // consumer may hold a node past the unmount of the widget that named it, and
+  // the pointer left behind would be to an element that is gone.
+  if (!attached() || !element_) return Rect::zero();
   const RenderBox* box = element_->renderObject();
   if (!box || !box->hasSize()) return Rect::zero();
   return box->localToGlobalRect(box->paintBounds());

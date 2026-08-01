@@ -26,12 +26,14 @@ void ScrollableState::adoptConfiguration() {
   position_.setPhysics(widget().physics());
 
   ScrollController* next = widget().controller();
-  if (next == position_.controller()) return;
-  if (next) {
-    next->attach(position_);
-  } else if (ScrollController* previous = position_.controller()) {
-    previous->detach();
-  }
+  ScrollController* previous = position_.controller();
+  if (next == previous) return;
+  // Let go of the old one first. A position remembers a single controller, so
+  // attaching over the top of one leaves it holding a link this side no longer
+  // knows about -- which reads as a live client and, at teardown, is a write
+  // into a position that is already gone.
+  if (previous) previous->detach();
+  if (next) next->attach(position_);
 }
 
 WidgetRef ScrollableState::build(BuildContext&) {

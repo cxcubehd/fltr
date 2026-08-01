@@ -1424,7 +1424,11 @@ form, with a null ancestor meaning the root.
 
 The default `applyPaintTransform` reads the child's offset out of
 `visitChildrenWithOffsets`, so every shifting object in the framework — padding,
-alignment, flex, stack — got it right without being touched. Only
+alignment, flex, stack — got it right without being touched. It also traps a node
+that is not a child, because the failure that would otherwise follow is the
+quiet kind: an object that shifts its children and forgets to report one answers
+the walk upward with a zero offset, and every space derived from it is wrong
+with nothing at all saying so. Only
 `RenderTransform` overrides it, and it now derives painting, hit testing and the
 ancestor walk from one `childTransform()`, so the three cannot disagree about
 where the pivot is. The cost, recorded rather than hidden: the default is a
@@ -1698,6 +1702,13 @@ and the first version of this got a use-after-free at teardown that only the
 UBSan build caught. `RenderScrollbarThumb` uses the subscription itself as the
 liveness token, which is the same idea spelled with the mechanism M6 already
 provides.
+
+A position remembers exactly one controller, so *swapping* one for another has
+to be a hand-off — detach the old, then attach the new — and not an attach over
+the top. Attaching over the top leaves the controller that was let go still
+holding a link this side no longer knows about: it reads as a live client, and
+its destructor writes into a position that may already be gone. That was a hole
+in this invariant rather than an exception to it, and it is now a test.
 
 ### Overscroll is what the boundary refused
 
@@ -1977,5 +1988,5 @@ the same node twice.
 - Moving the focus around allocates nothing.
 
 Verified on GCC 13.3 and Clang 18.1 with zero warnings under `-Wall -Wextra
--Wpedantic -Wshadow -Wnon-virtual-dtor`, and under ASan + UBSan: 306 tests,
-1761 checks. The library also compiles clean with `FLTR_ENABLE_CHECKS=OFF`.
+-Wpedantic -Wshadow -Wnon-virtual-dtor`, and under ASan + UBSan: 309 tests,
+1776 checks. The library also compiles clean with `FLTR_ENABLE_CHECKS=OFF`.

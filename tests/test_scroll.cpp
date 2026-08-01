@@ -438,6 +438,31 @@ TEST(scroll_a_controller_outliving_its_scrollable_is_inert_rather_than_stale) {
   CHECK_EQ(controller.offset(), 0.0f);
 }
 
+/// A position remembers one controller, so swapping has to be a hand-off rather
+/// than an overwrite -- otherwise the one let go of still believes it drives
+/// this scroll view, and still tries to unhook from it on the way out.
+TEST(scroll_swapping_the_controller_lets_go_of_the_old_one) {
+  Harness h;
+  ScrollController first;
+  ScrollController second;
+  bool swapped = false;
+  ScriptedRoot root(h, [&] { return listOf(swapped ? &second : &first); });
+  h.frame();
+
+  first.jumpTo(40.0f);
+  CHECK(first.hasClient());
+  CHECK(!second.hasClient());
+
+  swapped = true;
+  root.rebuild();
+  h.frame();
+
+  CHECK(!first.hasClient());
+  CHECK_EQ(first.offset(), 0.0f);
+  CHECK(second.hasClient());
+  CHECK_EQ(second.offset(), 40.0f);
+}
+
 TEST(scroll_the_ambient_scope_hands_the_position_to_whatever_is_inside) {
   Harness h;
   ScrollController controller;
