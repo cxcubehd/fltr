@@ -313,10 +313,31 @@ gamepad-navigable menus, and `ensureVisible` becoming useful.
 space — the same capability `ensureVisible` needs (surgery item 1). Doing A,
 B and D in that order means paying for it once.
 
-**Verdict.** Required for the component layer to be more than mouse-only.
-Whether it precedes or follows the component layer is a real choice: components
-can ship pointer-only and gain focus later, at the cost of touching every one
-of them twice.
+**Pointer-only must stay expressible, at both scales.** Focus-first is the
+right build order, but it must not become a tax every consumer pays. Two
+independent opt-outs, and both are Flutter's:
+
+- *Per component.* A focus policy on every component in E, mirroring
+  `FocusNode`'s own axes rather than inventing new ones: `canRequestFocus`
+  (never focusable at all — pointer interaction only), `skipTraversal`
+  (focusable by click or programmatically, but never reached by tab or D-pad),
+  and `descendantsAreFocusable` for excluding a whole subtree, which is
+  Flutter's `ExcludeFocus` / `FocusTraversalGroup(descendantsAreFocusable:
+  false)`. A HUD element that is clickable but has no business in a menu's tab
+  order is the common case, not an exotic one.
+- *Per tree.* The focus subsystem is ambient, so a tree with no focus scope in
+  it must register nothing, subscribe to nothing, and cost nothing — exactly
+  the property `TickerMode` already has, and for the same reason. A component
+  built without an ambient focus scope above it is pointer-only by
+  construction, with no configuration and no null checks at the call site.
+
+The second one is the load-bearing half: it means M12 depends on M11 to
+*compile*, not to *run*, so a HUD that never wants keyboard or gamepad input
+pays nothing for the fact that the machinery exists. It is also assertable —
+a pointer-only tree holds zero focus nodes and zero key routes.
+
+**Verdict.** Required for the component layer to be more than mouse-only, and
+built so that mouse-only remains a first-class, zero-cost configuration.
 
 ### E. The component behaviour layer
 
@@ -333,6 +354,11 @@ of them twice.
 - `RawScrollbar` (if C is in scope), `RawProgress`, and a selectable/list-item
   behaviour if a menu needs one.
 - `Label`/`Text` improvements belong in H, not here.
+
+Every one of them takes the focus policy described in D — `canRequestFocus`,
+`skipTraversal`, an optional consumer-owned focus node, and `autofocus` — so a
+component can be declared pointer-only at its call site, and is pointer-only
+by default in a tree that has no focus scope in it at all.
 
 **Flutter.** `material/toggleable.dart` (`ToggleableStateMixin` is precisely
 the shared toggle machine), `material/slider.dart`'s `_RenderSlider`,
@@ -644,6 +670,12 @@ D-pad and stick. Before components, deliberately: every component is then
 written once, with keyboard activation, focus state and gamepad navigation
 designed in rather than retrofitted. This is slower to the first visible
 button and correct.
+
+Pointer-only stays a first-class configuration, not a phase we passed through:
+per component via `canRequestFocus` and `skipTraversal`, and per tree by making
+the focus subsystem ambient, so a tree with no focus scope above it holds no
+focus nodes, no key routes and no subscriptions. M12 therefore depends on M11
+to compile, not to run.
 
 **M12 — Component behaviours.** Workstream E. `WidgetStates` and its
 controller, then `RawButton`, `RawToggle` (checkbox, switch, radio),
