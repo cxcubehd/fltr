@@ -1551,3 +1551,251 @@ IME, both of which live on the consumer's side.
 
 Verified on GCC 13.3 and Clang 18.1, and under ASan + UBSan: 246 tests, 1361
 checks. The library also compiles clean with `FLTR_ENABLE_CHECKS=OFF`.
+
+---
+
+## Milestone 10 — scrolling
+
+The centrepiece of this phase, and the first subsystem that spends M9 rather
+than building on it: the velocity tracker feeds the fling, `dispatchSignal`
+returning a bool is the wheel path, and `getTransformTo` is what makes
+`ensureVisible` answerable.
+
+### Scrolling is a paint operation, and that is measured
+
+`RenderViewport` lays its child out once with the scroll axis released, then
+*paints* it at a negative offset inside a clip. The offset reaches painting and
+hit testing and nothing else, so moving it runs no layout at all. The viewport
+observes the position through `observeForPaint` — the render-attached path M7
+built — and is itself a repaint boundary with the scrolled content wrapped in
+another, so a frame of scrolling re-records exactly three commands: the clip,
+one `DrawList` referring to the content, and the pop. There is a test that
+counts them, and one that asserts `layouts == 0` and `buildCount == 0` for a
+frame that moved the offset.
+
+Hit testing needs no clipping of its own: `RenderBox::hitTest` has already
+rejected anything outside the viewport's own bounds before the child is asked.
+
+### Physics is a policy object, and owns no state
+
+`ScrollMetrics` is what the rules are allowed to see — four numbers — and
+`ScrollPhysics` answers three questions about them: how much of a user's push
+becomes offset, how much of a proposed offset the boundary refuses, and what
+simulation a release implies. Because an instance holds nothing, the framework
+ships them as shared constants and a consumer that wants its own writes one and
+hands out a pointer. Nothing allocates a physics object per scrollable, and
+`defaultScrollPhysics()` is a function-local static.
+
+DIVERGENCE: Flutter composes physics by chaining (`AlwaysScrollableScrollPhysics
+().applyTo(BouncingScrollPhysics())`), with each override delegating to a
+parent. We do not. The cost is that mixing two behaviours means writing a class
+that does both rather than composing two that each do one; the benefit is that
+`physics->applyBoundaryConditions(...)` is one virtual call rather than a chain
+whose length is a runtime property.
+
+### The four simulations, and where `Simulation` lives
+
+`AnimationDriver` is normalized 0..1 over a duration. A simulation is unbounded
+in value and ends by tolerance, so `Simulation` stands *alongside* the driver in
+`animation/` rather than changing it — which is what workstream G asked for, and
+what a spring-based implicit animation would reuse later without touching
+scrolling.
+
+All four are Flutter's, in closed form rather than integrated, so a frame is a
+handful of transcendentals with no accumulated error:
+
+- **friction** — exponential decay, the iOS fling and the first half of the
+  bouncing one. It can also answer `finalX` and `timeAtX`, which is how the
+  bouncing simulation knows when to hand over without integrating to find out.
+- **spring** — the three damping cases solved separately, with
+  `withDampingRatio` naming the useful parameter rather than the raw one.
+- **clamping** — Android's power-law curve over a finite duration, kept with its
+  original constants so it is recognisably the platform's rather than an
+  approximation of it. Unlike the others it genuinely *stops*.
+- **bouncing** — friction until it reaches the edge, then a spring that inherits
+  the friction's velocity (capped, or an unclamped transfer throws the content
+  most of a screen past the end) and pulls it back.
+
+A fling allocates one simulation. That is once per gesture, not once per frame,
+and the test that a frame of fling allocates nothing measures the part that
+matters.
+
+### DIVERGENCE: activities are a value with a tag, not a hierarchy
+
+Flutter models idle, drag, ballistic and driven scrolling as `ScrollActivity`
+subclasses a consumer can extend. This is one `Activity` value with a
+`ScrollActivityKind` and the fields each mode needs, and `tick` is a switch.
+
+Two reasons. The set is closed — there is no extension point for activities
+anywhere in this framework, so the polymorphism would buy nothing. And a
+hierarchy allocates on every transition, where this allocates only for the
+ballistic simulation: beginning a drag, taking a wheel notch, or going idle
+costs nothing at all, which is what the steady-state rule wants from the two
+that happen during a gesture.
+
+The cost, stated: adding a sixth mode edits a switch rather than adding a class,
+and a consumer cannot supply an activity of its own.
+
+### Smooth wheel, against a target that keeps moving
+
+Flutter applies a wheel delta to `pixels` immediately — a jump per notch. The
+wheel activity holds a *target* instead: each notch adds to it, clamped by the
+range, and each frame closes on it by `1 - exp(-dt/tau)`.
+
+The exponential is not decoration. Our clock is a consumer-supplied variable
+delta, so a fixed-duration tween would be wrong at any other frame rate, and
+notches keep arriving mid-flight — which is the same "retarget from the current
+value rather than restarting" requirement M7 met for `AnimationDriver`, applied
+to a different quantity. A test spins the wheel twice with a frame in between
+and asserts the two notches land on one target rather than the second one
+restarting from where the first had got to.
+
+Trackpad pans are not notches: they are already physical displacements, so
+`PointerSignalKind::Pan` is applied directly with no easing.
+
+**Not done, with the reason.** The brief asked for a fling from a trackpad pan's
+own velocity. `PointerSignalEvent` has no phase, so nothing in the surface says
+when a pan *ended*, and a fling has no moment to start at. The fix is one field
+— Flutter has `PointerPanZoomStart/Update/End` — and it is additive; nothing
+above would change. Pan therefore scrolls but does not throw.
+
+### `ensureVisible`, and what surgery item 1 bought
+
+`RenderViewport::offsetToReveal` maps the target's paint bounds into the
+viewport's space with `localToGlobalRect(bounds, viewport)` — the M9 ancestor
+walk — and adds the current offset to convert back into content space. That last
+step is what makes the answer independent of where the view already is, which a
+test pins by asking from two different offsets and getting the same number.
+
+`alignment` is 0 for the leading edge and 1 for the trailing one. Flutter's
+`ScrollPositionAlignmentPolicy` (keep-visible-at-start / at-end) is not here;
+M11's directional traversal is what will want it, and it is a policy on top of
+this, not a change to it.
+
+### DIVERGENCE: no `ScrollNotification`
+
+The principle stated at the top of this phase, now paid for. Flutter bubbles
+scroll and overscroll notifications up the element tree as a second dispatch
+path. We do not add one, and everything *inside* the scrollable reads the
+position from `ScrollScope` in O(1) with subscription lifetimes that are already
+correct.
+
+The consequence is real and lands squarely on the two indicators: a scrollbar
+and an overscroll stretch have to be drawn *outside* the scrollable, and an
+ancestor cannot passively observe a descendant. So they are handed a
+`ScrollController` — the object that already exists for reaching a scroll view
+from outside — and they watch it, not just the position it holds, because it has
+none until the scrollable below has built. `NestedScrollView`-style coordination
+stays off the table until something wants it.
+
+### Two objects that know each other, and clear the link
+
+`ScrollController` and `ScrollPosition` hold each other, and each nulls the
+other's pointer in its destructor. So does `RenderViewport` with the position.
+This is not defensive coding: a consumer's controller is a local whose scope
+ends in whatever order it happens to end in relative to the tree that used it,
+and the first version of this got a use-after-free at teardown that only the
+UBSan build caught. `RenderScrollbarThumb` uses the subscription itself as the
+liveness token, which is the same idea spelled with the mechanism M6 already
+provides.
+
+### Overscroll is what the boundary refused
+
+Under clamping physics the offset never leaves its range, so there is nothing in
+`pixels` for a stretch to read. `ScrollPosition` therefore accumulates what
+`applyBoundaryConditions` refused into `overscroll()` — saturating, so leaning on
+an edge approaches a limit rather than winding up — and lets it decay once no
+finger is holding it.
+
+That makes the indicator a pure function with no state of its own: it scales the
+view by `1 + fraction * maxStretch` along the scroll axis, anchored at the edge
+*opposite* the one being pushed, as Flutter's `StretchingOverscrollIndicator`
+does. The scale is an `Observable<Transform2D>` the `Transform` render object
+subscribes to, so a frame of stretching repaints one object and rebuilds
+nothing; only the pivot lives in the widget, and it changes once per overscroll
+episode rather than once per frame.
+
+Physics that let the offset leave its range produce no refusal and therefore no
+stretch. That is deliberate: bouncing and stretching are two treatments of the
+same event, and showing both at once would double-count. There is a test for
+each half.
+
+### The scrollbar
+
+Behaviour and geometry, no style. `ScrollbarGeometry::resolve` is the whole of
+the mathematics — thumb extent from the visible fraction with a floor a pointer
+can actually hold, thumb position from how far through the range the offset is —
+and both the render object that paints it and the state that interprets a drag
+read the same function, so they cannot disagree about where the thumb is.
+
+`RenderScrollbarThumb` observes the position for paint, so scrolling moves the
+thumb with no rebuild. The track strip is an opaque pointer region rather than
+the thumb itself: an auto-hiding bar that only answered to the pointer while
+visible could never be revealed. A press on the track away from the thumb is not
+a grab, so the offset does not leap to wherever the pointer landed.
+
+The fade-out needs a delay, and neither the driver nor the gesture clock has
+one, so the state counts idle seconds on a `Ticker` of its own and reverses the
+fade when the count passes. It stops that ticker when the fade completes, which
+is what lets `needsFrame()` go quiet again.
+
+### The lifecycle wrinkle worth writing down
+
+An indicator wrapping a scrollable is built *first*, so its controller has no
+position yet, and the attach that happens while its own subtree is mounting
+arrives in a later build generation — by which point the `WidgetRef` it holds
+for its child belongs to a released arena.
+
+The framework already handles that (`updateChild` skips a stale ref whose
+element is unchanged), but only if the child stays in the same slot. So
+`Scrollbar` builds its `Stack` unconditionally and puts a null in the track's
+place until there is something to draw, rather than switching between "just the
+child" and "a stack". Any widget whose shape depends on state that arrives after
+its first build has this constraint; it is cheap to satisfy and expensive to
+discover.
+
+### Non-lazy, and what that costs
+
+One child, laid out once. A scroll view builds and lays out every child whether
+or not it is visible, so a few hundred are fine and a few thousand are not.
+Nothing about the position, physics, activities, controller, wheel, overscroll
+or scrollbar would change if lazy children arrived: workstream F replaces only
+the child-management half, which is the same bet Flutter made when
+`SingleChildScrollView` and `Viewport` came out differently.
+
+### What is verified
+
+- Friction decays toward a rest it only reaches in the limit and can say when it
+  passes a point; a critically damped spring arrives without overshooting and an
+  underdamped one rings; the clamping fling stops at a finite time and stays
+  stopped; a bouncing fling carries past the edge and is pulled back.
+- A viewport reports the extents its content implies, and content that fits
+  reports nothing to scroll and declines the wheel.
+- Moving the offset paints, never lays out and never rebuilds; the frame
+  re-records a clip, one reference and a pop.
+- Content that shrank under the offset springs back into range rather than
+  jumping.
+- Dragging moves the content with the pointer; a release with speed keeps going
+  and settles inside the range; a slow release stops where it was let go.
+- The boundary refuses what is pushed past it and reports how much, and lets it
+  go when released; bouncing physics leaves its range instead, resisting more
+  the further out it is; physics that refuse everything keep the view still.
+- A wheel notch eases rather than jumping, notches in flight accumulate into one
+  target, a wheel at the end declines so the signal chains outward, and a
+  trackpad pan is applied directly.
+- A controller holds its offset before it has a scrollable and is inert after it
+  loses one; either object may be destroyed first.
+- `ensureVisible` brings a descendant to the edge it was asked for and says the
+  same thing wherever the view already is; `animateTo` arrives over the time it
+  was given.
+- The thumb is sized by the visible fraction with a floor, drags the content
+  further than itself, ignores a press on the track away from it, appears when
+  something moves and fades when nothing does, and stays up and widens under a
+  resting pointer.
+- A refused push stretches the view and lays nothing out; a view that bounces
+  never stretches as well.
+- A frame of fling allocates nothing, and a settled view asks for no frames.
+
+Verified on GCC 13.3 and Clang 18.1 with zero warnings under `-Wall -Wextra
+-Wpedantic -Wshadow -Wnon-virtual-dtor`, and under ASan + UBSan: 283 tests,
+1676 checks. The library also compiles clean with `FLTR_ENABLE_CHECKS=OFF`.

@@ -5,8 +5,6 @@
 
 namespace fltr {
 
-enum class Axis : std::uint8_t { Horizontal, Vertical };
-
 enum class MainAxisAlignment : std::uint8_t {
   Start,
   End,

@@ -11,6 +11,11 @@ namespace fltr {
 
 inline constexpr float kInf = std::numeric_limits<float>::infinity();
 
+/// Which of the two directions something is measured along. Here rather than
+/// with the flex layout that first needed it, because scrolling, viewports and
+/// scrollbars all take one and none of them wants a layout header.
+enum class Axis : std::uint8_t { Horizontal, Vertical };
+
 inline constexpr float lerpF(float a, float b, float t) noexcept { return a + (b - a) * t; }
 
 /// The scalar overload of the interpolation every other type here provides, so
