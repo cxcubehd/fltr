@@ -64,8 +64,14 @@ class OwnedFocusNode {
 public:
   template <class T, void (T::*M)()>
   void bind(Node* supplied, T* observer) {
-    Node* next = supplied ? supplied : &own_;
-    if (next == node_ && changes_.attached()) return;
+    // A detached subscription with a node still named means that node was
+    // destroyed, because there is no live-but-unsubscribed state. It is neither
+    // ours to touch again nor ours to keep naming, so the State's own takes over
+    // and the tree stays whole.
+    const bool namedNodeDied = supplied != nullptr && supplied == node_ && !changes_.attached();
+    FLTR_EXPECTS(!namedNodeDied, "a widget still names a focus node that has been destroyed");
+    Node* next = supplied != nullptr && !namedNodeDied ? supplied : &own_;
+    if (next == node_) return;
     if (Node* previous = get()) previous->detach();
     node_ = next;
     subscribeMember<T, M>(*node_, changes_, observer);

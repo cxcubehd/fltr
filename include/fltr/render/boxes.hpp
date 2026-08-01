@@ -319,6 +319,51 @@ public:
 };
 
 // ---------------------------------------------------------------------------
+// RenderIgnorePointer / RenderAbsorbPointer
+// ---------------------------------------------------------------------------
+
+/// Invisible to the pointer, and so is everything below it. Whatever is drawn
+/// behind is reached instead.
+///
+/// Neither of these invalidates on change: a hit test is resolved afresh from
+/// the tree every time one is run, so there is nothing recorded to throw away.
+class RenderIgnorePointer final : public RenderProxyBox {
+public:
+  explicit RenderIgnorePointer(bool ignoring = true) : ignoring_(ignoring) {}
+
+  const char* typeName() const override { return "IgnorePointer"; }
+  std::string describe() const override { return ignoring_ ? "ignoring" : "passing"; }
+  void setIgnoring(bool v) noexcept { ignoring_ = v; }
+
+  bool hitTest(HitTestResult& result, Offset position) override {
+    return ignoring_ ? false : RenderProxyBox::hitTest(result, position);
+  }
+
+private:
+  bool ignoring_;
+};
+
+/// Takes the pointer and gives it to nothing below. The difference from
+/// ignoring, and the reason both exist: a disabled control drawn over something
+/// live should still swallow the click rather than let it through.
+class RenderAbsorbPointer final : public RenderProxyBox {
+public:
+  explicit RenderAbsorbPointer(bool absorbing = true) : absorbing_(absorbing) {}
+
+  const char* typeName() const override { return "AbsorbPointer"; }
+  std::string describe() const override { return absorbing_ ? "absorbing" : "passing"; }
+  void setAbsorbing(bool v) noexcept { absorbing_ = v; }
+
+  bool hitTestSelf(Offset) const override { return absorbing_; }
+  bool hitTestChildren(HitTestResult& result, Offset position) override {
+    return absorbing_ ? false : RenderProxyBox::hitTestChildren(result, position);
+  }
+
+private:
+  bool absorbing_;
+};
+
+// ---------------------------------------------------------------------------
 // RenderClipRect
 // ---------------------------------------------------------------------------
 

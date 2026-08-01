@@ -35,6 +35,16 @@ public:
   }
   constexpr Flags& operator|=(Flags o) noexcept { return *this = *this | o; }
 
+  /// Reports whether the set actually moved, which is what the caller turns into
+  /// a notification -- the same shape `Animatable::set` has.
+  constexpr bool set(E value, bool present) noexcept {
+    const Bits mask = static_cast<Bits>(value);
+    const Bits next = static_cast<Bits>(present ? bits_ | mask : bits_ & ~mask);
+    if (next == bits_) return false;
+    bits_ = next;
+    return true;
+  }
+
   friend constexpr bool operator==(Flags, Flags) noexcept = default;
 
 private:

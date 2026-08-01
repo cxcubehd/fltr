@@ -1990,3 +1990,232 @@ the same node twice.
 Verified on GCC 13.3 and Clang 18.1 with zero warnings under `-Wall -Wextra
 -Wpedantic -Wshadow -Wnon-virtual-dtor`, and under ASan + UBSan: 309 tests,
 1776 checks. The library also compiles clean with `FLTR_ENABLE_CHECKS=OFF`.
+
+## Milestone 12 — component behaviours
+
+The layer Flutter kept private. `Checkbox`, `Switch`, `Slider` and `TextField`
+live in `material/` and are entangled with `ThemeData`; the reusable pieces —
+`ToggleableStateMixin`, `_RenderSlider`, `ButtonStyleButton`,
+`WidgetStatesController` — are all internal. Everything below is those pieces,
+promoted, with everything about theming discarded.
+
+A component owns its value and the rules for changing it, its hit regions and
+recognizers, its focus node and keyboard handling, and its interaction state. It
+owns nothing about how any of that looks.
+
+### The call-site question, resolved once
+
+`INSTRUCTIONS2.md` asked for this to be settled at the start of the milestone
+rather than during it. The answer is *both, layered*, and the layering is what
+makes it cheap.
+
+Every component publishes two things through one ambient `ComponentScope`: the
+`WidgetStatesController` holding its `WidgetStates` bitset, and — for the
+components that have one — a `ValueListenable<float>` giving its position in
+0..1. A toggle's on-ness, a slider's value as a fraction of its range and a
+progress bar's fill are the same quantity to a visual, so they are the same
+field.
+
+- **The observable path.** `ComponentScope::fractionOf(context)` and
+  `statesOf(context)` hand back pointers to objects the component's `State`
+  owns. Give one to a render object and hover costs no rebuild at all — the path
+  M7 and M8 paid for, reached without any new mechanism.
+- **The builder path.** `StatesBuilder` subscribes to the controller it finds
+  and rebuilds its own subtree, and nothing above it. It stays thin because
+  the general case was already `Watch`.
+
+Neither accessor hands out the `ComponentScope` config itself. That config is
+arena scratch and is stale the moment the build that made it ends, whereas the
+pointers inside it stay good for as long as the component is mounted. Returning
+the safe half is the difference between an API that can be held and one that
+looks like it can.
+
+Outside a component both accessors are null and `StatesBuilder` builds once with
+nothing set, so a visual subtree written for a button also works on its own.
+
+### Every component is the same envelope
+
+`buildComponentShell` is one focus node, one pointer region, one publication and
+one guard, and the components differ only in the gestures in the middle. Hover
+is filled in there, because every component reports it identically.
+
+Two properties of that envelope are load-bearing:
+
+**Disabled is not a new axis in the focus tree.** A control that cannot be used
+is one the keyboard should walk straight past, and `canRequestFocus` already
+means exactly that — so `enabled = false` sets it false and the existing
+`didChangePolicy` path moves the focus off. No component asks the focus
+subsystem a question M11 did not already answer.
+
+**The guard is always present.** Wrapping the subtree in an `AbsorbPointer` only
+while disabled would change the shape of the tree at the moment a control is
+greyed out, and the consumer's visuals — and any `State` they hold — would be
+inflated afresh for a reason that has nothing to do with them. So the guard is
+always there and only its flag moves. The cost is one proxy render object per
+component, paid always rather than surprisingly.
+
+### DIVERGENCE: a disabled component absorbs rather than ignores
+
+Workstream I called for `IgnorePointer` *or* `AbsorbPointer` and left the choice
+open. Both exist as widgets; components use absorbing. A disabled control drawn
+over live content should swallow the click rather than let it fall through to
+whatever is behind, which is the behaviour that is wrong-by-default in the other
+direction — a disabled dialog button that dismisses the thing underneath it is a
+bug, and a disabled HUD element that blocks the world is a wrap in
+`IgnorePointer` away. The test asserts both halves.
+
+Neither render object invalidates on change, because a hit test is resolved
+afresh from the tree every time one runs. There is nothing recorded to throw
+away.
+
+### Consequence: press feedback follows the arena, not the finger
+
+M9 chose to fire `onTapDown` when the tap *wins* the pointer rather than when
+the pointer goes down, on the grounds that winning is when press feedback is
+correct to show. M12 is where that choice becomes visible.
+
+A button with only `onPressed` holds one recognizer, is the sole contender, wins
+at the down, and is `Pressed` immediately. A button that *also* wants
+`onLongPress` has two contenders, so nothing has won at the down and the button
+is not pressed until either the long press starts or the release resolves it as
+a tap. The long press therefore sets `Pressed` itself, which is not defensive
+tidying — it is the only thing that reports the finger in that configuration.
+
+This is recorded rather than worked around. Reaching for the eager signal would
+mean either a second down callback on `Pointer` or reversing M9's decision, and
+neither belongs in this milestone. The cost is confined to components that ask
+for two gestures at once.
+
+### The toggle: one machine, three shapes
+
+`ToggleableStateMixin` is precisely the shared machine, and `RawToggle` is it
+without the painter. A checkbox is the default; a radio is `canToggleOff =
+false`, a member of a group only its siblings can clear; a switch is
+`dragExtent > 0`, which is the only thing that creates a drag recognizer at all.
+Tristate cycles Off, On, Mixed, which is Flutter's null third state named.
+
+The position is an `AnimatedValue<float>` over an `AnimationDriver`, so
+interruption re-bases from wherever the thumb had actually reached — M7's
+property, reused rather than re-derived. A drag pins the position instead
+(`setTween({p, p})` is "it is here and stays here"), and stops the driver, so
+the thumb and the clock never fight over the same value. The switch drags from
+the *down* point rather than from where the slop was cleared: a thumb that
+lagged the first eighteen pixels of every drag would feel stuck.
+
+Letting go is the interesting case, because the value is not the component's.
+The toggle reports where it would go and then asks for a build unconditionally.
+If the report was accepted, `didUpdateWidget` animates to the new value and
+clears the pending settle; if it was refused — or was never a change — the
+build settles the thumb back to where the value actually is. Flutter sets the
+same flag and has the same hole when a consumer ignores `onChanged`; asking for
+the build ourselves closes it.
+
+### The slider maps absolutely
+
+DIVERGENCE from Flutter's `Slider`, which tracks the thumb by accumulating drag
+deltas: the value here is read off where the pointer *is*. The thumb reaches the
+finger on the first frame and cannot drift away from it over a long drag.
+
+The stated consequence is that there is no separate thumb hit region, because
+pressing anywhere on the track is already a press on the thumb. What the thumb
+does need is `thumbExtent` — Flutter's `_trackRect` inset, as one number — so
+that the ends of the range stay reachable when the thumb has width.
+
+The value runs the way the coordinate space does, so a vertical slider's
+minimum is at the *top* and ArrowUp lowers it. That is the mechanical answer
+rather than the expected one — a volume column wants its maximum at the top —
+and it is documented on the field instead of being fixed with a `reversed` flag,
+because inverting is one subtraction in the consumer's own value mapping and a
+flag whose whole job is to negate a number earns its keep nowhere else.
+
+Keyboard handling is where the slider meets M11. Only the two arrows *along* the
+slider's axis are consumed; the pair across it is left alone and reaches
+traversal, so a D-pad can leave a row of sliders rather than being trapped in
+one. `Home` and `End` go to the ends, `PageUp` and `PageDown` move by a page.
+One arrow moves by one division when there are divisions, and by `keyStep`
+otherwise.
+
+Like the toggle, the slider reports and assumes nothing: `fraction_` is derived
+from the value the consumer pushed back, never optimistically from the gesture.
+A consumer who clamps, snaps or ignores gets exactly what they asked for.
+
+### `RawButton` is also the list item
+
+The brief asked for "whatever list-item behaviour the first menu needs". Having
+written the button, the answer is: `selected`. A menu's current entry differs
+from a button by one published state, and publishing it is all this layer is
+allowed to do about it — `ensureVisible` on focus already came free from M11.
+No second component.
+
+### Where the outlive rule ends
+
+A controller and a focus node are consumer-owned and named by pointer, and the
+standing rule is that they outlive the widget naming them. The subscription each
+`Owned*` holds is a liveness token, and review made it worth saying exactly what
+it does and does not buy.
+
+What it buys is the window between the object's death and the next build: events
+already in flight — a pointer callback, a focus notification — find a detached
+subscription and go nowhere, instead of writing into freed memory. That window
+is real, because teardown orderings are hard for a consumer to control.
+
+What it does not buy is a *build* that still names the dead object. At that point
+the rule has been broken outright, and the honest response is a contract
+violation rather than a re-subscription. Both `OwnedStates::bind` and
+`OwnedFocusNode::bind` previously fell through to `subscribe` in exactly that
+case — a use-after-free reachable from ordinary consumer code, and one this
+milestone inherited from M11 by copying the shape. Both now trap, and with checks
+compiled out both stay memory-safe: the states controller publishes nowhere, and
+the focus node falls back to the State's own so the tree stays whole.
+
+The same reasoning left one contract behind in `buildComponentShell`. It fills in
+hover for every component, which means a component that set its own `onEnter`
+would have it silently overwritten. No component does, and chaining the two
+callbacks would be machinery for a caller that does not exist — so the
+overwriting is stated as a precondition instead, and a future component that
+wants its own hover trips it rather than losing it.
+
+### What is verified
+
+`tests/test_components.cpp`, 34 tests:
+
+- A controller notifies only when the set actually moved, and a component
+  publishes into the consumer's controller when given one.
+- A consumer's controller destroyed under a live component is let go of rather
+  than written into, and a *build* that goes on naming the dead one is trapped
+  rather than re-subscribed. Both confirmed by reverting the guards and watching
+  ASan report the use-after-free.
+- A slider maps, sizes and steps along whichever axis it was given: confirmed by
+  breaking each of the three vertical branches in turn and watching the tests
+  catch all three.
+- A `StatesBuilder` rebuilds its own subtree and nothing above it, and the
+  component itself never rebuilds for its own state — the zero-cost claim, as a
+  build count. Outside a component it builds once with nothing set.
+- Ignoring hides a subtree from the pointer and absorbing swallows it, both as
+  hit-test path lengths; a disabled component leaks no click to what is behind,
+  and one wrap in `IgnorePointer` makes it do the opposite.
+- A button reports hover and press, fires on release, lets go of a press that
+  travels off it, and holds exactly the recognizers its call site asked for.
+- Space and Enter activate on the release; a held activator is one press; losing
+  the focus mid-press lets go without firing, and the release lands elsewhere.
+- A disabled button takes no input, drops its hover, becomes unfocusable, and
+  Tab walks past it to the next thing.
+- A long press keeps the button pressed and suppresses the tap.
+- A toggle reports where it would go and moves nothing until the value comes
+  back; it animates rather than jumping and settles off the clock; tristate
+  cycles through mixed; a radio's own press cannot clear it.
+- A switch drags with the finger, settles to the side it was left on, and
+  reports nothing when it stopped short — and the thumb returns.
+- A slider maps the pointer across its track, clamps past the ends, snaps to
+  divisions, keeps the thumb inside the box, steps from the keyboard, and leaves
+  the cross axis to traversal.
+- Progress publishes a fraction and holds no ticker when determinate; the
+  indeterminate sweep runs, wraps, and stops when it is turned off.
+- A button in a tree with no focus scope registers no key handler, attaches no
+  node, publishes no marker, reports Space unconsumed — and is a perfectly good
+  button. M11's property, asserted from M12's side.
+- A frame of hover and press allocates nothing.
+
+Verified on GCC 13.3 and Clang 18.1 with zero warnings under `-Wall -Wextra
+-Wpedantic -Wshadow -Wnon-virtual-dtor`, and under ASan + UBSan: 344 tests,
+1945 checks. The library also compiles clean with `FLTR_ENABLE_CHECKS=OFF`.
