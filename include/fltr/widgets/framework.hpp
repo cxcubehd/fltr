@@ -21,6 +21,7 @@ class BuildOwner;
 class Element;
 class InheritedElementBase;
 class InheritedScope;
+class KeyboardBinding;
 class PointerBinding;
 class RenderObjectElement;
 class TickerRegistry;
@@ -170,6 +171,7 @@ public:
   BuildOwner& owner() const noexcept;
   TextService& textService() const noexcept;
   PointerBinding& pointerBinding() const noexcept;
+  KeyboardBinding& keyboard() const noexcept;
   TickerRegistry& tickers() const noexcept;
   bool mounted() const noexcept;
 
@@ -732,9 +734,12 @@ protected:
 /// PipelineOwner does for layout and paint.
 class BuildOwner {
 public:
-  BuildOwner(TextService& textService, PointerBinding& pointerBinding,
+  BuildOwner(TextService& textService, PointerBinding& pointerBinding, KeyboardBinding& keyboard,
              TickerRegistry& tickers) noexcept
-      : textService_(&textService), pointerBinding_(&pointerBinding), tickers_(&tickers) {}
+      : textService_(&textService),
+        pointerBinding_(&pointerBinding),
+        keyboard_(&keyboard),
+        tickers_(&tickers) {}
   ~BuildOwner();
 
   BuildOwner(const BuildOwner&) = delete;
@@ -746,6 +751,7 @@ public:
   /// service comes from the consumer, and the other two from the binding.
   TextService& textService() const noexcept { return *textService_; }
   PointerBinding& pointerBinding() const noexcept { return *pointerBinding_; }
+  KeyboardBinding& keyboard() const noexcept { return *keyboard_; }
   TickerRegistry& tickers() const noexcept { return *tickers_; }
 
   bool needsBuild() const noexcept { return !dirty_.empty(); }
@@ -773,6 +779,7 @@ private:
   Arena arena_;
   TextService* textService_;
   PointerBinding* pointerBinding_;
+  KeyboardBinding* keyboard_;
   TickerRegistry* tickers_;
   std::unique_ptr<RenderBox> rootRenderObject_;
   int buildCount_ = 0;
@@ -784,6 +791,9 @@ inline TextService& BuildContext::textService() const noexcept {
 }
 inline PointerBinding& BuildContext::pointerBinding() const noexcept {
   return element_->owner()->pointerBinding();
+}
+inline KeyboardBinding& BuildContext::keyboard() const noexcept {
+  return element_->owner()->keyboard();
 }
 inline TickerRegistry& BuildContext::tickers() const noexcept {
   return element_->owner()->tickers();

@@ -99,6 +99,20 @@ float RenderViewport::offsetToReveal(const RenderObject& target, float alignment
   return position_->pixels() + leading - alignment * (mainOf(size_) - extent);
 }
 
+float RenderViewport::offsetToRevealMinimally(const RenderObject& target) const {
+  if (!position_) return 0.0f;
+  const Rect rect = target.localToGlobalRect(target.paintBounds(), this);
+  const bool vertical = axis_ == Axis::Vertical;
+  const float leading = vertical ? rect.top : rect.left;
+  const float trailing = vertical ? rect.bottom : rect.right;
+  const float pixels = position_->pixels();
+  // Past the leading edge wins when the target is taller than the view, which
+  // is the readable end to land on.
+  if (leading < 0.0f) return pixels + leading;
+  if (trailing > mainOf(size_)) return pixels + trailing - mainOf(size_);
+  return pixels;
+}
+
 // ---------------------------------------------------------------------------
 // ScrollbarGeometry
 // ---------------------------------------------------------------------------

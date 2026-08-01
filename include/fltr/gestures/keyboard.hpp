@@ -40,6 +40,10 @@ public:
   void addHandler(KeyHandler& handler);
   void removeHandler(KeyHandler& handler);
 
+  /// How many handlers are registered. The claim that a tree with no focus scope
+  /// in it costs nothing is this number being zero.
+  std::size_t handlerCount() const noexcept { return handlers_.size(); }
+
   bool isPressed(PhysicalKey key) const noexcept;
   KeyModifiers modifiers() const noexcept { return modifiers_; }
   std::size_t pressedCount() const noexcept { return pressed_.size(); }

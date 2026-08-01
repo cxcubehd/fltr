@@ -23,9 +23,16 @@ RenderObject::~RenderObject() {
 
 void RenderObject::applyPaintTransform(const RenderObject& child, Transform2D& transform) const {
   Offset offset;
+  bool found = false;
   visitChildrenWithOffsets([&](RenderObject& candidate, Offset o) {
-    if (&candidate == &child) offset = o;
+    if (&candidate != &child) return;
+    offset = o;
+    found = true;
   });
+  // Not merely defensive: an object that shifts its children and forgets to
+  // report one in `visitChildrenWithOffsets` would answer the walk upward with
+  // a zero offset, and every space derived from it would be quietly wrong.
+  FLTR_EXPECTS(found, "applyPaintTransform was given a node that is not a child");
   transform = Transform2D::translation(offset).then(transform);
 }
 

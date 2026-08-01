@@ -1424,7 +1424,11 @@ form, with a null ancestor meaning the root.
 
 The default `applyPaintTransform` reads the child's offset out of
 `visitChildrenWithOffsets`, so every shifting object in the framework — padding,
-alignment, flex, stack — got it right without being touched. Only
+alignment, flex, stack — got it right without being touched. It also traps a node
+that is not a child, because the failure that would otherwise follow is the
+quiet kind: an object that shifts its children and forgets to report one answers
+the walk upward with a zero offset, and every space derived from it is wrong
+with nothing at all saying so. Only
 `RenderTransform` overrides it, and it now derives painting, hit testing and the
 ancestor walk from one `childTransform()`, so the three cannot disagree about
 where the pivot is. The cost, recorded rather than hidden: the default is a
@@ -1699,6 +1703,13 @@ UBSan build caught. `RenderScrollbarThumb` uses the subscription itself as the
 liveness token, which is the same idea spelled with the mechanism M6 already
 provides.
 
+A position remembers exactly one controller, so *swapping* one for another has
+to be a hand-off — detach the old, then attach the new — and not an attach over
+the top. Attaching over the top leaves the controller that was let go still
+holding a link this side no longer knows about: it reads as a live client, and
+its destructor writes into a position that may already be gone. That was a hole
+in this invariant rather than an exception to it, and it is now a test.
+
 ### Overscroll is what the boundary refused
 
 Under clamping physics the offset never leaves its range, so there is nothing in
@@ -1799,3 +1810,183 @@ the child-management half, which is the same bet Flutter made when
 Verified on GCC 13.3 and Clang 18.1 with zero warnings under `-Wall -Wextra
 -Wpedantic -Wshadow -Wnon-virtual-dtor`, and under ASan + UBSan: 283 tests,
 1676 checks. The library also compiles clean with `FLTR_ENABLE_CHECKS=OFF`.
+
+---
+
+## Milestone 11 — focus and keyboard
+
+Before the components, deliberately: every component in M12 is then written
+once, with keyboard activation, focus state and gamepad navigation designed in
+rather than retrofitted. The load-bearing half of this milestone is not the
+focus tree — it is what a tree *without* one costs.
+
+### Pointer-only is a property of the tree, not a setting
+
+M12 depends on this milestone to compile, not to run. That is a claim about
+allocation, so it is spelled as one:
+
+- `FocusScope` owns the `FocusManager`, and the manager is what registers the
+  single `KeyHandler` on `KeyboardBinding`. No scope, no manager, no handler.
+- `Focus` publishes its `FocusMarker` — the ambient nearest-enclosing-node —
+  only when it found one to attach to. In a tree with no scope, `Focus` returns
+  its child unchanged, so there is no inherited element, no scope table copy and
+  no dependency edge.
+- A `FocusNode` a State holds but never attaches has a null manager, and every
+  operation on it is a no-op rather than an error: `requestFocus()` returns
+  false, `hasFocus()` is false, and no key can reach it.
+
+The test asserts all four: zero handlers, an unattached node, no `FocusMarker`
+in the element dump, and Tab reported unconsumed so the game receives it.
+
+The accepted cost is the mirror image of the property. Because the marker's
+*presence* depends on there being a focus tree, introducing a scope above an
+already-mounted subtree changes that subtree's shape and re-inflates it. This is
+the same class of wrinkle M10 recorded for the scrollbar, and the same fix
+applies where it matters: declare the scope at the root of the screen, which is
+where one goes anyway.
+
+The per-component opt-outs are Flutter's own three axes rather than invented
+ones — `canRequestFocus` (never focusable, pointer only), `skipTraversal`
+(focusable by a click or programmatically, never by Tab or a D-pad), and
+`descendantsAreFocusable` (Flutter's `ExcludeFocus`). A HUD element that is
+clickable but has no business in a menu's tab order is the second of those, and
+it is the common case.
+
+### DIVERGENCE: one walk, not four layers
+
+Flutter routes a key through `HardwareKeyboard`, then the focus chain, then
+`Shortcuts`, then `Actions`, with `Intent` in between so an ancestor can
+re-target what a descendant means by "activate".
+
+There is one walk here. Every node from the focused one up to the root scope is
+offered the event and the first to return true ends it; traversal is what
+happens to the keys nobody took. `Shortcuts` is a node that declines to be
+focused, so it sits in the chain above its subtree and sees keys on the way up —
+which is exactly what Flutter's `Shortcuts` is, minus the indirection.
+
+The cost, stated: a shortcut is bound to its callback where it is declared, so
+an ancestor cannot re-bind what a descendant means. Nothing in this framework
+wants that today; the layer to add if it ever does is `Actions`, and it would
+sit on top of this rather than replace it.
+
+`ShortcutList` copies into the build arena as `WidgetList` does, and
+`ShortcutsState` copies *out* of it at `initState` and `didUpdateWidget` rather
+than at build — because a rebuild driven by `setState` or by an ambient value
+runs `build` against the stored configuration, whose arena is long gone, while a
+key arrives later still. There is a test that rebuilds four times and then fires
+the shortcut.
+
+### DIVERGENCE: tab order is build order
+
+Flutter's default is `ReadingOrderTraversalPolicy`, which sorts descendants
+geometrically. This is Flutter's other policy, `WidgetOrderTraversalPolicy`:
+the traversable descendants of the innermost enclosing scope, in the order they
+were built, wrapping at either end.
+
+Two reasons. Source order is what the author of a menu already controls, and it
+is the order they wrote. And it needs no rects, so Tab works before the first
+layout — which reading order cannot. The cost: a two-column form tabs down the
+columns only if it was built that way.
+
+### Directional traversal, and why the band matters
+
+The D-pad case, and the one that is a first-class requirement for a game rather
+than an afterthought. Candidates are the same set Tab uses. From the focused
+node's centre:
+
+1. discard anything not strictly ahead in the requested direction;
+2. prefer a candidate whose extent overlaps the current node's on the *other*
+   axis — "in band" — because the row below should beat the row below and three
+   columns across, even when the latter is nearer;
+3. rank in-band candidates by how far ahead they are, and everything else by
+   plain distance.
+
+Step 2 is what the test pins: an off-axis node placed strictly closer along the
+axis of travel still loses to the one directly below. Step 3's fallback is
+tested separately with nothing in band at all.
+
+DIVERGENCE: Flutter's `DirectionalFocusTraversalPolicy` keeps a history stack,
+so moving down and then up returns to exactly where you started even in a ragged
+layout. This is stateless, so a down-then-up round trip is only guaranteed in a
+regular one. The stack is additive if a real screen wants it.
+
+### Scopes are the traversal groups
+
+Flutter separates `FocusScope` from `FocusTraversalGroup`, so one scope may hold
+several independent tab orders. A scope is both here: Tab wraps within the
+innermost scope enclosing the focused node, and the arrows search inside it. A
+dialog that should keep the keyboard to itself is therefore just a scope, and
+needs nothing else to trap traversal. The cost is that two independent orders
+need two nested scopes rather than two groups in one — which is how it would be
+written anyway.
+
+Each scope remembers the child that last held the focus, so a scope regaining it
+lands where it left off. Removing the focused node hands the focus to the
+enclosing scope rather than dropping it, and every scope that remembered
+something inside the removed subtree forgets it first — otherwise the scope
+would hand the focus straight back to a node that no longer exists.
+
+### Two objects that know each other, again
+
+`FocusManager` and its root `FocusScopeNode` hold each other and each nulls the
+other's pointer on the way out, exactly as `ScrollController` and
+`ScrollPosition` do, and for the same reason M10 recorded: a consumer's node is
+a local whose scope ends in whatever order it happens to end in relative to the
+tree that used it.
+
+The State that owns a node uses its *subscription* to that node as the liveness
+token — a `Subscription` unhooks itself when its `Listenable` dies — so
+`OwnedFocusNode::get()` returns null once a consumer's node is gone rather than
+a pointer into it. That is the same trick `RenderScrollbarThumb` uses, spelled
+with the mechanism M6 already provides.
+
+Order matters on the way out: the subscription is detached *before* the node is,
+because detaching a node moves the focus, and a focus change must not arrive as
+a callback on a State whose element has already unmounted. `WatchState::dispose`
+makes the same bargain for the same reason.
+
+### `revealMinimally`, which M10 said this milestone would want
+
+M10 left `ensureVisible(target, alignment)` and recorded that Flutter's
+alignment policies were not there, because "M11's directional traversal is what
+will want it". It does, so it is here: `RenderViewport::offsetToRevealMinimally`
+answers the nearest offset that brings a target fully into view, and the current
+one when it already is.
+
+That is the right behaviour for arrowing down a list — the view creeps by one
+row instead of jumping the row to an edge — and it is what `Focus` calls when
+its node takes the focus and there is a `ScrollScope` above it. A node that is
+already visible produces no scroll at all, which the test asserts by focusing
+the same node twice.
+
+### What is verified
+
+- A tree with no scope registers no handler, publishes no marker, attaches no
+  node, and reports Tab unconsumed; one scope registers exactly one handler
+  however many nodes hang off it.
+- Tab moves in build order and wraps; Shift-Tab goes back; a node that skips
+  traversal is passed over but still takes the focus when asked directly; one
+  that cannot request focus is never focusable; excluding a subtree removes
+  everything below it, and un-excluding puts it back.
+- A key walks from the focused node up, in order, and the first to take it ends
+  the walk; a key nobody wanted is reported unconsumed.
+- A D-pad moves to the nearest node that way, prefers one it lines up with over
+  a nearer one off to the side, falls back to plain distance when nothing lines
+  up, and leaves the key alone when there is nothing that way — or when the
+  scope said the arrows are not its business, while Tab still works.
+- A nested scope keeps traversal to itself, remembers where it was, and gives
+  the focus back there; unfocusing returns it to the scope and forgets; removing
+  the focused node leaves the focus on its scope and traversal starts over.
+- A node notifies only when its own state moved, and focusing what is already
+  focused is not a change.
+- Autofocus claims an empty scope and never steals from a full one.
+- A shortcut fires while the focus is below it, not when it is elsewhere,
+  matches its modifiers exactly, and still works several builds after the arena
+  that declared it was released.
+- Moving the focus into a scrolled row brings it into view by the least it can,
+  and does nothing at all when it is already visible.
+- Moving the focus around allocates nothing.
+
+Verified on GCC 13.3 and Clang 18.1 with zero warnings under `-Wall -Wextra
+-Wpedantic -Wshadow -Wnon-virtual-dtor`, and under ASan + UBSan: 309 tests,
+1776 checks. The library also compiles clean with `FLTR_ENABLE_CHECKS=OFF`.
