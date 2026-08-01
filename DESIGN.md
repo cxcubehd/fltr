@@ -2346,13 +2346,15 @@ half off it is never what was wanted.
 
 ### What is verified
 
-`tests/test_overlay.cpp`, 19 tests:
+`tests/test_overlay.cpp`, 20 tests:
 
 - An entry paints after the base and is offered the pointer before it, while
   the base still answers everywhere the entry is not.
 - An entry larger than the base leaves the base's size alone — confirmed by
   giving the overlay stack semantics and watching the test catch it.
 - Entries stack in insertion order, and re-inserting one puts it on top.
+- A `Positioned` entry is placed by its insets, which is the same arithmetic a
+  stack does and the same code.
 - With no overlay above, the lookup is null and no scope is in the tree.
 - Inserting an entry rebuilds neither the tree below nor the other entries, and
   an entry asking to rebuild is exactly one dirty element.
@@ -2470,5 +2472,5 @@ was showing and resumes when it is shown again.
 - A frame of exit animation builds nothing and allocates nothing.
 
 Verified on GCC 13.3 and Clang 18.1 with zero warnings under `-Wall -Wextra
--Wpedantic -Wshadow -Wnon-virtual-dtor`, and under ASan + UBSan: 375 tests,
-2075 checks. The library also compiles clean with `FLTR_ENABLE_CHECKS=OFF`.
+-Wpedantic -Wshadow -Wnon-virtual-dtor`, and under ASan + UBSan: 376 tests,
+2077 checks. The library also compiles clean with `FLTR_ENABLE_CHECKS=OFF`.

@@ -223,6 +223,35 @@ TEST(overlay_entries_stack_in_the_order_they_were_inserted) {
   CHECK(indexOf(reordered, kSecondColor) < indexOf(reordered, kEntryColor));
 }
 
+TEST(overlay_a_positioned_entry_is_placed_by_its_insets) {
+  Harness h(kSurface);
+  OverlayState* overlay = nullptr;
+
+  OverlayEntry entry([](BuildContext&) {
+    return Positioned::make({
+        .right = 20.0f,
+        .bottom = 10.0f,
+        .width = 40.0f,
+        .height = 25.0f,
+        .child = painted(kEntryColor, {40, 25}),
+    });
+  });
+
+  ScriptedRoot root(h, [&] {
+    return Overlay::make({
+        .child = Probe::make({.found = &overlay, .child = painted(kBaseColor, kSurface)}),
+    });
+  });
+  h.frame();
+  overlay->insert(entry);
+  h.frame();
+
+  auto& stack = static_cast<RenderOverlay&>(
+      *elementFor(h.rootElement(), widgetTypeOf<OverlayStack>()).renderObject());
+  CHECK_EQ(stack.childAt(1).size(), Size(40, 25));
+  CHECK_EQ(stack.childOffsetAt(1), Offset(140, 65));
+}
+
 TEST(overlay_no_overlay_above_reports_none) {
   Harness h(kSurface);
   OverlayState* overlay = nullptr;
