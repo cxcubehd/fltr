@@ -528,6 +528,59 @@ private:
   Args args_;
 };
 
+/// Hides its subtree from the pointer, leaving whatever is behind reachable.
+class IgnorePointer final : public Configure<IgnorePointer, SingleChildRenderObjectWidget> {
+public:
+  struct Args {
+    Key key;
+    bool ignoring = true;
+    WidgetRef child;
+  };
+  using Render = RenderIgnorePointer;
+
+  explicit IgnorePointer(const Args& args) : Configure(args.key), args_(args) {}
+
+  const char* name() const noexcept override { return "IgnorePointer"; }
+  WidgetRef child() const noexcept { return args_.child; }
+
+  std::unique_ptr<RenderIgnorePointer> createRenderObject(BuildContext&) const {
+    return std::make_unique<RenderIgnorePointer>(args_.ignoring);
+  }
+  void updateRenderObject(BuildContext&, RenderIgnorePointer& render) const {
+    render.setIgnoring(args_.ignoring);
+  }
+
+private:
+  Args args_;
+};
+
+/// Takes the pointer for itself, so its subtree never sees it and neither does
+/// anything behind. What a disabled control over live content wants.
+class AbsorbPointer final : public Configure<AbsorbPointer, SingleChildRenderObjectWidget> {
+public:
+  struct Args {
+    Key key;
+    bool absorbing = true;
+    WidgetRef child;
+  };
+  using Render = RenderAbsorbPointer;
+
+  explicit AbsorbPointer(const Args& args) : Configure(args.key), args_(args) {}
+
+  const char* name() const noexcept override { return "AbsorbPointer"; }
+  WidgetRef child() const noexcept { return args_.child; }
+
+  std::unique_ptr<RenderAbsorbPointer> createRenderObject(BuildContext&) const {
+    return std::make_unique<RenderAbsorbPointer>(args_.absorbing);
+  }
+  void updateRenderObject(BuildContext&, RenderAbsorbPointer& render) const {
+    render.setAbsorbing(args_.absorbing);
+  }
+
+private:
+  Args args_;
+};
+
 // ---------------------------------------------------------------------------
 // Leaves
 // ---------------------------------------------------------------------------
