@@ -3,7 +3,7 @@
 namespace fltr {
 
 WidgetBinding::WidgetBinding(Size surface, TextService& textService)
-    : buildOwner_(textService, pointers_, tickers_), surface_(surface) {}
+    : buildOwner_(textService, pointers_, keyboard_, tickers_), surface_(surface) {}
 
 WidgetBinding::~WidgetBinding() {
   // Unmount before anything is destroyed, so every State sees dispose().

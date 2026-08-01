@@ -185,7 +185,16 @@ void ScrollPosition::animateTo(float value, float duration, Curve curve) {
 
 void ScrollPosition::ensureVisible(const RenderObject& target, float alignment, float duration) {
   if (!viewport_) return;
-  const float value = metrics_.clampToRange(viewport_->offsetToReveal(target, alignment));
+  reveal(metrics_.clampToRange(viewport_->offsetToReveal(target, alignment)), duration);
+}
+
+void ScrollPosition::revealMinimally(const RenderObject& target, float duration) {
+  if (!viewport_) return;
+  reveal(metrics_.clampToRange(viewport_->offsetToRevealMinimally(target)), duration);
+}
+
+void ScrollPosition::reveal(float value, float duration) {
+  if (value == metrics_.pixels) return;
   if (duration <= 0.0f) {
     jumpTo(value);
   } else {

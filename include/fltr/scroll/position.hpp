@@ -94,6 +94,11 @@ public:
   /// if the target is not below this position's viewport.
   void ensureVisible(const RenderObject& target, float alignment = 0.0f, float duration = 0.0f);
 
+  /// The same, moving as little as possible and not at all when `target` is
+  /// already visible. This is what focus traversal wants: arrowing down a list
+  /// should creep by one row rather than jump the row to an edge.
+  void revealMinimally(const RenderObject& target, float duration = 0.0f);
+
   // --- what the Scrollable's gestures drive --------------------------------
 
   void beginDrag();
@@ -130,6 +135,7 @@ private:
   /// Moves the offset as far as the boundary allows, and reports what it
   /// refused -- which is how a ballistic activity learns it has arrived.
   float setPixels(float value);
+  void reveal(float value, float duration);
   void didOverscroll(float amount);
   void relaxOverscroll(float seconds);
   void beginActivity(ScrollActivityKind kind);

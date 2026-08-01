@@ -42,6 +42,10 @@ public:
   /// it lands: 0 against the leading edge, 1 against the trailing one.
   float offsetToReveal(const RenderObject& target, float alignment) const;
 
+  /// The nearest offset that brings `target` fully into view, which is the
+  /// current one when it already is.
+  float offsetToRevealMinimally(const RenderObject& target) const;
+
 private:
   friend class ScrollPosition;
 
