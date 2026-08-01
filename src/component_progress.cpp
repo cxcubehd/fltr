@@ -30,6 +30,11 @@ void RawProgressState::adoptConfiguration() {
     return;
   }
   if (!driver_.isAnimating()) driver_.repeat();
+  // Published now rather than on the first tick: the sweep starts where the
+  // driver already is, and a bar that showed its old determinate fill for a
+  // frame after being switched over would be showing a number that means
+  // nothing.
+  sample();
 }
 
 WidgetRef RawProgressState::build(BuildContext&) {

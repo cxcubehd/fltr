@@ -2121,6 +2121,13 @@ pressing anywhere on the track is already a press on the thumb. What the thumb
 does need is `thumbExtent` — Flutter's `_trackRect` inset, as one number — so
 that the ends of the range stay reachable when the thumb has width.
 
+The value runs the way the coordinate space does, so a vertical slider's
+minimum is at the *top* and ArrowUp lowers it. That is the mechanical answer
+rather than the expected one — a volume column wants its maximum at the top —
+and it is documented on the field instead of being fixed with a `reversed` flag,
+because inverting is one subtraction in the consumer's own value mapping and a
+flag whose whole job is to negate a number earns its keep nowhere else.
+
 Keyboard handling is where the slider meets M11. Only the two arrows *along* the
 slider's axis are consumed; the pair across it is left alone and reaches
 traversal, so a D-pad can leave a row of sliders rather than being trapped in
@@ -2140,15 +2147,47 @@ from a button by one published state, and publishing it is all this layer is
 allowed to do about it — `ensureVisible` on focus already came free from M11.
 No second component.
 
+### Where the outlive rule ends
+
+A controller and a focus node are consumer-owned and named by pointer, and the
+standing rule is that they outlive the widget naming them. The subscription each
+`Owned*` holds is a liveness token, and review made it worth saying exactly what
+it does and does not buy.
+
+What it buys is the window between the object's death and the next build: events
+already in flight — a pointer callback, a focus notification — find a detached
+subscription and go nowhere, instead of writing into freed memory. That window
+is real, because teardown orderings are hard for a consumer to control.
+
+What it does not buy is a *build* that still names the dead object. At that point
+the rule has been broken outright, and the honest response is a contract
+violation rather than a re-subscription. Both `OwnedStates::bind` and
+`OwnedFocusNode::bind` previously fell through to `subscribe` in exactly that
+case — a use-after-free reachable from ordinary consumer code, and one this
+milestone inherited from M11 by copying the shape. Both now trap, and with checks
+compiled out both stay memory-safe: the states controller publishes nowhere, and
+the focus node falls back to the State's own so the tree stays whole.
+
+The same reasoning left one contract behind in `buildComponentShell`. It fills in
+hover for every component, which means a component that set its own `onEnter`
+would have it silently overwritten. No component does, and chaining the two
+callbacks would be machinery for a caller that does not exist — so the
+overwriting is stated as a precondition instead, and a future component that
+wants its own hover trips it rather than losing it.
+
 ### What is verified
 
-`tests/test_components.cpp`, 31 tests:
+`tests/test_components.cpp`, 34 tests:
 
 - A controller notifies only when the set actually moved, and a component
   publishes into the consumer's controller when given one.
 - A consumer's controller destroyed under a live component is let go of rather
-  than written into. Confirmed by reverting the guard and watching ASan report
-  the use-after-free.
+  than written into, and a *build* that goes on naming the dead one is trapped
+  rather than re-subscribed. Both confirmed by reverting the guards and watching
+  ASan report the use-after-free.
+- A slider maps, sizes and steps along whichever axis it was given: confirmed by
+  breaking each of the three vertical branches in turn and watching the tests
+  catch all three.
 - A `StatesBuilder` rebuilds its own subtree and nothing above it, and the
   component itself never rebuilds for its own state — the zero-cost claim, as a
   build count. Outside a component it builds once with nothing set.
@@ -2178,5 +2217,5 @@ No second component.
 - A frame of hover and press allocates nothing.
 
 Verified on GCC 13.3 and Clang 18.1 with zero warnings under `-Wall -Wextra
--Wpedantic -Wshadow -Wnon-virtual-dtor`, and under ASan + UBSan: 340 tests,
-1929 checks. The library also compiles clean with `FLTR_ENABLE_CHECKS=OFF`.
+-Wpedantic -Wshadow -Wnon-virtual-dtor`, and under ASan + UBSan: 344 tests,
+1945 checks. The library also compiles clean with `FLTR_ENABLE_CHECKS=OFF`.

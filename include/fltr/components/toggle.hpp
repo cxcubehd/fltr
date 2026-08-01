@@ -60,6 +60,8 @@ public:
     /// Cycles Off, On, Mixed rather than Off, On.
     bool tristate = false;
     /// Whether pressing an On toggle turns it off. False is the radio shape.
+    /// Describes the two-value cycle only: a tristate toggle always completes
+    /// its own, since a group of them is not a thing radios form.
     bool canToggleOff = true;
     /// How far a thumb travels, which is what makes this a switch: a drag of
     /// that distance moves the position from end to end, and letting go past

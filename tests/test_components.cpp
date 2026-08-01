@@ -148,6 +148,27 @@ TEST(components_a_controller_destroyed_under_a_live_component_is_let_go_of) {
   CHECK_EQ(presses, 1);
 }
 
+TEST(components_a_widget_that_goes_on_naming_a_destroyed_controller_is_trapped) {
+  Harness h;
+  auto states = std::make_unique<WidgetStatesController>();
+  WidgetStatesController* named = states.get();
+  ScriptedRoot root(h, [&] {
+    return screen({placed(kBox, RawButton::make({
+                                    .onPressed = [] {},
+                                    .statesController = named,
+                                    .child = fill(),
+                                }))});
+  });
+  h.frame();
+
+  // Surviving the events in flight is one thing; a *build* that still names the
+  // dead controller is the consumer breaking the outlive rule, and re-binding
+  // would be a write into freed memory rather than a diagnosis.
+  states.reset();
+  root.rebuild();
+  CHECK_THROWS(h.frame());
+}
+
 // ---------------------------------------------------------------------------
 // The two ways to read a component's state
 // ---------------------------------------------------------------------------
@@ -932,6 +953,85 @@ TEST(components_a_slider_steps_from_the_keyboard_and_leaves_the_cross_axis_alone
   CHECK_EQ(value, 1.0f);
 }
 
+TEST(components_a_vertical_slider_runs_the_way_its_coordinates_do) {
+  Harness h;
+  FocusNode node;
+  FocusNode beside;
+  float value = 0.0f;
+  constexpr Rect kTall = Rect::fromLTWH(20, 10, 30, 60);
+  ScriptedRoot root(h, [&] {
+    return FocusScope::make({
+        .child = screen({
+            placed(kTall, RawSlider::make({
+                              .value = value,
+                              .onChanged = [&](float next) { value = next; },
+                              .axis = Axis::Vertical,
+                              .keyStep = 0.25f,
+                              .focusNode = &node,
+                              .autofocus = true,
+                              .child = SizedBox::make({.size = kTall.size()}),
+                          })),
+            placed(Rect::fromLTWH(100, 10, 30, 60),
+                   Focus::make({.node = &beside, .child = SizedBox::make({.size = {30, 60}})})),
+        }),
+    });
+  });
+  h.frame();
+
+  // Sixty tall, so fifteen pixels down is a quarter -- and further down is
+  // further up the range, because the fraction runs with the coordinate space.
+  h.binding().dispatchPointer(mouse(PointerPhase::Down, {35, 25}));
+  CHECK_EQ(value, 0.25f);
+
+  h.binding().dispatchPointer(mouse(PointerPhase::Move, {35, 55}));
+  CHECK_EQ(value, 0.75f);
+  h.binding().dispatchPointer(mouse(PointerPhase::Up, {35, 55}));
+  root.rebuild();
+  h.frame();
+
+  CHECK(h.binding().dispatchKey(down(LogicalKey::ArrowUp)));
+  CHECK_EQ(value, 0.5f);
+  root.rebuild();
+  h.frame();
+
+  CHECK(h.binding().dispatchKey(down(LogicalKey::ArrowDown)));
+  CHECK_EQ(value, 0.75f);
+  root.rebuild();
+  h.frame();
+
+  // Across the axis is traversal's, whichever axis this one runs along.
+  CHECK(h.binding().dispatchKey(down(LogicalKey::ArrowRight)));
+  CHECK(beside.hasPrimaryFocus());
+  CHECK_EQ(value, 0.75f);
+}
+
+TEST(components_a_vertical_slider_keeps_the_thumb_inside_the_box) {
+  Harness h;
+  float value = 0.0f;
+  constexpr Rect kTall = Rect::fromLTWH(20, 10, 30, 60);
+  ScriptedRoot root(h, [&] {
+    return screen({placed(kTall, RawSlider::make({
+                                     .value = value,
+                                     .onChanged = [&](float next) { value = next; },
+                                     .axis = Axis::Vertical,
+                                     .thumbExtent = 20.0f,
+                                     .child = SizedBox::make({.size = kTall.size()}),
+                                 }))});
+  });
+  h.frame();
+
+  // Sixty tall less a twenty-tall thumb leaves forty of travel, starting ten in.
+  h.binding().dispatchPointer(mouse(PointerPhase::Down, {35, 20}));
+  CHECK_EQ(value, 0.0f);
+
+  h.binding().dispatchPointer(mouse(PointerPhase::Move, {35, 40}));
+  CHECK_EQ(value, 0.5f);
+
+  h.binding().dispatchPointer(mouse(PointerPhase::Move, {35, 60}));
+  CHECK_EQ(value, 1.0f);
+  h.binding().dispatchPointer(mouse(PointerPhase::Up, {35, 60}));
+}
+
 TEST(components_a_disabled_slider_reports_nothing) {
   Harness h;
   float value = 0.5f;
@@ -987,18 +1087,23 @@ TEST(components_an_indeterminate_progress_sweeps_and_wraps) {
   ValueListenable<float>* fraction = nullptr;
   ScriptedRoot root(h, [&] {
     return screen({placed(kBox, RawProgress::make({
+                                    .value = 0.7f,
                                     .indeterminate = indeterminate,
                                     .period = 1.0f,
                                     .child = Probe::make({.fraction = &fraction, .child = fill()}),
                                 }))});
   });
   h.frame();
+  CHECK_EQ(fraction->value(), 0.7f);
   CHECK_EQ(h.binding().tickers().activeTickerCount(), std::size_t{0});
 
   indeterminate = true;
   root.rebuild();
   h.frame();
   CHECK_EQ(h.binding().tickers().activeTickerCount(), std::size_t{1});
+  // The sweep starts where the driver is, not where the old fill was: a bar
+  // showing 0.7 for one more frame would be showing a number that means nothing.
+  CHECK_EQ(fraction->value(), 0.0f);
 
   h.frame(0.25f);
   CHECK_EQ(fraction->value(), 0.25f);
@@ -1013,5 +1118,5 @@ TEST(components_an_indeterminate_progress_sweeps_and_wraps) {
   root.rebuild();
   h.frame();
   CHECK_EQ(h.binding().tickers().activeTickerCount(), std::size_t{0});
-  CHECK_EQ(fraction->value(), 0.0f);
+  CHECK_EQ(fraction->value(), 0.7f);
 }

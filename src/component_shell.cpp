@@ -6,6 +6,8 @@ WidgetRef buildComponentShell(const ComponentShell& shell) {
   OwnedStates* states = shell.states;
   FLTR_EXPECTS(states != nullptr, "a component shell needs the states its component owns");
 
+  FLTR_EXPECTS(!shell.pointer.onEnter && !shell.pointer.onExit,
+               "hover belongs to the shell; a component's own enter and exit would be dropped");
   Pointer::Args pointer = shell.pointer;
   pointer.onEnter = [states] { states->update(WidgetState::Hovered, true); };
   pointer.onExit = [states] { states->update(WidgetState::Hovered, false); };

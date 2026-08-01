@@ -60,6 +60,12 @@ public:
     Callback<void(float)> onChangeStart;
     Callback<void(float)> onChangeEnd;
 
+    /// Which way the value runs -- and it runs the way the coordinate space
+    /// does, so a vertical slider's minimum is at the *top*: pressing lower sets
+    /// a higher value, and ArrowUp lowers it. A consumer wanting a volume
+    /// column, with its maximum at the top, inverts in their own value mapping,
+    /// which is one subtraction and keeps this from growing a flag whose whole
+    /// job is to negate a number.
     Axis axis = Axis::Horizontal;
     /// How wide the thumb is, so the ends of the range stay reachable: the value
     /// maps across the box less this. Flutter's `_trackRect`, as one number.

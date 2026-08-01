@@ -61,7 +61,13 @@ class OwnedStates {
 public:
   void bind(WidgetStatesController* supplied) {
     WidgetStatesController* next = supplied ? supplied : &own_;
-    if (next == bound_ && liveness_.attached()) return;
+    // A detached subscription with a controller still named means that
+    // controller was destroyed, because there is no live-but-unsubscribed state.
+    // Returning rather than re-subscribing is what keeps a consumer who went on
+    // naming it out of freed memory.
+    FLTR_EXPECTS(next != bound_ || liveness_.attached(),
+                 "a widget still names a states controller that has been destroyed");
+    if (next == bound_) return;
     bound_ = next;
     bound_->subscribe(liveness_, [](void*) {}, nullptr);
   }

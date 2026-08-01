@@ -506,6 +506,23 @@ TEST(focus_a_node_that_outlived_its_widget_answers_nothing_rather_than_reading_i
   CHECK(a.rect().isEmpty());
 }
 
+TEST(focus_a_widget_that_goes_on_naming_a_destroyed_node_is_trapped) {
+  Harness h;
+  auto owned = std::make_unique<FocusNode>();
+  FocusNode* named = owned.get();
+  ScriptedRoot root(h, [&] {
+    return FocusScope::make({.child = screen({box(named, Rect::fromLTWH(0, 0, 40, 20))})});
+  });
+  h.frame();
+
+  // A build that still names the dead node is the consumer breaking the outlive
+  // rule. Re-subscribing to it would be a read of freed memory rather than a
+  // diagnosis of one.
+  owned.reset();
+  root.rebuild();
+  CHECK_THROWS(h.frame());
+}
+
 TEST(focus_a_node_notifies_only_when_its_own_state_moved) {
   FocusScopeNode scope;
   FocusNode a, b;
