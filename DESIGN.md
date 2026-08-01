@@ -1358,3 +1358,196 @@ build is left, the way `PipelineOwner::PhaseScope` already does for the pipeline
 Verified on GCC 13.3 and Clang 18.1, and under ASan + UBSan: 207 tests, 1245
 checks. The library and the animation headers also compile clean with
 `FLTR_ENABLE_CHECKS=OFF` on both compilers.
+
+---
+
+## Milestone 9 — input foundations
+
+Everything M10 through M12 needs from the pointer and the keyboard, and nothing
+that reads from either. Scrolling wants drag, velocity and the wheel; the
+component layer wants long press, double tap, cursors and buttons; focus wants a
+key surface; and all three want to ask a render object where it is.
+
+### Time enters the gesture layer through the frame
+
+M5 recorded that a contested tap could not show press feedback early "because
+that needs a clock, and nothing in this layer has one". A long press has the same
+problem in a sharper form: no pointer event arrives while a finger rests, so
+nothing but a clock can ever fire it.
+
+DIVERGENCE: Flutter stamps every `PointerEvent` with a platform timestamp and
+schedules recognizer deadlines on `Timer`. `PointerBinding` instead owns a single
+monotonic value that `WidgetBinding::drawFrame` advances by the frame's elapsed
+seconds, and recognizers both measure durations and set deadlines against it.
+Three things follow:
+
+- there is one clock, so a deadline and a velocity sample cannot disagree about
+  when something happened;
+- a test makes a long press fire by passing `0.6f` to a frame, with no wall time
+  and no flake — the same bargain the ticker already makes;
+- a game pumps its input queue at a frame boundary anyway, so a per-event
+  timestamp would usually be the frame's timestamp with extra steps.
+
+The cost is resolution: a deadline lands on the next frame boundary rather than
+exactly, and several events between two frames share one instant. The second is
+the one that matters, because it is what the velocity tracker sees, so
+`addSample` *replaces* a sample whose time is unchanged rather than adding a
+second one — otherwise one instant would be weighted by however many events the
+consumer happened to pump into it. If sub-frame timestamps are ever wanted,
+adding one to `PointerEvent` is additive and nothing above has to change.
+
+`needsFrame()` is true while any deadline is pending, so a consumer that draws
+only when asked still fires long presses.
+
+### Velocity is fitted, not differenced
+
+`VelocityTracker` keeps twenty samples in a ring, discards anything more than
+100ms older than the newest, and fits a degree-2 polynomial per axis by solving
+the 3x3 normal equations, taking the slope at the moment of release. This is
+Flutter's approach and it is worth the arithmetic: a finger that decelerates into
+a release produces a large *final* delta, and a two-sample difference turns that
+into a fling the hand did not throw. The test for it holds the pointer still for
+the last three samples and asserts the estimate falls under the fling threshold.
+
+The fit also reports confidence — how much of the variance it explains — so a
+gesture that reversed mid-flight is distinguishable from one that did not. Below
+three distinct samples, or with a singular system, it falls back to the secant
+over the window, which is all the evidence supports.
+
+### A render object can finally say where it is
+
+The gap surgery item 1 named: `visitChildrenWithOffsets` walks down, hit testing
+resolves positions on the way down, and nothing walked up. `RenderObject` now has
+Flutter's pair — `applyPaintTransform(child, transform)` and
+`getTransformTo(ancestor)` — plus `localToGlobal`, `globalToLocal` and a rect
+form, with a null ancestor meaning the root.
+
+The default `applyPaintTransform` reads the child's offset out of
+`visitChildrenWithOffsets`, so every shifting object in the framework — padding,
+alignment, flex, stack — got it right without being touched. Only
+`RenderTransform` overrides it, and it now derives painting, hit testing and the
+ancestor walk from one `childTransform()`, so the three cannot disagree about
+where the pivot is. The cost, recorded rather than hidden: the default is a
+linear scan of the parent's children per level, where Flutter's parent-data
+pointer is O(1). `getTransformTo` is therefore O(depth x siblings), which is
+fine for the handful of calls per gesture that use it and would not be fine per
+frame per node.
+
+**This lifts the M5 limitation.** `HitTestResult` still records resolved local
+positions rather than transforms, and still should — but a recognizer no longer
+needs the path to answer "where is this in my own space". It asks the region that
+owns it, which walks up. A drag inside a scaled or rotated subtree now reports
+correct local positions, and there is a test that drives one through a 2x scale.
+
+### Signals do not enter the arena
+
+A wheel notch is not contested: the pointer is not pressed and no gesture is
+forming. `dispatchSignal` hit tests, then offers the signal to each region
+innermost-first until one returns true, and reports whether any did — so a
+consumer whose UI declined the wheel can scroll its own world with it. This is
+what a browser does when a list scrolled to its end lets the page move, and it is
+what M10 will hang smooth wheel scrolling on. It is the second hit-testing entry
+point `PointerBinding` grew; the per-frame hover resolution was the first.
+
+### The arena learned to be held
+
+A double tap has to survive the first tap's *up*, and the sweep that up triggers
+would award the pointer to whoever else is contending. `GestureArena::hold` and
+`release` defer the sweep, exactly as Flutter's do. The visible consequence,
+which is Flutter's too: a region with both `onTap` and `onDoubleTap` fires its
+single tap one double-tap timeout late, because until that timeout elapses the
+first tap may still turn out to be half of one. The test says so in its name.
+
+### Recognizers are created on demand
+
+`RenderPointerRegion` previously held a `TapGestureRecognizer` by value. With
+four recognizer kinds that would make every region pay for all of them, so each
+now lives behind a `unique_ptr` created when a callback wants it and destroyed
+when none does. `recognizerCount()` makes "a region that only asks for a cursor
+holds nothing" a number a test reads rather than a claim.
+
+The same region carries the cursor. `MouseTracker` resolves the innermost hovered
+region with an opinion, `Defer` being the absence of one, and `Basic` when
+nothing under the pointer has any. The consumer reads `WidgetBinding::cursor()`
+once a frame and applies it, since it owns the window.
+
+### Two behaviours worth pinning down because they surprise people
+
+Both are Flutter's, and both are tests rather than comments:
+
+- **An uncontested drag begins at the down.** An arena with one member resolves
+  the moment it closes, so a region whose only gesture is a drag starts dragging
+  before anything has moved. That is what a scroll view wants — content follows
+  the finger from the first pixel — and the slop only exists once something
+  competes.
+- **`DragStartBehavior::Start` swallows the travel before the accepting event,
+  not the accepting event's own delta.** With input at 60Hz or better the
+  residual is a few pixels. The two settings are tested with the same event
+  sequence so the difference between them is exactly the ten pixels one of them
+  swallows.
+
+### DIVERGENCE: one drag recognizer with an axis
+
+Flutter has `VerticalDragGestureRecognizer`, `HorizontalDragGestureRecognizer`
+and `PanGestureRecognizer` as three classes. What differs between them is which
+distance is compared against which slop and which component is reported, so this
+is one recognizer with a `DragAxis`. The arena behaviour is identical, and a
+widget that has to choose at runtime instantiates one type instead of three.
+
+A constrained drag also reports only its own axis, so a consumer never has to
+remember to discard the other one.
+
+### The keyboard is a surface, not routing
+
+`KeyboardBinding` holds what is physically held, the current modifiers, and an
+ordered list of handlers, each of which may consume an event. There is no notion
+of focus in it: M11's focus manager will register as one more handler, which is
+what keeps a tree with no focus scope in it holding nothing.
+
+The held-key set earns its place on its own — a game reads it directly for
+movement, where an event stream is the wrong shape — and `clearPressed()` covers
+losing the window, where the ups will never arrive.
+
+Physical and logical keys are separate enums, as in Flutter and for the same
+reason: movement binds to the position so WASD survives AZERTY, while a shortcut
+binds to the meaning. The produced code point travels on the event rather than
+being derived from the key, because which one it is depends on the layout and the
+IME, both of which live on the consumer's side.
+
+### What is verified
+
+- A nested box maps its own space into an ancestor's, and stopping at an
+  intermediate ancestor answers in that ancestor's space.
+- The ancestor walk and hit testing agree through a scale, having derived the
+  matrix from the same place; a degenerate transform reports the origin rather
+  than a wrong point.
+- Velocity is fitted over a window: a pointer that stopped before release is not
+  a fling, samples sharing an instant are merged rather than weighted twice, and
+  samples outside the horizon are not evidence.
+- A contested drag waits for the slop and an uncontested one does not; a tap
+  inside a draggable region is still a tap; dragging out of a tappable one
+  cancels the tap and keeps the drag; nested drags are decided by which axis
+  cleared its slop first.
+- A drag inside a scaled subtree reports its own space.
+- A long press fires from the clock while the pointer holds still, lifting early
+  is a tap instead, drifting abandons it, and the deadline is withdrawn with the
+  gesture.
+- Two taps in the same place are a double tap; one too late is two single taps,
+  the first of them delayed by exactly the timeout; one too far away is neither.
+- A signal is offered innermost-first, chains outward when declined, is reported
+  unconsumed when nothing wants it, and never enters the arena.
+- The innermost region with an opinion decides the cursor; recognizers appear and
+  disappear with the callbacks that want them; a cursor-only region holds none.
+- A gesture answers only to the buttons it was given, so a secondary-button menu
+  and a primary-button tap coexist on overlapping regions.
+- A handler that consumes a key ends the walk; modifiers and the produced
+  character travel with the event; losing the window releases everything held.
+- A steady frame with a drag in flight allocates nothing, and neither does a
+  frame that fires a deadline — which is why the deadline list is partitioned and
+  insertion-sorted by hand rather than with `std::stable_partition` and
+  `std::stable_sort`, both of which take a temporary buffer from the heap.
+- A tree with nothing pending asks for no frames, and one with a press pending
+  asks for them until it fires.
+
+Verified on GCC 13.3 and Clang 18.1, and under ASan + UBSan: 246 tests, 1361
+checks. The library also compiles clean with `FLTR_ENABLE_CHECKS=OFF`.

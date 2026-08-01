@@ -18,6 +18,35 @@ RenderObject::~RenderObject() {
 }
 
 // ---------------------------------------------------------------------------
+// Coordinate spaces
+// ---------------------------------------------------------------------------
+
+void RenderObject::applyPaintTransform(const RenderObject& child, Transform2D& transform) const {
+  Offset offset;
+  visitChildrenWithOffsets([&](RenderObject& candidate, Offset o) {
+    if (&candidate == &child) offset = o;
+  });
+  transform = Transform2D::translation(offset).then(transform);
+}
+
+Transform2D RenderObject::getTransformTo(const RenderObject* ancestor) const {
+  if (this == ancestor) return Transform2D::identity();
+  if (parent_ == nullptr) {
+    FLTR_EXPECTS(ancestor == nullptr, "getTransformTo was given a node that is not an ancestor");
+    return Transform2D::identity();
+  }
+  Transform2D transform = parent_->getTransformTo(ancestor);
+  parent_->applyPaintTransform(*this, transform);
+  return transform;
+}
+
+Offset RenderObject::globalToLocal(Offset global, const RenderObject* ancestor) const {
+  Transform2D inverse;
+  if (!getTransformTo(ancestor).invert(inverse)) return Offset::zero();
+  return inverse.apply(global);
+}
+
+// ---------------------------------------------------------------------------
 // Tree
 // ---------------------------------------------------------------------------
 

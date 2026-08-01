@@ -45,7 +45,7 @@ void GestureArena::drop(PointerId pointer) {
 void GestureArena::add(PointerId pointer, GestureArenaMember& member) {
   Entry* entry = find(pointer);
   if (!entry) {
-    arenas_.push_back({pointer, false});
+    arenas_.push_back({pointer});
     entry = &arenas_.back();
   }
   FLTR_EXPECTS(!entry->closed, "a gesture arena may not be joined after it has closed");
@@ -65,7 +65,24 @@ void GestureArena::close(PointerId pointer) {
 }
 
 void GestureArena::sweep(PointerId pointer) {
-  if (find(pointer)) award(pointer, firstMember(pointer));
+  Entry* entry = find(pointer);
+  if (!entry) return;
+  if (entry->held) {
+    entry->pendingSweep = true;
+    return;
+  }
+  award(pointer, firstMember(pointer));
+}
+
+void GestureArena::hold(PointerId pointer) {
+  if (Entry* entry = find(pointer)) entry->held = true;
+}
+
+void GestureArena::release(PointerId pointer) {
+  Entry* entry = find(pointer);
+  if (!entry || !entry->held) return;
+  entry->held = false;
+  if (entry->pendingSweep) sweep(pointer);
 }
 
 void GestureArena::cancel(PointerId pointer) {

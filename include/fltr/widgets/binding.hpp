@@ -5,6 +5,7 @@
 #include "fltr/animation/ticker.hpp"
 #include "fltr/gestures/binding.hpp"
 #include "fltr/gestures/events.hpp"
+#include "fltr/gestures/keyboard.hpp"
 #include "fltr/render/object.hpp"
 #include "fltr/widgets/basic.hpp"
 
@@ -38,6 +39,14 @@ public:
   /// them. Unrelated to the frame: an event is delivered when it arrives.
   void dispatchPointer(const PointerEvent& event);
 
+  /// One wheel notch or trackpad pan. Returns whether a region consumed it, so
+  /// the consumer can fall back to scrolling its own world when the UI declines.
+  bool dispatchSignal(const PointerSignalEvent& event);
+
+  /// One key event. Returns whether a handler consumed it, which is the same
+  /// question: an unconsumed key belongs to the game.
+  bool dispatchKey(const KeyEvent& event) { return keyboard_.dispatch(event); }
+
   /// One frame, given the time the consumer's loop measured since the last one.
   /// Advances animations, then builds what is dirty, then lays out and paints
   /// what that made dirty. A frame in which no time passed and nothing is dirty
@@ -46,12 +55,18 @@ public:
 
   bool needsFrame() const noexcept {
     return buildOwner_.needsBuild() || pipeline_.needsFrame() ||
-           pointers_.mouseTracker().needsResolve() || tickers_.hasActiveTickers();
+           pointers_.mouseTracker().needsResolve() || tickers_.hasActiveTickers() ||
+           pointers_.hasPendingTimeouts();
   }
+
+  /// What the cursor should look like where it currently is. Read once per frame
+  /// and applied by the consumer, which is the only side that owns a window.
+  MouseCursor cursor() const noexcept { return pointers_.cursor(); }
 
   BuildOwner& buildOwner() noexcept { return buildOwner_; }
   PipelineOwner& pipeline() noexcept { return pipeline_; }
   PointerBinding& pointers() noexcept { return pointers_; }
+  KeyboardBinding& keyboard() noexcept { return keyboard_; }
   TickerRegistry& tickers() noexcept { return tickers_; }
   Element* rootElement() const noexcept { return rootElement_.get(); }
   RenderView* renderView() const noexcept;
@@ -64,6 +79,7 @@ private:
   // and a region being dropped withdraws from the pointer binding, while a State
   // being disposed releases its ticker, so those two outlive them all.
   PointerBinding pointers_;
+  KeyboardBinding keyboard_;
   TickerRegistry tickers_;
   BuildOwner buildOwner_;
   PipelineOwner pipeline_;

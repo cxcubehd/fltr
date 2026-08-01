@@ -427,11 +427,13 @@ private:
 // Interaction
 // ---------------------------------------------------------------------------
 
-/// Taps and hover over the area its child occupies.
+/// Every way a pointer can address the area its child occupies.
 ///
-/// The two are separate mechanisms sharing one region: a tap is contested in the
-/// arena and only the winner is told, while hover is resolved by diffing what
-/// lies under the cursor and is never contested at all.
+/// Three separate mechanisms share one region. A gesture is contested in the
+/// arena and only the winner is told; hover is resolved by diffing what lies
+/// under the cursor and is never contested; a signal is offered to each region
+/// innermost-first until one takes it. Only the recognizers a call site actually
+/// asks for are created, so a region that just reports hover holds none.
 ///
 /// A callback is copied into the region and is invoked from `dispatchPointer`
 /// or, for enter and exit, from the start of a frame. Anything it captures by
@@ -441,13 +443,42 @@ public:
   struct Args {
     Key key;
     HitTestBehavior behavior = HitTestBehavior::DeferToChild;
+    /// What the pointer should look like here. `Defer` leaves it to whatever is
+    /// behind this region.
+    MouseCursor cursor = MouseCursor::Defer;
+    /// Which buttons every gesture below answers to.
+    PointerButtons buttons{PointerButton::Primary};
+
     Callback<void()> onEnter;
     Callback<void()> onExit;
+
     /// Fires when this region wins the pointer, which is when press feedback is
     /// correct to show -- not necessarily the instant the pointer went down.
     Callback<void()> onTapDown;
     Callback<void()> onTap;
     Callback<void()> onTapCancel;
+    /// Adding this delays a single tap by the double-tap timeout, because until
+    /// it elapses the first tap may still turn out to be the first half of one.
+    Callback<void()> onDoubleTap;
+
+    Callback<void(const LongPressStartDetails&)> onLongPress;
+    Callback<void(const LongPressMoveUpdateDetails&)> onLongPressMoveUpdate;
+    Callback<void(const LongPressEndDetails&)> onLongPressEnd;
+    Callback<void()> onLongPressCancel;
+
+    /// Which directions a drag is measured in, and where it is measured from.
+    DragAxis dragAxis = DragAxis::Pan;
+    DragStartBehavior dragStartBehavior = DragStartBehavior::Start;
+    Callback<void(const DragDownDetails&)> onDragDown;
+    Callback<void(const DragStartDetails&)> onDragStart;
+    Callback<void(const DragUpdateDetails&)> onDragUpdate;
+    Callback<void(const DragEndDetails&)> onDragEnd;
+    Callback<void()> onDragCancel;
+
+    /// A wheel notch or trackpad pan over this region. Returning true consumes
+    /// it, so nothing further out sees it.
+    Callback<bool(const PointerSignalEvent&)> onSignal;
+
     WidgetRef child;
   };
   using Render = RenderPointerRegion;
@@ -459,17 +490,39 @@ public:
 
   std::unique_ptr<RenderPointerRegion> createRenderObject(BuildContext& context) const {
     auto region = std::make_unique<RenderPointerRegion>(context.pointerBinding(), args_.behavior);
+    region->setCursor(args_.cursor);
     region->setCallbacks(callbacks());
     return region;
   }
   void updateRenderObject(BuildContext&, RenderPointerRegion& render) const {
     render.setBehavior(args_.behavior);
+    render.setCursor(args_.cursor);
     render.setCallbacks(callbacks());
   }
 
 private:
   PointerCallbacks callbacks() const noexcept {
-    return {args_.onEnter, args_.onExit, args_.onTapDown, args_.onTap, args_.onTapCancel};
+    return {
+        .onEnter = args_.onEnter,
+        .onExit = args_.onExit,
+        .onTapDown = args_.onTapDown,
+        .onTap = args_.onTap,
+        .onTapCancel = args_.onTapCancel,
+        .onDoubleTap = args_.onDoubleTap,
+        .onLongPress = args_.onLongPress,
+        .onLongPressMoveUpdate = args_.onLongPressMoveUpdate,
+        .onLongPressEnd = args_.onLongPressEnd,
+        .onLongPressCancel = args_.onLongPressCancel,
+        .dragAxis = args_.dragAxis,
+        .dragStartBehavior = args_.dragStartBehavior,
+        .onDragDown = args_.onDragDown,
+        .onDragStart = args_.onDragStart,
+        .onDragUpdate = args_.onDragUpdate,
+        .onDragEnd = args_.onDragEnd,
+        .onDragCancel = args_.onDragCancel,
+        .onSignal = args_.onSignal,
+        .buttons = args_.buttons,
+    };
   }
 
   Args args_;
