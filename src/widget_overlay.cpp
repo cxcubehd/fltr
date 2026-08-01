@@ -16,19 +16,24 @@ void OverlayEntry::remove() {
 // OverlayEntryHost
 // ---------------------------------------------------------------------------
 
-void OverlayEntryHostState::initState() { listen(); }
-
-void OverlayEntryHostState::didUpdateWidget(const OverlayEntryHost& previous) {
-  if (&previous.entry() != &widget().entry()) listen();
+OverlayEntry* OverlayEntryHostState::entry() const noexcept {
+  return widget().overlay().entryById(widget().id());
 }
 
-void OverlayEntryHostState::listen() {
-  subscribeMember<OverlayEntryHostState, &OverlayEntryHostState::onNeedsBuild>(
-      widget().entry(), rebuilds_, this);
+void OverlayEntryHostState::initState() {
+  if (OverlayEntry* live = entry()) {
+    subscribeMember<OverlayEntryHostState, &OverlayEntryHostState::onNeedsBuild>(*live, rebuilds_,
+                                                                                 this);
+  }
 }
 
 WidgetRef OverlayEntryHostState::build(BuildContext& context) {
-  return widget().entry().build(context);
+  OverlayEntry* live = entry();
+  if (live) return live->build(context);
+  // Gone since this host was emitted -- which the overlay has already asked to
+  // rebuild for, so this lasts until later in the same frame. Nothing to show,
+  // but a container's child still owes it a render object.
+  return SizedBox::make({.size = Size::zero()});
 }
 
 // ---------------------------------------------------------------------------
@@ -57,6 +62,13 @@ void OverlayState::remove(OverlayEntry& entry) {
   setState([] {});
 }
 
+OverlayEntry* OverlayState::entryById(std::int64_t id) const noexcept {
+  for (OverlayEntry* entry : entries_) {
+    if (entry->id_ == id) return entry;
+  }
+  return nullptr;
+}
+
 WidgetRef OverlayState::build(BuildContext&) {
   return OverlayScope::make({
       .overlay = this,
@@ -67,10 +79,11 @@ WidgetRef OverlayState::build(BuildContext&) {
           .children = WidgetList::generate(entries_.size() + 1,
                                            [this](std::size_t i) {
                                              if (i == 0) return widget().child();
-                                             OverlayEntry* entry = entries_[i - 1];
+                                             const std::int64_t id = entries_[i - 1]->id_;
                                              return OverlayEntryHost::make({
-                                                 .key = Key::of(entry->id_),
-                                                 .entry = entry,
+                                                 .key = Key::of(id),
+                                                 .overlay = this,
+                                                 .id = id,
                                              });
                                            }),
       }),

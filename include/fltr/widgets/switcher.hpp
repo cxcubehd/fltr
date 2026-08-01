@@ -38,7 +38,7 @@ private:
   /// Its address is stable and it is never moved: the value is handed to a
   /// render object, and the status subscription names this object.
   struct Presence {
-    Presence(AnimatedSwitcherState& owner, WidgetRef child, Key key,
+    Presence(AnimatedSwitcherState& state, WidgetRef shown, Key identity,
              AnimationDriver::Config config);
 
     void onStatus();

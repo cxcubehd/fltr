@@ -62,12 +62,11 @@ class OverlayEntryHost;
 class OverlayEntryHostState final : public State<OverlayEntryHost> {
 public:
   void initState() override;
-  void didUpdateWidget(const OverlayEntryHost& previous) override;
   void dispose() override { rebuilds_.detach(); }
   WidgetRef build(BuildContext& context) override;
 
 private:
-  void listen();
+  OverlayEntry* entry() const noexcept;
   void onNeedsBuild() { setState([] {}); }
 
   Subscription rebuilds_;
@@ -75,19 +74,28 @@ private:
 
 /// Where one entry builds. It exists so that an entry asking to rebuild rebuilds
 /// itself alone rather than every entry in the overlay.
+///
+/// It names its entry by id rather than by pointer, and looks it up each time.
+/// An entry can be destroyed part way through the very build that would rebuild
+/// it -- the base is reconciled first, and whatever owned the entry may live
+/// there -- so what this widget names has to be something that cannot dangle.
 class OverlayEntryHost final : public Configure<OverlayEntryHost, StatefulWidget> {
 public:
   struct Args {
     Key key;
-    OverlayEntry* entry = nullptr;
+    /// The overlay this host builds inside, and therefore an ancestor of it:
+    /// its State outlives every element below it.
+    OverlayState* overlay = nullptr;
+    std::int64_t id = 0;
   };
 
   explicit OverlayEntryHost(const Args& args) : Configure(args.key), args_(args) {
-    FLTR_EXPECTS(args.entry != nullptr, "an overlay entry host needs an entry");
+    FLTR_EXPECTS(args.overlay != nullptr, "an overlay entry host needs its overlay");
   }
 
   const char* name() const noexcept override { return "OverlayEntryHost"; }
-  OverlayEntry& entry() const noexcept { return *args_.entry; }
+  OverlayState& overlay() const noexcept { return *args_.overlay; }
+  std::int64_t id() const noexcept { return args_.id; }
 
   std::unique_ptr<State<OverlayEntryHost>> createState() const {
     return std::make_unique<OverlayEntryHostState>();
@@ -158,6 +166,9 @@ public:
   /// build: showing something is what a callback does.
   void insert(OverlayEntry& entry);
   void remove(OverlayEntry& entry);
+
+  /// The entry with this id, or null once it has been removed or destroyed.
+  OverlayEntry* entryById(std::int64_t id) const noexcept;
 
   std::size_t entryCount() const noexcept { return entries_.size(); }
 

@@ -16,6 +16,7 @@ namespace {
 constexpr Size kSurface{200, 100};
 constexpr Color kBaseColor = Color::argb(0xFF102030);
 constexpr Color kEntryColor = Color::argb(0xFFA0B0C0);
+constexpr Color kSecondColor = Color::argb(0xFF00FF00);
 
 PointerEvent mouse(PointerPhase phase, Offset position) {
   return {phase, 0, PointerDeviceKind::Mouse, position};
@@ -199,10 +200,8 @@ TEST(overlay_an_entry_never_changes_the_layout_below_it) {
 TEST(overlay_entries_stack_in_the_order_they_were_inserted) {
   Harness h(kSurface);
   OverlayState* overlay = nullptr;
-  constexpr Color kSecond = Color::argb(0xFF00FF00);
-
   OverlayEntry lower([](BuildContext&) { return painted(kEntryColor, {40, 40}); });
-  OverlayEntry upper([](BuildContext&) { return painted(kSecond, {40, 40}); });
+  OverlayEntry upper([](BuildContext&) { return painted(kSecondColor, {40, 40}); });
 
   ScriptedRoot root(h, [&] {
     return Overlay::make({
@@ -214,13 +213,13 @@ TEST(overlay_entries_stack_in_the_order_they_were_inserted) {
   overlay->insert(lower);
   overlay->insert(upper);
   const std::string commands = dumpScene(h.frame());
-  CHECK(indexOf(commands, kEntryColor) < indexOf(commands, kSecond));
+  CHECK(indexOf(commands, kEntryColor) < indexOf(commands, kSecondColor));
 
   // Taken out and put back is on top, because insertion is what decides order.
   lower.remove();
   overlay->insert(lower);
   const std::string reordered = dumpScene(h.frame());
-  CHECK(indexOf(reordered, kSecond) < indexOf(reordered, kEntryColor));
+  CHECK(indexOf(reordered, kSecondColor) < indexOf(reordered, kEntryColor));
 }
 
 TEST(overlay_no_overlay_above_reports_none) {
@@ -377,6 +376,82 @@ TEST(overlay_an_entry_outliving_its_overlay_is_let_go_of) {
   CHECK_EQ(life.disposes, 1);
 }
 
+namespace {
+
+/// Owns an entry the way a consumer would: inserted from its first build, and
+/// destroyed with the State that holds it.
+class Owner;
+
+class OwnerState final : public State<Owner> {
+public:
+  void dispose() override;
+  WidgetRef build(BuildContext& context) override;
+
+private:
+  std::unique_ptr<OverlayEntry> entry_;
+};
+
+class Owner final : public Configure<Owner, StatefulWidget> {
+public:
+  struct Args {
+    Key key;
+    Life* life = nullptr;
+    Life* entryLife = nullptr;
+  };
+
+  explicit Owner(const Args& args) : Configure(args.key), args_(args) {}
+
+  const char* name() const noexcept override { return "Owner"; }
+  Life& life() const noexcept { return *args_.life; }
+  Life* entryLife() const noexcept { return args_.entryLife; }
+
+  std::unique_ptr<State<Owner>> createState() const { return std::make_unique<OwnerState>(); }
+
+private:
+  Args args_;
+};
+
+void OwnerState::dispose() { ++widget().life().disposes; }
+
+WidgetRef OwnerState::build(BuildContext& context) {
+  OverlayState* overlay = Overlay::of(context);
+  if (!entry_ && overlay) {
+    Life* life = widget().entryLife();
+    entry_ = std::make_unique<OverlayEntry>(
+        [life](BuildContext&) { return Marker::make({.life = life}); });
+    overlay->insert(*entry_);
+  }
+  return painted(kBaseColor, {20, 20});
+}
+
+}  // namespace
+
+TEST(overlay_an_entry_destroyed_mid_reconciliation_is_not_built) {
+  Harness h(kSurface);
+  Life owner;
+  Life shown;
+  bool present = true;
+
+  ScriptedRoot root(h, [&] {
+    return Overlay::make({
+        .child = present ? Owner::make({.life = &owner, .entryLife = &shown})
+                         : painted(kBaseColor, kSurface),
+    });
+  });
+  h.frame();
+  CHECK_EQ(shown.inits, 1);
+
+  // The base is reconciled before the entries, so the entry dies with its owner
+  // in the middle of the same build that would otherwise go on to rebuild it.
+  present = false;
+  root.rebuild();
+  h.frame();
+
+  CHECK_EQ(owner.disposes, 1);
+  CHECK_EQ(shown.disposes, 1);
+  CHECK(dumpElementTree(h.rootElement()).find("OverlayEntryHost") == std::string::npos);
+}
+
 TEST(overlay_an_entry_put_back_builds_a_fresh_subtree) {
   Harness h(kSurface);
   OverlayState* overlay = nullptr;
@@ -410,7 +485,7 @@ TEST(overlay_an_entry_put_back_builds_a_fresh_subtree) {
 namespace {
 
 /// The anchor sits at `left`, `width` wide and 20 tall, inside the base.
-WidgetRef anchoredBase(AnchorLink& link, float left, float width = 30.0f) {
+WidgetRef anchoredBase(AnchorLink* link, float left, float width = 30.0f) {
   return Stack::make({
       .fit = StackFit::Expand,
       .children = {Positioned::make({
@@ -418,7 +493,7 @@ WidgetRef anchoredBase(AnchorLink& link, float left, float width = 30.0f) {
           .top = 20.0f,
           .width = width,
           .height = 20.0f,
-          .child = Anchor::make({.link = &link, .child = painted(kBaseColor, {width, 20})}),
+          .child = Anchor::make({.link = link, .child = painted(kBaseColor, {width, 20})}),
       })},
   });
 }
@@ -442,7 +517,7 @@ TEST(overlay_an_anchored_entry_hangs_from_the_rectangle_it_names) {
 
   ScriptedRoot root(h, [&] {
     return Overlay::make({
-        .child = Probe::make({.found = &overlay, .child = anchoredBase(link, left)}),
+        .child = Probe::make({.found = &overlay, .child = anchoredBase(&link, left)}),
     });
   });
   h.frame();
@@ -479,7 +554,7 @@ TEST(overlay_an_anchored_entry_is_placed_by_the_sides_it_was_given) {
 
   ScriptedRoot root(h, [&] {
     return Overlay::make({
-        .child = Probe::make({.found = &overlay, .child = anchoredBase(link, 40)}),
+        .child = Probe::make({.found = &overlay, .child = anchoredBase(&link, 40)}),
     });
   });
   h.frame();
@@ -506,7 +581,7 @@ TEST(overlay_an_anchored_entry_is_kept_on_screen) {
 
   ScriptedRoot root(h, [&] {
     return Overlay::make({
-        .child = Probe::make({.found = &overlay, .child = anchoredBase(link, 170)}),
+        .child = Probe::make({.found = &overlay, .child = anchoredBase(&link, 170)}),
     });
   });
   h.frame();
@@ -543,7 +618,7 @@ TEST(overlay_an_anchor_that_repaints_on_its_own_still_reports_where_it_is) {
     return Overlay::make({
         .child = Probe::make({
             .found = &overlay,
-            .child = RepaintBoundary::make({.child = anchoredBase(link, 40, width)}),
+            .child = RepaintBoundary::make({.child = anchoredBase(&link, 40, width)}),
         }),
     });
   });
@@ -572,7 +647,7 @@ TEST(overlay_an_anchor_moved_without_laying_out_is_followed_when_it_says_so) {
     return Overlay::make({
         .child = Probe::make({
             .found = &overlay,
-            .child = RepaintBoundary::make({.child = anchoredBase(link, left)}),
+            .child = RepaintBoundary::make({.child = anchoredBase(&link, left)}),
         }),
     });
   });
@@ -610,7 +685,7 @@ TEST(overlay_an_anchored_entry_whose_link_dies_stays_put_rather_than_reading_it)
     return Overlay::make({
         .child = Probe::make({
             .found = &overlay,
-            .child = withAnchor ? anchoredBase(*link, 40) : painted(kBaseColor, kSurface),
+            .child = withAnchor ? anchoredBase(link.get(), 40) : painted(kBaseColor, kSurface),
         }),
     });
   });
@@ -629,6 +704,41 @@ TEST(overlay_an_anchored_entry_whose_link_dies_stays_put_rather_than_reading_it)
   // And the link itself can die under a live entry.
   link.reset();
   entry.markNeedsBuild();
+  h.frame();
+  CHECK_EQ(entryOffset(h), Offset(0, 0));
+}
+
+TEST(overlay_a_link_destroyed_under_a_live_anchor_is_let_go_of) {
+  Harness h(kSurface);
+  OverlayState* overlay = nullptr;
+  auto owned = std::make_unique<AnchorLink>();
+  AnchorLink* link = owned.get();
+
+  OverlayEntry entry([&link](BuildContext&) {
+    return Anchored::make({.link = link, .child = painted(kEntryColor, {40, 20})});
+  });
+
+  ScriptedRoot root(h, [&] {
+    return Overlay::make({
+        .child = Probe::make({.found = &overlay, .child = anchoredBase(link, 40)}),
+    });
+  });
+  h.frame();
+  overlay->insert(entry);
+  h.frame();
+  CHECK_EQ(entryOffset(h), Offset(40, 40));
+
+  // Gone while both the anchor naming it and the entry following it are still
+  // mounted, and then a frame that lays both of them out. Neither reads it.
+  owned.reset();
+  h.binding().setSurface({210, 100});
+  h.frame();
+  CHECK_EQ(entryOffset(h), Offset(0, 0));
+
+  // A build that still named the dead link would be the rule broken outright,
+  // so the tree stops naming it.
+  link = nullptr;
+  root.rebuild();
   h.frame();
   CHECK_EQ(entryOffset(h), Offset(0, 0));
 }

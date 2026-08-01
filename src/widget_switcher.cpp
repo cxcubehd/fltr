@@ -15,9 +15,9 @@ WidgetRef fadePresence(WidgetRef child, ValueListenable<float>& presence) {
 // Presence
 // ---------------------------------------------------------------------------
 
-AnimatedSwitcherState::Presence::Presence(AnimatedSwitcherState& owner, WidgetRef child, Key key,
-                                          AnimationDriver::Config config)
-    : child(child), key(key), driver(config), owner(&owner) {
+AnimatedSwitcherState::Presence::Presence(AnimatedSwitcherState& state, WidgetRef shown,
+                                          Key identity, AnimationDriver::Config config)
+    : child(shown), key(identity), driver(config), owner(&state) {
   subscribeMember<Presence, &Presence::onStatus>(driver.statusChanges(), settled, this);
 }
 
