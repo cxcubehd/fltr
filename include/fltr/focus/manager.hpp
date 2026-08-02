@@ -40,6 +40,9 @@ public:
   /// Focuses `node`, or the node a scope remembers when `node` is one. Refused,
   /// and reported as such, when the node is not focusable.
   bool requestFocus(FocusNode& node);
+  /// `requestFocus` when the enclosing scope has no focused child, and a claim
+  /// on that scope for when it next has none otherwise.
+  void autofocus(FocusNode& node);
   /// Moves the focus to the enclosing scope, if this subtree holds it.
   void unfocus(FocusNode& node);
 
@@ -69,6 +72,7 @@ private:
   friend class FocusNode;
 
   void setPrimary(FocusNode* node);
+  void grantPendingAutofocus(FocusScopeNode& scope);
   void willDetach(FocusNode& node);
   void didChangePolicy(FocusNode& node);
   void forgetRoot(const FocusNode& node) noexcept;

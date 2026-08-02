@@ -20,10 +20,7 @@ namespace demo {
 using fltr::AnimatedSwitcher;
 using fltr::BuildContext;
 using fltr::FocusScope;
-using fltr::KeyStroke;
-using fltr::LogicalKey;
 using fltr::Overlay;
-using fltr::Shortcuts;
 using fltr::TickerMode;
 using fltr::Watch;
 using fltr::WidgetRef;
@@ -61,45 +58,38 @@ WidgetRef buildRoot(App& app) {
       // a tree without one holds no focus nodes and no key handlers. It is also
       // the traversal group, so tab and the arrow keys work inside it.
       .child = FocusScope::make({
-          .child = Shortcuts::make({
-              .shortcuts =
-                  {
-                      {.stroke = KeyStroke{.key = LogicalKey::Escape},
-                       .onInvoke = [&app] { app.back(); }},
-                  },
-              // Nothing creates an overlay for you. One here, directly under the
-              // root, is what the pause panel is inserted into.
-              .child = Overlay::make({
-                  .child = Watch<Screen>::make({
-                      .value = &app.screen(),
-                      .builder = [&app](BuildContext& context, const Screen& screen) -> WidgetRef {
-                        // The overlay is found here, on the way down, and kept
-                        // for the callbacks that will insert into it later.
-                        app.bindOverlay(Overlay::of(context));
+          // Nothing creates an overlay for you. One here, directly under the
+          // root, is what the pause panel is inserted into.
+          .child = Overlay::make({
+              .child = Watch<Screen>::make({
+                  .value = &app.screen(),
+                  .builder = [&app](BuildContext& context, const Screen& screen) -> WidgetRef {
+                    // The overlay is found here, on the way down, and kept for
+                    // the callbacks that will insert into it later.
+                    app.bindOverlay(Overlay::of(context));
 
-                        return AnimatedSwitcher::make({
-                            // The pause flag is watched *inside* the presence so
-                            // that toggling it rebuilds one node rather than
-                            // swapping the whole page.
-                            .child = Watch<bool>::make({
-                                .key = keyFor(screen),
-                                .value = &app.paused(),
-                                .builder = [&app, screen](BuildContext& inner,
-                                                          const bool& paused) -> WidgetRef {
-                                  return TickerMode::make({
-                                      // Animations in a paused gameplay screen
-                                      // stop entirely: a muted ticker holds no
-                                      // subscription and consumes no time.
-                                      .enabled = !(screen == Screen::Playing && paused),
-                                      .child = screenFor(app, ThemeScope::of(inner), screen),
-                                  });
-                                },
-                            }),
-                            .animation = {.duration = 0.22f, .curve = fltr::Curves::easeOutCubic},
-                            .transition = &slidePresence,
-                        });
-                      },
-                  }),
+                    return AnimatedSwitcher::make({
+                        // The pause flag is watched *inside* the presence so
+                        // that toggling it rebuilds one node rather than
+                        // swapping the whole page.
+                        .child = Watch<bool>::make({
+                            .key = keyFor(screen),
+                            .value = &app.paused(),
+                            .builder = [&app, screen](BuildContext& inner,
+                                                      const bool& paused) -> WidgetRef {
+                              return TickerMode::make({
+                                  // Animations in a paused gameplay screen stop
+                                  // entirely: a muted ticker holds no
+                                  // subscription and consumes no time.
+                                  .enabled = !(screen == Screen::Playing && paused),
+                                  .child = screenFor(app, ThemeScope::of(inner), screen),
+                              });
+                            },
+                        }),
+                        .animation = {.duration = 0.22f, .curve = fltr::Curves::easeOutCubic},
+                        .transition = &slidePresence,
+                    });
+                  },
               }),
           }),
       }),

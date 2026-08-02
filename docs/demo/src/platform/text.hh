@@ -74,13 +74,24 @@ private:
   /// the service. A UI asks for a handful of sizes, so the cache stays small.
   Font fontFor(float size) const;
   float measure(const fltr::TextStyle& style, const char* text, std::size_t length) const;
+  /// Top of the glyph box to the baseline, which is where raylib wants a run's
+  /// origin.
   float ascent(const fltr::TextStyle& style) const noexcept;
+  /// Top of the *line* box to the baseline, placed so the capitals sit centred
+  /// in the space the line height asks for.
+  float baselineIn(const fltr::TextStyle& style) const noexcept;
+  /// The tallest capital on a line, which is where its trimmed box begins.
+  float capHeightOf(const Slot& slot, const fltr::LineMetrics& line) const noexcept;
   Slot& slotFor(fltr::ParagraphHandle handle);
   const Slot& slotFor(fltr::ParagraphHandle handle) const;
 
   std::string fontFile_;
   mutable std::vector<Atlas> atlases_;
+  /// Both read from the font's own 'H': the glyph box top to the baseline, and
+  /// the height of a capital. Guessing either is what fltr's placeholder service
+  /// does, and it says so.
   float ascentRatio_ = 0.78f;
+  float capRatio_ = 0.7f;
   std::size_t live_ = 0;
   std::vector<Slot> slots_;
   std::vector<std::size_t> free_;

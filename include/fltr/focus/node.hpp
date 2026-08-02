@@ -74,6 +74,11 @@ public:
   bool isTraversable() const noexcept { return isFocusable() && !skipTraversal_; }
 
   bool requestFocus();
+  /// Asks for the focus and keeps asking: granted at once when nothing inside
+  /// the enclosing scope holds it, and remembered by that scope otherwise, so a
+  /// screen built while the one it replaces still holds the focus lands the
+  /// moment that screen is gone. This is what `Focus`'s `autofocus` is.
+  void autofocus();
   /// Hands the focus back to the enclosing scope. Does nothing when this subtree
   /// does not hold it.
   void unfocus();
@@ -132,6 +137,10 @@ public:
   /// The descendant that most recently held the focus within this scope.
   FocusNode* focusedChild() const noexcept { return focusedChild_; }
 
+  /// The descendant waiting to be autofocused, if one asked while another held
+  /// the focus. Claimed as soon as this scope is left with no focused child.
+  FocusNode* pendingAutofocus() const noexcept { return pendingAutofocus_; }
+
   /// Whether Tab and the arrow keys move the focus while it is inside this
   /// scope. Both off makes the scope a pure container: keys still reach the
   /// focused node and the shortcuts above it, and nothing moves on its own.
@@ -144,6 +153,7 @@ private:
   friend class FocusManager;
 
   FocusNode* focusedChild_ = nullptr;
+  FocusNode* pendingAutofocus_ = nullptr;
   bool tabTraversal_ = true;
   bool directionalTraversal_ = true;
 };

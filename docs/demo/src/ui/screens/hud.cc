@@ -42,7 +42,7 @@ WidgetRef scoreCluster(App& app, const Theme& theme) {
                Column::make({
                    .crossAxisAlignment = CrossAxisAlignment::Start,
                    .mainAxisSize = MainAxisSize::Min,
-                   .spacing = theme.unit * 0.25f,
+                   .spacing = theme.unit * 0.75f,
                    .children =
                        {
                            label(theme, app.session().levelName()),
@@ -67,6 +67,21 @@ WidgetRef statusCluster(App& app, const Theme& theme) {
                                      &app.session()),
                        },
                }));
+}
+
+/// Built like a statistic rather than like a menu row, so it is exactly as tall
+/// as the cluster beside it without either of them naming a height.
+WidgetRef pauseButton(App& app, const Theme& theme) {
+  return pressable(theme, {.key = Key::of("hud.pause"), .onPressed = [&app] { app.togglePause(); }},
+                   fltr::Padding::make({
+                       .padding = EdgeInsets::symmetric(theme.unit * 1.75f, theme.unit * 1.25f),
+                       .child = Column::make({
+                           .crossAxisAlignment = CrossAxisAlignment::Start,
+                           .mainAxisSize = MainAxisSize::Min,
+                           .spacing = theme.unit * 0.75f,
+                           .children = {label(theme, "PAUSE"), body(theme, "ESC")},
+                       }),
+                   }));
 }
 
 WidgetRef gauges(App& app, const Theme& theme) {
@@ -128,21 +143,7 @@ WidgetRef hudScreen(App& app, const Theme& theme) {
                       .child = Row::make({
                           .mainAxisSize = MainAxisSize::Min,
                           .spacing = theme.unit,
-                          .children =
-                              {
-                                  statusCluster(app, theme),
-                                  fltr::ConstrainedBox::make({
-                                      .constraints = {.minWidth = 118.0f, .maxWidth = 118.0f},
-                                      .child = menuButton(theme,
-                                                          {
-                                                              .key = Key::of("hud.pause"),
-                                                              .label = "Pause",
-                                                              .trailing = "ESC",
-                                                              .onPressed =
-                                                                  [&app] { app.togglePause(); },
-                                                          }),
-                                  }),
-                              },
+                          .children = {statusCluster(app, theme), pauseButton(app, theme)},
                       }),
                   }),
                   Positioned::make({

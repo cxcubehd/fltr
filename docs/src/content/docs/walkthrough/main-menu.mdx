@@ -121,7 +121,7 @@ from two facts:
 | Tab / Shift-Tab | next / previous, wrapping | `FocusManager::nextFocus`, build order |
 | ↑ ↓ ← → | nearest node in that direction | `moveFocusInDirection`, geometric with an overlap band |
 | Enter / Space | activate | `RawButton`'s own key handler |
-| Escape | `back()` | `Shortcuts` at the root |
+| Escape | `back()` | the platform layer, when the UI declines it |
 | S / Q | settings / quit | `Shortcuts` around the main menu |
 
 <Aside type="tip" title="A tree with no FocusScope pays nothing">
@@ -158,15 +158,17 @@ void App::back() {
 }
 ```
 
-One registration at the root, with the meaning resolved from app state, and the
-floor is the main menu: Escape navigates, and never leaves the demo. The window
-agrees -- `SetExitKey(KEY_NULL)` takes the key back from raylib, which would
-otherwise close the window before the UI ever saw it.
+One place decides, with the meaning resolved from app state, and the floor is
+the main menu: Escape navigates, and never leaves the demo. The window agrees --
+`SetExitKey(KEY_NULL)` takes the key back from raylib, which would otherwise
+close the window before the UI ever saw it.
 
-A `Shortcuts` per screen would mean four registrations and four chances for two
-of them to be live at once during a page transition. The one exception is the
-main menu, which nests its own `Shortcuts` for S and Q so those letters mean
-nothing during a flight.
+It is not a root `Shortcuts`, because a shortcut only fires while the focus is
+inside the subtree that declares it and a HUD has no reason to hold the focus at
+all. Escape is offered to the UI first and taken by the app when nothing there
+wanted it -- the same bargain the ship's keys already make. Letters that mean
+something on one screen only, like S and Q here, *are* a `Shortcuts`, wrapped
+around that screen.
 
 ## Callbacks and the 32-byte budget
 

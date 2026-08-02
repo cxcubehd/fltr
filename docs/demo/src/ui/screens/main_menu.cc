@@ -61,9 +61,9 @@ WidgetRef menu(App& app, const Theme& theme) {
 }  // namespace
 
 WidgetRef mainMenuScreen(App& app, const Theme& theme) {
-  // Nested inside the root's `Shortcuts`, so these fire only while the focus is
-  // on this screen -- which is what lets "Q" mean quit here and nothing at all
-  // in the middle of a run.
+  // A shortcut fires only while the focus is inside the subtree that declares
+  // it, which is what lets "Q" mean quit here and nothing at all in the middle
+  // of a run.
   return Shortcuts::make({
       .shortcuts =
           {
@@ -81,7 +81,7 @@ WidgetRef mainMenuScreen(App& app, const Theme& theme) {
                                  Column::make({
                                      .crossAxisAlignment = CrossAxisAlignment::Start,
                                      .mainAxisSize = MainAxisSize::Min,
-                                     .spacing = theme.unit * 0.5f,
+                                     .spacing = theme.unit * 1.5f,
                                      .children =
                                          {
                                              display(theme, "DRIFT"),

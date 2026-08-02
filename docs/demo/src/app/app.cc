@@ -36,6 +36,7 @@ App::App(const Options& options)
       clock_(options.smoke ? 1.0f / 60.0f : 0.0f),
       pauseEntry_([this](fltr::BuildContext& context) { return pauseOverlay(*this, context); }) {
   formatMaxFps();
+  fltr::subscribeMember<App, &App::onOutcomeChanged>(session_.outcome, outcome_, this);
 }
 
 App::~App() {
@@ -88,6 +89,14 @@ void App::startLevel(std::size_t level) {
 void App::abandonRun() {
   session_.progress().recordScore(session_.score.value());
   setPaused(false);
+}
+
+void App::onOutcomeChanged() {
+  if (session_.outcome.value() == Outcome::Flying) return;
+  session_.progress().recordScore(session_.score.value());
+  // The panel that says how it went is the paused panel wearing a different
+  // headline, so a finished run is a paused one.
+  setPaused(true);
 }
 
 void App::setPaused(bool paused) {
@@ -148,6 +157,21 @@ void App::refreshDebugText() {
                 backend_->lastCommandCount());
 }
 
+void App::check(bool condition, const char* what) {
+  if (condition) return;
+  std::printf("FAIL: %s\n", what);
+  scriptOk_ = false;
+}
+
+void App::pressEscape() {
+  // The rule the platform layer applies to a real keypress: the UI is offered
+  // the key, and what it declines is the app's.
+  const fltr::KeyEvent event{.type = fltr::KeyEventType::Down,
+                             .physical = fltr::PhysicalKey::Escape,
+                             .logical = fltr::LogicalKey::Escape};
+  if (!binding_->dispatchKey(event)) back();
+}
+
 void App::scrollLevelList() {
   const fltr::Size surface = window_.surface();
   const fltr::Offset centre{surface.width * 0.5f, surface.height * 0.5f};
@@ -165,6 +189,8 @@ void App::runScript(int frame) {
   switch (frame) {
     case 10: goTo(Screen::Settings); break;
     case 30: applyGraphics({.fullscreen = false, .vsync = false, .maxFps = 60}); break;
+    case 40: pressEscape(); break;
+    case 44: check(screen_.value() == Screen::MainMenu, "escape did not leave the settings"); break;
     case 45: goTo(Screen::LevelSelect); break;
     case 55: scrollLevelList(); break;
     case 68:
@@ -174,9 +200,18 @@ void App::runScript(int frame) {
                                                            : 0.0f;
       break;
     case 70: startLevel(0); break;
-    case 200: back(); break;
-    case 240: back(); break;
-    case 270: abandonRun(); goTo(Screen::MainMenu); break;
+    case 200: pressEscape(); break;
+    case 204: check(paused_.value(), "escape did not pause the run"); break;
+    case 240: pressEscape(); break;
+    case 244: check(!paused_.value(), "escape did not resume the run"); break;
+    // The game deciding a run is over, without waiting for the ship to earn it.
+    case 250: session_.outcome.set(Outcome::Cleared); break;
+    case 254: check(paused_.value(), "a finished run did not raise its panel"); break;
+    case 260: pressEscape(); break;
+    case 264:
+      check(screen_.value() == Screen::LevelSelect, "escape did not leave a finished run");
+      break;
+    case 270: goTo(Screen::MainMenu); break;
     default: break;
   }
 
@@ -242,7 +277,9 @@ int App::run() {
     ok = false;
   }
 
-  if (scrolled_ <= 0.0f) {
+  if (!scriptOk_) ok = false;
+
+  if (options_.smokeFrames > 68 && scrolled_ <= 0.0f) {
     std::printf("FAIL: a wheel notch over the level list moved it nowhere\n");
     ok = false;
   }

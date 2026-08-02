@@ -64,7 +64,9 @@ RaylibTextService::RaylibTextService(std::span<const char* const> fontPaths) {
   if (index >= 0 && index < reference.glyphCount && reference.baseSize > 0) {
     const float top = static_cast<float>(reference.glyphs[index].offsetY);
     const float height = reference.recs[index].height;
-    ascentRatio_ = (top + height) / static_cast<float>(reference.baseSize);
+    const float em = static_cast<float>(reference.baseSize);
+    ascentRatio_ = (top + height) / em;
+    capRatio_ = height / em;
   }
 
   slots_.reserve(64);
@@ -99,6 +101,15 @@ float RaylibTextService::ascent(const TextStyle& style) const noexcept {
   return style.size * ascentRatio_;
 }
 
+float RaylibTextService::baselineIn(const TextStyle& style) const noexcept {
+  // The line box holds its text centred on the capitals rather than on the
+  // font's own box, so the space above a capital equals the space below the
+  // baseline. Hanging the glyphs from the top of the box instead -- which is
+  // what leaving the leading under the baseline amounts to -- is what makes
+  // every padded panel in a UI look bottom-heavy.
+  return (style.size * style.lineHeight + style.size * capRatio_) * 0.5f;
+}
+
 float RaylibTextService::measure(const TextStyle& style, const char* text,
                                  std::size_t length) const {
   if (length == 0) return 0.0f;
@@ -106,6 +117,15 @@ float RaylibTextService::measure(const TextStyle& style, const char* text,
   const Vector2 size =
       MeasureTextEx(fontFor(style.size), scratch_.c_str(), style.size, style.letterSpacing);
   return size.x;
+}
+
+float RaylibTextService::capHeightOf(const Slot& slot, const LineMetrics& line) const noexcept {
+  float cap = 0.0f;
+  for (std::uint32_t r = line.runBegin; r < line.runBegin + line.runCount; ++r) {
+    cap = std::max(cap, slot.styles[slot.runs[r].spanIndex].size * capRatio_);
+  }
+  if (cap == 0.0f && !slot.styles.empty()) cap = slot.styles.front().size * capRatio_;
+  return cap;
 }
 
 RaylibTextService::Slot& RaylibTextService::slotFor(ParagraphHandle handle) {
@@ -172,10 +192,11 @@ ParagraphHandle RaylibTextService::acquire(const ParagraphSpec& spec, float maxW
   auto flushLine = [&]() {
     if (lineRuns.empty()) {
       // An empty line still occupies one line box, sized by the first style.
-      const float size = slot.styles.empty() ? 14.0f : slot.styles.front().size;
-      const float height = size * (slot.styles.empty() ? 1.2f : slot.styles.front().lineHeight);
+      const TextStyle style = slot.styles.empty() ? TextStyle{.size = 14.0f, .lineHeight = 1.2f}
+                                                  : slot.styles.front();
+      const float height = style.size * style.lineHeight;
       slot.lines.push_back(LineMetrics{.bounds = Rect::fromLTWH(0.0f, top, 0.0f, height),
-                                       .baseline = size * ascentRatio_,
+                                       .baseline = baselineIn(style),
                                        .runBegin = static_cast<std::uint32_t>(slot.runs.size()),
                                        .runCount = 0});
       top += height;
@@ -186,8 +207,8 @@ ParagraphHandle RaylibTextService::acquire(const ParagraphSpec& spec, float maxW
     float depth = 0.0f;
     for (const PendingRun& run : lineRuns) {
       const TextStyle& style = slot.styles[run.span];
-      baseline = std::max(baseline, ascent(style));
-      depth = std::max(depth, style.size * style.lineHeight - ascent(style));
+      baseline = std::max(baseline, baselineIn(style));
+      depth = std::max(depth, style.size * style.lineHeight - baselineIn(style));
     }
     const float height = baseline + depth;
 
@@ -278,9 +299,30 @@ ParagraphHandle RaylibTextService::acquire(const ParagraphSpec& spec, float maxW
     }
   }
 
+  // 4. Leading trim. The box a paragraph reports is the text itself -- cap top
+  //    to baseline -- rather than the font's line boxes, so the padding around
+  //    it is the whole of the space that shows and a label above a number is as
+  //    far from its panel's top edge as the number is from the bottom. Between
+  //    lines the full line height still applies.
+  float trimTop = 0.0f;
+  float trimBottom = 0.0f;
+  if (!slot.lines.empty()) {
+    const LineMetrics& first = slot.lines.front();
+    const LineMetrics& last = slot.lines.back();
+    trimTop = std::max(0.0f, first.baseline - capHeightOf(slot, first));
+    trimBottom = std::max(0.0f, last.bounds.height() - last.baseline);
+    for (PositionedRun& run : slot.runs) run.offset.dy -= trimTop;
+    for (LineMetrics& line : slot.lines) {
+      line.bounds.top -= trimTop;
+      line.bounds.bottom -= trimTop;
+    }
+  }
+
   slot.metrics = ParagraphMetrics{
-      .size = Size{bounded ? std::min(widest, maxWidth) : widest, top},
-      .firstBaseline = slot.lines.empty() ? 0.0f : slot.lines.front().baseline,
+      .size = Size{bounded ? std::min(widest, maxWidth) : widest,
+                   std::max(0.0f, top - trimTop - trimBottom)},
+      .firstBaseline =
+          slot.lines.empty() ? 0.0f : slot.lines.front().bounds.top + slot.lines.front().baseline,
       .lastBaseline = slot.lines.empty()
                           ? 0.0f
                           : slot.lines.back().bounds.top + slot.lines.back().baseline,

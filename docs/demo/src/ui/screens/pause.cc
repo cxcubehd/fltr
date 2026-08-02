@@ -53,8 +53,7 @@ WidgetRef panelFor(App& app, const Theme& theme, Outcome outcome) {
                               .spacing = theme.unit,
                               .children =
                                   {
-                                      bare(EdgeInsets::symmetric(theme.unit * 1.75f,
-                                                                 theme.unit * 1.25f),
+                                      bare(EdgeInsets::all(theme.unit * 1.75f),
                                            Row::make({
                                                .children = {title(theme, headlineFor(outcome)),
                                                             spacer(),

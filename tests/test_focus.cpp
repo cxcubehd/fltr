@@ -591,6 +591,100 @@ TEST(focus_autofocus_claims_an_empty_scope_and_never_steals_from_a_full_one) {
   root.rebuild();
   h.frame();
   CHECK(first.hasPrimaryFocus());
+  CHECK_EQ(scope.pendingAutofocus(), &second);
+}
+
+TEST(focus_a_refused_autofocus_lands_once_the_node_that_held_it_is_gone) {
+  FocusScopeNode scope;
+  FocusNode outgoing, incoming;
+  Harness h;
+  bool showOutgoing = true;
+  bool showIncoming = false;
+  const auto page = [](Key key, FocusNode* target, float top) {
+    return Positioned::make({
+        .key = key,
+        .left = 0.0f,
+        .top = top,
+        .width = 40.0f,
+        .height = 20.0f,
+        .child = Focus::make({
+            .node = target,
+            .autofocus = true,
+            .child = SizedBox::make({.size = {40, 20}}),
+        }),
+    });
+  };
+  ScriptedRoot root(h, [&] {
+    return FocusScope::make({
+        .node = &scope,
+        .child = screen({showOutgoing ? page(Key::of("out"), &outgoing, 0.0f) : WidgetRef{},
+                         showIncoming ? page(Key::of("in"), &incoming, 40.0f) : WidgetRef{}}),
+    });
+  });
+  h.frame();
+  CHECK(outgoing.hasPrimaryFocus());
+
+  // Both alive at once, which is what a page transition looks like: the screen
+  // being built cannot take the focus yet, and says so for later.
+  showIncoming = true;
+  root.rebuild();
+  h.frame();
+  CHECK(outgoing.hasPrimaryFocus());
+  CHECK_EQ(scope.pendingAutofocus(), &incoming);
+
+  showOutgoing = false;
+  root.rebuild();
+  h.frame();
+  CHECK(incoming.hasPrimaryFocus());
+  CHECK_EQ(scope.pendingAutofocus(), nullptr);
+}
+
+TEST(focus_a_subtree_that_excludes_itself_is_forgotten_and_lets_the_next_claim_through) {
+  FocusScopeNode scope;
+  FocusNode leaving, arriving;
+  Harness h;
+  bool excluded = false;
+  bool showArriving = false;
+  ScriptedRoot root(h, [&] {
+    return FocusScope::make({
+        .node = &scope,
+        .child = screen({placed(Rect::fromLTWH(0, 0, 40, 20),
+                                Focus::make({
+                                    .key = Key::of("leaving"),
+                                    .canRequestFocus = false,
+                                    .skipTraversal = true,
+                                    // What `AnimatedSwitcher` does to the page
+                                    // it is animating out.
+                                    .descendantsAreFocusable = !excluded,
+                                    .child = Focus::make({
+                                        .node = &leaving,
+                                        .autofocus = true,
+                                        .child = SizedBox::make({.size = {40, 20}}),
+                                    }),
+                                })),
+                         showArriving ? placed(Rect::fromLTWH(0, 40, 40, 20),
+                                               Focus::make({
+                                                   .key = Key::of("arriving"),
+                                                   .node = &arriving,
+                                                   .autofocus = true,
+                                                   .child = SizedBox::make({.size = {40, 20}}),
+                                               }))
+                                      : WidgetRef{}}),
+    });
+  });
+  h.frame();
+  CHECK(leaving.hasPrimaryFocus());
+
+  showArriving = true;
+  root.rebuild();
+  h.frame();
+  CHECK(leaving.hasPrimaryFocus());
+
+  excluded = true;
+  root.rebuild();
+  h.frame();
+  CHECK(arriving.hasPrimaryFocus());
+  CHECK_EQ(scope.focusedChild(), scope.children().back());
 }
 
 // ---------------------------------------------------------------------------

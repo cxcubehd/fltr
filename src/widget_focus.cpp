@@ -58,8 +58,7 @@ WidgetRef FocusState::build(BuildContext& context) {
 
   if (args.autofocus && !autofocused_) {
     autofocused_ = true;
-    FocusScopeNode* scope = node->enclosingScope();
-    if (scope && !scope->focusedChild() && !scope->hasFocus()) node->requestFocus();
+    node->autofocus();
   }
   return FocusMarker::make({.node = node, .child = widget().child()});
 }

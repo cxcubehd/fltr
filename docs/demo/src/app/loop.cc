@@ -63,6 +63,7 @@ void pumpInput(App& app) {
   // the game's.
   app.input().setGameHasFocus(app.gameHasFocus());
   app.input().pump(app.binding());
+  if (app.input().backRequested()) app.back();
 }
 
 void stepSimulation(App& app, float dt) {

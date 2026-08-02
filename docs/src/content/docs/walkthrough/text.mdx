@@ -134,6 +134,42 @@ A UI asks for a handful of sizes -- this demo uses four -- so the cache stays
 small, and `draw` rounds a run's origin to whole pixels to keep a glyph on the
 texel grid it was rasterised on.
 
+## Where the line sits, and where the box ends
+
+Two decisions that a text service makes for every panel above it.
+
+The first is where the baseline goes inside a line box. Hanging the glyphs from
+the top and leaving all the leading underneath -- the obvious implementation --
+is what makes every padded button in a UI look bottom-heavy. This one centres
+the capitals in the line box instead:
+
+```cpp title="docs/demo/src/platform/text.cc"
+float RaylibTextService::baselineIn(const TextStyle& style) const noexcept {
+  return (style.size * style.lineHeight + style.size * capRatio_) * 0.5f;
+}
+```
+
+The second is what the paragraph reports as its own height. A font's box
+reserves room for ascenders and descenders whether or not the text has any, so a
+label above a number ends up further from the bottom of its panel than from the
+top. The box is trimmed to the text itself -- cap top to baseline -- and the
+padding around it becomes the whole of the space that shows:
+
+```cpp title="docs/demo/src/platform/text.cc"
+  trimTop = std::max(0.0f, first.baseline - capHeightOf(slot, first));
+  trimBottom = std::max(0.0f, last.bounds.height() - last.baseline);
+  for (PositionedRun& run : slot.runs) run.offset.dy -= trimTop;
+```
+
+Only the outer edges are trimmed: between lines the full line height still
+applies, so a wrapped paragraph reads exactly as before.
+
+<Aside type="note" title="Both ratios come from the font">
+`ascentRatio_` and `capRatio_` are read from the font's own 'H' at startup.
+fltr's placeholder service hardcodes the first and says so; a real one should
+not have to guess either.
+</Aside>
+
 The paths are tried in order and the first that exists wins, ending with
 raylib's built-in bitmap font. The second entry is the JetBrains Mono the build
 fetches, which is what makes the demo look the same on every machine without a

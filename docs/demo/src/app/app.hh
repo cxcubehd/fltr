@@ -98,7 +98,15 @@ private:
   void openWindow();
   void attachUi();
   void formatMaxFps();
+  /// A run that ends banks its score and raises its own panel: the outcome is
+  /// the game's to decide and the panel is the UI's to show, and this is the one
+  /// line between them.
+  void onOutcomeChanged();
   void runScript(int frame);
+  /// Escape as the player presses it, so the smoke run tests the path a key
+  /// actually takes rather than the method it ends up calling.
+  void pressEscape();
+  void check(bool condition, const char* what);
   /// A synthetic wheel notch over the level list, so the smoke run proves the
   /// list scrolls rather than merely showing a scrollbar.
   void scrollLevelList();
@@ -124,9 +132,11 @@ private:
   fltr::OverlayEntry pauseEntry_;
   fltr::OverlayState* overlay_ = nullptr;
 
+  fltr::Subscription outcome_;
   bool quitting_ = false;
   ShipInput scripted_;
   float scrolled_ = 0.0f;
+  bool scriptOk_ = true;
   char maxFpsText_[16] = "144";
   char debugText_[96] = "";
 };

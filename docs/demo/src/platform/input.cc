@@ -136,14 +136,16 @@ void Input::pumpSignals(fltr::WidgetBinding& binding) {
 
 void Input::pumpKeys(fltr::WidgetBinding& binding) {
   const KeyModifiers modifiers = currentModifiers();
+  backRequested_ = false;
 
   for (const KeyPair& pair : kKeys) {
     if (pair.flies && gameHasFocus_) continue;
     if (IsKeyPressed(pair.raylib)) {
-      binding.dispatchKey(KeyEvent{.type = KeyEventType::Down,
-                                   .physical = pair.physical,
-                                   .logical = pair.logical,
-                                   .modifiers = modifiers});
+      const bool taken = binding.dispatchKey(KeyEvent{.type = KeyEventType::Down,
+                                                      .physical = pair.physical,
+                                                      .logical = pair.logical,
+                                                      .modifiers = modifiers});
+      if (!taken && pair.logical == LogicalKey::Escape) backRequested_ = true;
     }
     if (IsKeyReleased(pair.raylib)) {
       binding.dispatchKey(KeyEvent{.type = KeyEventType::Up,
