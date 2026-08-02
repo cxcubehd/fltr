@@ -1,0 +1,89 @@
+/* ---------------------------------------------------------------------------
+   Diagrams
+   ---------------------------------------------------------------------------
+   Every diagram is rendered once, with transparent node fills, so a single
+   palette has to read on both the light and the dark site theme. Colour lives
+   on strokes and edges; label colour is pulled from Starlight's own tokens here
+   so it follows the theme toggle without re-rendering the SVG.
+--------------------------------------------------------------------------- */
+
+.mermaid {
+  display: flex;
+  justify-content: center;
+  margin: 1.75rem 0;
+  overflow-x: auto;
+}
+
+.mermaid svg {
+  max-width: 100%;
+  height: auto;
+}
+
+/* Flowchart labels are HTML in a foreignObject, so `color` is what applies. */
+.mermaid .nodeLabel,
+.mermaid .edgeLabel,
+.mermaid .cluster-label,
+.mermaid .label,
+.mermaid foreignObject div,
+.mermaid foreignObject span,
+.mermaid foreignObject p {
+  color: var(--sl-color-white) !important;
+  font-family: var(--sl-font) !important;
+  background: transparent !important;
+}
+
+/* Sequence and state diagrams draw labels as SVG text, so `fill` is what
+   applies there. Both selectors are needed; neither covers the other. */
+.mermaid text,
+.mermaid .messageText,
+.mermaid .loopText,
+.mermaid .noteText,
+.mermaid .actor > tspan {
+  fill: var(--sl-color-white) !important;
+}
+
+/* An edge label sits on top of its edge and needs to occlude it. */
+.mermaid .edgeLabel > *,
+.mermaid .edgeLabel rect {
+  background-color: var(--sl-color-bg) !important;
+  fill: var(--sl-color-bg) !important;
+}
+
+/* Nothing is ever filled. The hand-drawn renderer emits a separate fill path
+   per shape, so this has to be broad. */
+.mermaid .node rect,
+.mermaid .node circle,
+.mermaid .node ellipse,
+.mermaid .node polygon,
+.mermaid .node path,
+.mermaid .cluster rect,
+.mermaid .actor {
+  fill: transparent !important;
+}
+
+/* ---------------------------------------------------------------------------
+   Small typographic corrections for a reference-heavy site
+--------------------------------------------------------------------------- */
+
+/* Signature tables carry long C++ types; let them breathe rather than wrap
+   mid-identifier, and keep the overflow inside the table. */
+.sl-markdown-content table {
+  display: block;
+  overflow-x: auto;
+  white-space: normal;
+}
+
+.sl-markdown-content table code {
+  white-space: nowrap;
+}
+
+/* Reference pages are dense in `<h3>`s; a rule makes them scannable. */
+.sl-markdown-content h3 {
+  border-top: 1px solid var(--sl-color-hairline);
+  padding-top: 1.1rem;
+}
+
+.sl-markdown-content h3:first-of-type {
+  border-top: none;
+  padding-top: 0;
+}
