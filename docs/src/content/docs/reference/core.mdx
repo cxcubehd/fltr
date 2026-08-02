@@ -10,7 +10,7 @@ Everything in `include/fltr/core/`. All of it is in namespace `fltr`.
 ## Geometry
 
 `fltr/core/geometry.hpp`. Every type here has a defaulted `operator==` and a free
-`lerp(a, b, t)` overload — that overload is the ADL hook the `Interpolatable`
+`lerp(a, b, t)` overload. That overload is the ADL hook the `Interpolatable`
 concept keys on, so every one of these can be animated.
 
 ```cpp
@@ -282,7 +282,7 @@ template <class R, class... Args> class FunctionRef<R(Args...)> {
 
 <Aside type="caution" title="Callback captures must be trivially copyable and ≤ 32 bytes">
 Both are `static_assert`s. A `Callback` captured inside another `Callback`
-overflows the budget — pass a function pointer plus a `void*` owner instead.
+overflows the budget, so pass a function pointer plus a `void*` owner instead.
 </Aside>
 
 ## `Key`
@@ -339,7 +339,7 @@ namespace detail {
 ```
 
 Macros: `FLTR_ASSERT(cond, msg)`, `FLTR_EXPECTS(cond, msg)`,
-`FLTR_ENSURES(cond, msg)` — all compiled out entirely unless `FLTR_CHECKS`.
+`FLTR_ENSURES(cond, msg)`, all compiled out entirely unless `FLTR_CHECKS` is set.
 Feature-detection macros: `FLTR_HAS_DEDUCING_THIS`, `FLTR_HAS_REFLECTION`,
 `FLTR_HAS_CONTRACTS`.
 

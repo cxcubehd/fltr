@@ -1,6 +1,6 @@
 ---
-title: 4 — Text
-description: A real TextService over a raylib font — tokenise, wrap, place on a shared baseline, and hand back runs a shaper would recognise.
+title: 4. Text
+description: "A real TextService over a raylib font: tokenise, wrap, place on a shared baseline, and hand back runs a shaper would recognise."
 ---
 
 import { Aside, LinkCard, Steps } from '@astrojs/starlight/components';
@@ -9,7 +9,7 @@ fltr ships `MonospaceTextService`, and its own header calls it a development
 stand-in: fixed advance, greedy wrap, no correctness beyond ASCII. So the demo
 writes a real one.
 
-It is not a shaper — no bidi, no clusters, no ellipsis — but it measures with the
+It is not a shaper: no bidi, no clusters, no ellipsis. But it measures with the
 font, wraps on word boundaries, places runs on a common baseline from real glyph
 metrics, and stops in exactly the places the interface says a real implementation
 would keep going.
@@ -163,7 +163,7 @@ allocating after the first time.
    }
    ```
 
-2. **Tokenise**, keeping trailing spaces attached to the word before them — so a
+2. **Tokenise**, keeping trailing spaces attached to the word before them, so a
    break swallows the space instead of starting the next line with it.
 
    ```cpp title="docs/demo/src/platform/text.cc"
@@ -332,7 +332,7 @@ void RaylibTextService::draw(ParagraphHandle handle, Offset origin, Color tint) 
 
 ## Where it stops
 
-<Aside type="caution" title="Three things this deliberately does not do">
+<Aside type="caution" title="Three things it does not do">
 - **Ellipsis.** `TextOverflow::Ellipsis` and `didEllipsize` exist in the interface;
   this returns `false` unconditionally. Implementing it means trimming the last run
   to fit an ellipsis glyph and reporting that you did.
@@ -342,13 +342,13 @@ void RaylibTextService::draw(ParagraphHandle handle, Offset origin, Color tint) 
   all, so text editing is impossible regardless of what this file does.
 </Aside>
 
-<Aside type="tip" title="What this step proved">
-The interface is the right shape — 340 lines of consumer code produced real runs
-that layout, painting and hit testing all consumed without special-casing.
+<Aside type="note" title="The biggest gap the demo found">
+The interface is the right shape: 340 lines of consumer code produced runs that
+layout, painting and hit testing all consumed without special-casing.
 
-The finding: **fltr ships no `TextService` a consumer can use.** Text is required
-by the widget catalogue, so every consumer writes this file. That is the largest
-single gap the demo found.
+But fltr ships no `TextService` a consumer can use, and text is required by the
+widget catalogue, so every consumer writes this file before they can draw a
+label.
 </Aside>
 
 <LinkCard

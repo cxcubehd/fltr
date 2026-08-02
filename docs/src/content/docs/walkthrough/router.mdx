@@ -1,13 +1,13 @@
 ---
-title: 7 — The router
+title: 7. The router
 description: An enum in an Observable, AnimatedSwitcher, and a slide transition that runs in and out for the cost of two repaints a frame.
 ---
 
 import { Aside, LinkCard, Steps } from '@astrojs/starlight/components';
 
-fltr has no navigator, no routes and no screen stack — deliberately, because a
-game engine already has one. What it has instead is enough to build one in about
-forty lines, and this is that.
+fltr has no navigator, no routes and no screen stack, because a game engine
+already has one. What it does have is enough to build a router in about forty
+lines.
 
 ## The whole router
 
@@ -128,10 +128,10 @@ fltr::Key keyFor(Screen screen) {
 ```
 
 <Aside type="caution" title="Without distinct keys, nothing animates">
-`AnimatedSwitcher` decides two children are the same child when their **type and
-key match** — the same rule reconciliation uses everywhere. Every screen here is
-wrapped in a `Watch<bool>`, so they all have the same type. Without the key they
-would update in place and the transition would never run.
+`AnimatedSwitcher` decides two children are the same child when their type and key
+match, the same rule reconciliation uses everywhere. Every screen here is wrapped
+in a `Watch<bool>`, so they all have the same type. Without the key they would
+update in place and the transition would never run.
 </Aside>
 
 ### The nesting order that matters
@@ -195,7 +195,7 @@ WidgetRef slidePresence(WidgetRef child, fltr::ValueListenable<float>& presence)
 ```
 
 One function `rise`, and the same curve reads as "rises into place" going in and
-"sinks away" going out — because presence runs 0→1 on entry and 1→0 on exit.
+"sinks away" going out, because presence runs 0→1 on entry and 1→0 on exit.
 
 ## `MappedValue`
 
@@ -252,9 +252,9 @@ private:
 };
 ```
 
-It is deliberately the same shape as `AnimatedValue<T>`: a `ValueListenable` that
-subscribes to a source and republishes. Owning one is a `State`'s job, because a
-render object holds a pointer to it.
+It has the same shape as `AnimatedValue<T>`: a `ValueListenable` that subscribes to
+a source and republishes. Owning one is a `State`'s job, because a render object
+holds a pointer to it.
 
 <Aside type="tip" title="Why this belongs in the framework">
 Every zero-rebuild animation that is not already the right type needs this
@@ -273,7 +273,7 @@ keeps ticking until its presence reaches zero.
 That needed **no change to reconciliation**. A `WidgetRef` carries the type and key
 it needs to reconcile without being dereferenced, so the switcher re-emits the
 stale ref it saved from an earlier build, and reconciliation reads that as "this
-subtree is unchanged — skip it".
+subtree is unchanged, skip it".
 
 A subtree on its way out is also inert: it takes no pointer input and nothing in
 it can hold the focus, so you cannot click a button on a page that is halfway gone.
@@ -288,19 +288,19 @@ TickerMode::make({
 ```
 
 A muted ticker holds no subscription at all, so a paused gameplay screen's
-animations consume literally nothing — and resume exactly where they stopped,
-because a ticker carries a per-frame delta rather than an absolute clock.
+animations consume nothing and resume exactly where they stopped, because a ticker
+carries a per-frame delta rather than an absolute clock.
 
 `binding.tickers().activeTickerCount()` is how you check this, and the demo's debug
 readout prints it.
 
-<Aside type="tip" title="What this step proved">
+<Aside type="note" title="One thing had to be invented">
 Hand-rolling a router took an enum, an `Observable`, a `Watch` and a key function.
-Nothing was missing, and the framework's refusal to ship a navigator looks correct
-for a game engine.
+Nothing was missing, and not shipping a navigator looks like the right call for a
+game engine.
 
-The one real cost: `MappedValue` had to be invented before any of it could stay on
-the zero-rebuild path.
+`MappedValue` is the exception: without it none of this stays on the zero-rebuild
+path.
 </Aside>
 
 <LinkCard

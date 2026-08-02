@@ -30,10 +30,10 @@ struct ScrollMetrics {
 };
 ```
 
-Everything the physics is allowed to know about a scroll offset — separated from
-`ScrollPosition` so physics stays a **pure policy object**: it holds no state,
-answers only from what it is handed, and can therefore be a shared constant rather
-than something owned per scrollable.
+Everything the physics is allowed to know about a scroll offset, separated from
+`ScrollPosition` so that physics stays a pure policy object: it holds no state,
+answers only from what it is handed, and can be a shared constant rather than
+something owned per scrollable.
 
 ## `ScrollPhysics`
 
@@ -66,7 +66,7 @@ to fling, or already at rest inside the range.
 |---|---|
 | `ClampingScrollPhysics` | Android. The offset stops dead at the edge; what the user pushed past it is refused, and `ScrollPosition::overscroll` is what shows it |
 | `BouncingScrollPhysics` | iOS. The offset may leave its range, resisting more the further it goes, and springs back on release |
-| `NeverScrollPhysics` | refuses to move at all — how a scroll view is disabled without removing it or losing where it was |
+| `NeverScrollPhysics` | refuses to move at all, which is how a scroll view is disabled without removing it or losing where it was |
 
 <Aside type="note" title="The two treatments cannot appear at once">
 `overscroll()` stays zero under physics that let the offset leave its range, which
@@ -81,9 +81,9 @@ is why the bounce and the stretch never appear together.
 enum class ScrollActivityKind : std::uint8_t {
   Idle,
   Drag,        // a pointer is holding the offset; nothing else may move it
-  Ballistic,   // coasting under a simulation — a fling, or a spring-back
+  Ballistic,   // coasting under a simulation: a fling, or a spring-back
   Wheel,       // easing toward an offset the wheel keeps adding to
-  Driven,      // a fixed-duration curve — animateTo, ensureVisible
+  Driven,      // a fixed-duration curve: animateTo, ensureVisible
 };
 ```
 
@@ -140,7 +140,7 @@ One dimension only: the axis lives on it for the benefit of whoever draws or
 hit-tests it, but nothing here does anything two-dimensional.
 
 It is a `Listenable` that fires whenever the offset, the extents, or the overscroll
-changes — so a viewport observing it **for paint** scrolls without laying out.
+changes, so a viewport observing it for paint scrolls without laying out.
 
 A wheel notch is **eased toward** rather than applied, so repeated notches
 accumulate into one target instead of jumping once each. A trackpad pan is applied
@@ -150,8 +150,8 @@ directly.
 that has none yet: restoring where a scrollable was before its first layout has
 told the position how far its content reaches.
 
-`revealMinimally` moves as little as possible and not at all when the target is
-already visible. That is what focus traversal wants — arrowing down a list should
+`revealMinimally` moves as little as possible, and not at all when the target is
+already visible. That is what focus traversal wants: arrowing down a list should
 creep by one row rather than jump the row to an edge.
 
 ## `ScrollController`
@@ -177,7 +177,7 @@ Consumer-owned and referred to by pointer, never owned by a widget. It holds **n
 offset of its own**: the `Scrollable` owns the position and lends it here.
 
 The two know each other and each clears the link on the way out, so either one
-outliving the other is inert rather than dangling — which matters, because a
+outliving the other is inert rather than dangling, which matters because a
 consumer's controller and the tree that uses it are destroyed in whatever order
 their scopes end.
 
@@ -186,9 +186,9 @@ controller has to tolerate `hasClient() == false` before the first build.
 
 <Aside type="note" title="Divergence: at most one position">
 Flutter's controller drives any number of attached positions. This one drives at
-most one, because the case that needs more — one bar controlling several lists — is
-not one this framework has, and one position makes `offset()` an answer rather than
-a choice.
+most one. The case that needs more, one bar controlling several lists, is not one
+this framework has, and one position makes `offset()` an answer rather than a
+choice.
 </Aside>
 
 ## `RenderViewport`
@@ -234,8 +234,8 @@ struct ScrollbarGeometry {
 };
 ```
 
-The thumb and the content travel different distances, which is the whole point of a
-scrollbar — `scrollForThumbDelta` is that conversion.
+The thumb and the content travel different distances, and `scrollForThumbDelta` is
+that conversion.
 
 ```cpp
 class RenderScrollbarThumb final : public RenderBox {
@@ -275,8 +275,8 @@ here in O(1) rather than a notification bubbling up a second tree.
 
 <Aside type="note" title="The recorded cost">
 An *ancestor* cannot passively observe a descendant scrolling, so anything drawn
-outside the scrollable — the scrollbar and the overscroll stretch — is handed a
-**controller** instead.
+outside the scrollable (the scrollbar and the overscroll stretch) is handed a
+controller instead.
 </Aside>
 
 ### `Viewport`
@@ -304,7 +304,7 @@ struct Args {
 A scroll view over a single child.
 
 <Aside type="caution" title="Not lazy, and it says so">
-Every child is built and laid out whether or not it is visible — the same choice
+Every child is built and laid out whether or not it is visible, the same choice
 Flutter made for `SingleChildScrollView`. A few hundred are fine; a few thousand
 are not. Nothing about the position, the physics, the wheel or the scrollbar would
 change if lazy children arrived later.
@@ -316,7 +316,7 @@ The half every indicator drawn outside a `Scrollable` shares: the position its
 controller currently drives, and a subscription to each.
 
 The **controller is watched as well as the position** because it has none until the
-scrollable below has built — an indicator wrapping a scrollable is always built
+scrollable below has built. An indicator wrapping a scrollable is always built
 first, and has to tolerate that rather than assume it away.
 
 ### `ScrollbarThumb`
@@ -350,7 +350,7 @@ struct Args {
 ```
 
 A thumb over a scroll view: draggable, fading out when nothing has happened,
-widening while the pointer is on it. Behaviour and geometry only — the colour,
+widening while the pointer is on it. Behaviour and geometry only: the colour,
 thickness and corner radius are the consumer's.
 
 It **wraps** the `Scrollable` rather than living inside it, and is told which scroll

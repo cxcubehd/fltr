@@ -1,6 +1,6 @@
 ---
 title: render
-description: RenderObject, RenderBox, the pipeline owner, and the shipped render boxes — the layer that owns geometry and pixels.
+description: "RenderObject, RenderBox, the pipeline owner, and the shipped render boxes: the layer that owns geometry and pixels."
 ---
 
 import { Aside } from '@astrojs/starlight/components';
@@ -53,7 +53,7 @@ Rect   localToGlobalRect(Rect, const RenderObject* ancestor = nullptr) const;
 Offset globalToLocal(Offset, const RenderObject* ancestor = nullptr) const;
 ```
 
-A null ancestor means the root of this tree — which is what "global" means to a
+A null ancestor means the root of this tree, which is what "global" means to a
 consumer pushing pointer events in view coordinates.
 
 <Aside type="caution" title="globalToLocal on a degenerate transform">
@@ -64,7 +64,7 @@ mapping through an animated scale, check for it.
 
 The default `applyPaintTransform` covers everything that merely shifts its
 children, reading the offset from `visitChildrenWithOffsets`. Anything that scales
-or rotates overrides it — `RenderTransform` does.
+or rotates overrides it, as `RenderTransform` does.
 
 ### Invalidation
 
@@ -117,10 +117,9 @@ lifetime is exactly the render object's with no shared ownership.
 
 `observeForPaint` is the render-attached animation path: a change invalidates only
 painting, so no element rebuild and no per-frame widget allocation.
-`observeForLayout` is the same for a property that genuinely moves boxes —
-correctly invalidated, and visibly the expensive path, since every frame of it
-runs layout for the subtree. In the shipped catalogue only `RenderPositionedBox`
-uses it.
+`observeForLayout` is the same for a property that moves boxes: correctly
+invalidated, and the expensive path, since every frame of it runs layout for the
+subtree. In the shipped catalogue only `RenderPositionedBox` uses it.
 
 ## `PaintingContext`
 
@@ -142,7 +141,7 @@ The push helpers short-circuit: `alpha >= 1` records no group at all, `alpha <= 
 records **nothing whatsoever**, and an identity transform records no group. So a
 fully-faded subtree costs zero commands, not a group full of invisible ones.
 
-`transform` is applied about `pivot` in the current painting space — exactly the
+`transform` is applied about `pivot` in the current painting space, which is the
 point hit testing inverts about.
 
 A repaint-boundary child is recorded into its *own* list at its own origin and
@@ -188,7 +187,7 @@ descendants that were also dirty. Paint drains **deepest first**, so a boundary
 that repaints on its own is already clean by the time an ancestor embeds it.
 
 `layoutPasses` above 1 means laying a node out dirtied an unvisited ancestor.
-Legal, rarely intended — assert on it. See
+Legal, rarely intended, and worth asserting on. See
 [Performance](/fltr/guides/performance/).
 
 `activeLayoutNode()` is the node whose `performLayout` is currently running.
@@ -232,7 +231,7 @@ protected:
 };
 ```
 
-`layout()` is the single entry point — never call `performLayout` directly.
+`layout()` is the single entry point. Never call `performLayout` directly.
 
 `parentUsesSize` is what keeps a relayout boundary sound: a parent that never
 reads the size cannot observe the child re-laying itself out. `layoutChild`
@@ -241,7 +240,7 @@ therefore makes the child a boundary; `layoutChildForSize` does not.
 `setSize` asserts twice: that you are inside your own layout, and that the size
 satisfies the incoming constraints.
 
-`asPointerRegion()` is the render tree's **only** mention of the gesture layer —
+`asPointerRegion()` is the render tree's only mention of the gesture layer. It is
 how routing and hover pick their targets out of a hit-test path without RTTI.
 
 ### Bases
@@ -278,14 +277,14 @@ public:
 
 <Aside type="note" title="Divergence: parent data lives in the parent">
 Flutter attaches a heap-allocated `ParentData` object to each child. fltr stores
-that data in the parent's own child list instead — statically typed, no
-allocation, and a child cannot be asked for parent data belonging to a different
-parent. The cost is that a child cannot read its own parent data without going
-through the parent, which nothing here needs.
+that data in the parent's own child list instead: statically typed, no allocation,
+and a child cannot be asked for parent data belonging to a different parent. The
+cost is that a child cannot read its own parent data without going through the
+parent, which nothing here needs.
 </Aside>
 
 `reorderChildren` permutes slots. Nothing is adopted or dropped, so a child that
-moves keeps its layout state, its paint state, and its per-child data — the data
+moves keeps its layout state, its paint state, and its per-child data, which
 travels in the slot with it.
 
 ## `HitTestResult`
@@ -313,9 +312,10 @@ not invertible.
 
 <Aside type="note" title="Divergence: resolved positions, not transforms">
 Flutter records a full global→local transform per entry so a consumer can
-re-derive any space later. fltr records the already-resolved local position — all
-routing, tap and hover need, and it keeps the result trivially copyable. The cost
-is that an entry cannot be re-projected into a different space after the fact.
+re-derive any space later. fltr records the already-resolved local position, which
+is all routing, tap and hover need, and it keeps the result trivially copyable.
+The cost is that an entry cannot be re-projected into a different space after the
+fact.
 </Aside>
 
 ---
@@ -340,9 +340,8 @@ struct BoxDecoration {
 inline BoxDecoration lerp(const BoxDecoration&, const BoxDecoration&, float t) noexcept;
 ```
 
-Fill, corner radius, border colour, border width. That is the whole vocabulary —
-no gradients, no shadows, no blur. See
-[gaps and rework](/fltr/project/gaps-and-rework/).
+Fill, corner radius, border colour, border width. No gradients, no shadows, no
+blur. See [gaps and rework](/fltr/project/gaps-and-rework/).
 
 ### `RenderView`
 
@@ -431,7 +430,7 @@ void setAnimation(ValueListenable<Transform2D>* source);   // observeForPaint
 void setOrigin(Alignment);
 ```
 
-Never layout — a transform does not change the box, only where it lands.
+Never layout, because a transform does not change the box, only where it lands.
 `childTransform()` is the one matrix this object means; painting, hit testing and
 the ancestor walk all read it, so they cannot disagree about where the pivot is.
 
@@ -450,10 +449,10 @@ explicit RenderIgnorePointer(bool ignoring = true);   void setIgnoring(bool) noe
 explicit RenderAbsorbPointer(bool absorbing = true);  void setAbsorbing(bool) noexcept;
 ```
 
-Ignoring is invisible to the pointer, and so is everything below it — whatever is
-drawn behind is reached instead. Absorbing takes the pointer and gives it to
-nothing below. Both exist because a **disabled control drawn over something live
-should still swallow the click** rather than let it through.
+Ignoring is invisible to the pointer, and so is everything below it, so whatever
+is drawn behind is reached instead. Absorbing takes the pointer and gives it to
+nothing below. Both exist because a disabled control drawn over something live
+should still swallow the click rather than let it through.
 
 Neither invalidates on change: a hit test is resolved afresh from the tree every
 time one is run, so there is nothing recorded to throw away.
@@ -486,7 +485,7 @@ std::uint32_t byteOffsetAt(Offset local) const;
 ```
 
 Resolves a size from constraints like any other box, by asking the `TextService`
-to measure into the available width — so a real implementation drops in behind
+to measure into the available width, so a real implementation drops in behind
 `TextService` without touching layout.
 
 It owns its text as a `std::string`: render objects are long-lived and may own
@@ -496,7 +495,7 @@ heap memory, while widget configs are arena scratch and carry only a view.
 **colour alone repaints, everything else relayouts.**
 
 `performLayout` releases the old handle before acquiring a new one; the destructor
-releases too. That is the whole paragraph lifetime.
+releases too, which is the whole paragraph lifetime.
 
 ### `RenderSprite`
 
@@ -592,8 +591,8 @@ what `Positioned` means and differ only in what decides their own size.
 class RenderOverlay final : public RenderBoxContainer<StackChildData> { ... };
 ```
 
-The **first child is the base and alone decides the size** — an overlay must never
-change the layout of what it overlays, however large an entry is. Every other
+The first child is the base and alone decides the size, because an overlay must
+never change the layout of what it overlays however large an entry is. Every other
 child is an entry, laid out inside that size, painted after the base and, because
 hit testing walks children in reverse, tested before it.
 
@@ -612,8 +611,8 @@ Consumer-owned and referred to by pointer, like a scroll controller or a focus
 node: the anchor marking the target and the entry following it are in different
 subtrees, and this is the only thing they share.
 
-`markMoved()` costs one repaint. The anchor calls it whenever it lays out; a
-consumer whose anchor moved *without* laying out — scrolling moves by painting —
+`markMoved()` costs one repaint. The anchor calls it whenever it lays out, and a
+consumer whose anchor moved without laying out, which is what scrolling does,
 calls it too.
 
 ### `RenderAnchor` and `RenderAnchored`
@@ -633,16 +632,16 @@ public:
     bool keepOnScreen = true;
   };
   RenderAnchored(AnchorLink* link, Placement placement);
-  bool sizedByParent() const override;   // true — it fills the overlay
+  bool sizedByParent() const override;   // true: it fills the overlay
   void setLink(AnchorLink*);
   void setPlacement(Placement);
 };
 ```
 
-The child's **size** is resolved during layout and its **position** during paint —
-the one phase in which every ancestor offset between here and the root is final.
-That is also what lets an entry follow an anchor that moved without either of them
-laying out, for the price of a notification.
+The child's size is resolved during layout and its position during paint, the one
+phase in which every ancestor offset between here and the root is final. That is
+also what lets an entry follow an anchor that moved without either of them laying
+out, for the price of a notification.
 
 A dropdown is `anchorSide = bottomLeft`, `childSide = topLeft`. `keepOnScreen`
 keeps the child inside the overlay, which is what stops a menu opened near an edge

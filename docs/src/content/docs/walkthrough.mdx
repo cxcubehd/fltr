@@ -1,6 +1,6 @@
 ---
 title: Walkthrough
-description: Build a complete game — menu, level select, settings, HUD, pause overlay and page transitions — on raylib, one file at a time.
+description: "Build a complete game on raylib, one file at a time: menu, level select, settings, HUD, pause overlay and page transitions."
 ---
 
 import { Aside, Card, CardGrid, FileTree, LinkCard, Steps } from '@astrojs/starlight/components';
@@ -12,7 +12,7 @@ animated page transitions in *and* out.
 raylib draws the ship and the rocks. fltr draws everything else.
 
 <CardGrid>
-  <Card title="The point is the seam" icon="puzzle">
+  <Card title="It is all about the seam" icon="puzzle">
     The game and the UI never mention each other. The game publishes numbers into
     observables; the UI reads them. A menu takes the keyboard from the ship
     through one boolean.
@@ -105,46 +105,46 @@ once and never touch again.
 
 <Steps>
 
-1. **[Skeleton](/fltr/walkthrough/skeleton/)** — CMake `FetchContent`, a window
+1. **[Skeleton](/fltr/walkthrough/skeleton/)**: CMake `FetchContent`, a window
    that opens.
 
-2. **[The loop](/fltr/walkthrough/the-loop/)** — the seven named steps of a
+2. **[The loop](/fltr/walkthrough/the-loop/)**: the seven named steps of a
    frame, and why the order between them matters.
 
-3. **[The backend](/fltr/walkthrough/backend/)** — every `PaintOp`, the three
+3. **[The backend](/fltr/walkthrough/backend/)**: every `PaintOp`, the three
    state stacks, and the one thing raylib cannot express.
 
-4. **[Text](/fltr/walkthrough/text/)** — a real `TextService` over a raylib font,
+4. **[Text](/fltr/walkthrough/text/)**: a real `TextService` over a raylib font,
    because the shipped one is a stand-in.
 
-5. **[First pixels](/fltr/walkthrough/first-pixels/)** — `WidgetBinding`,
+5. **[First pixels](/fltr/walkthrough/first-pixels/)**: `WidgetBinding`,
    `attachRoot`, and a theme in an `Ambient<T>`.
 
-6. **[Styled primitives](/fltr/walkthrough/styled-primitives/)** — the
+6. **[Styled primitives](/fltr/walkthrough/styled-primitives/)**: the
    zero-rebuild hover pattern that every control in the demo is built on.
 
-7. **[The router](/fltr/walkthrough/router/)** — `AnimatedSwitcher` with a custom
+7. **[The router](/fltr/walkthrough/router/)**: `AnimatedSwitcher` with a custom
    slide transition, in and out.
 
-8. **[Main menu](/fltr/walkthrough/main-menu/)** — focus, autofocus, arrow
+8. **[Main menu](/fltr/walkthrough/main-menu/)**: focus, autofocus, arrow
    traversal, and Escape.
 
-9. **[Level select](/fltr/walkthrough/level-select/)** — `Scrollable` +
+9. **[Level select](/fltr/walkthrough/level-select/)**: `Scrollable` +
    `Scrollbar` + `Overscroll`, and locked entries.
 
-10. **[Settings](/fltr/walkthrough/settings/)** — `RawToggle` and `RawSlider`
+10. **[Settings](/fltr/walkthrough/settings/)**: `RawToggle` and `RawSlider`
     driving real window state.
 
-11. **[Gameplay and HUD](/fltr/walkthrough/gameplay-hud/)** — the ship flies, and
+11. **[Gameplay and HUD](/fltr/walkthrough/gameplay-hud/)**: the ship flies, and
     the HUD reads it without ever touching it.
 
-12. **[Pause menu](/fltr/walkthrough/pause-menu/)** — `Overlay`, a consumer-owned
+12. **[Pause menu](/fltr/walkthrough/pause-menu/)**: `Overlay`, a consumer-owned
     entry, and an exit animation.
 
-13. **[Animated components](/fltr/walkthrough/animated-components/)** — the
+13. **[Animated components](/fltr/walkthrough/animated-components/)**: the
     cheap path and the expensive one, side by side.
 
-14. **[Verify](/fltr/walkthrough/verify/)** — the four assertions that turn "it
+14. **[Verify](/fltr/walkthrough/verify/)**: the four assertions that turn "it
     seems fine" into a number that fails a build.
 
 </Steps>

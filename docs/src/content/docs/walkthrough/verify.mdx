@@ -1,5 +1,5 @@
 ---
-title: 14 — Verify
+title: 14. Verify
 description: A scripted headless run, four assertions, and the debug overlay that makes a frame's cost visible.
 ---
 
@@ -53,7 +53,7 @@ ShipInput App::shipInput() const noexcept {
 }
 ```
 
-The script substitutes for the keyboard at exactly one point — and still goes
+The script substitutes for the keyboard at exactly one point, and still goes
 through `gameHasFocus()`, so it is subject to the same menu gating a player is.
 
 ## The four assertions
@@ -76,16 +76,16 @@ through `gameHasFocus()`, so it is subject to the same menu gating a player is.
 ```
 
 `layoutPasses` counts how many times the layout dirty list had to be drained. More
-than one means laying a node out dirtied an ancestor that had already been
-visited — legal, and rarely intended.
+than one means laying a node out dirtied an ancestor that had already been visited:
+legal, and rarely intended.
 
 <Aside type="caution" title="Why this needs asserting rather than trusting">
 The drain is capped at 32 passes rather than looping forever. In a checked build
 the cap is reported; in a release build it degrades to **one stale frame with no
 diagnostic**.
 
-A frozen game is worse than a late one — that is the right trade — and it is
-exactly why you should watch the number yourself.
+A frozen game is worse than a late one, which is the right trade, and it is why you
+should watch the number yourself.
 </Aside>
 
 ### 2, 3. An idle frame re-records nothing, and nothing still wants one
@@ -140,9 +140,9 @@ timeout.
 acquiring a new one, and releases in its destructor. If the count is not zero after
 teardown, one of those did not happen.
 
-Note the ordering: `binding_.reset()` **before** reading the count. That is the same
-teardown ordering from [step 5](/fltr/walkthrough/first-pixels/) — the tree has to
-come down before the service it measured with.
+Note the ordering: `binding_.reset()` before reading the count. Same teardown
+ordering as [step 5](/fltr/walkthrough/first-pixels/), where the tree has to come
+down before the service it measured with.
 
 ## Running it
 
@@ -173,9 +173,8 @@ test exercises the actual GL path rather than a stub:
 xvfb-run -a ./build-demo/demo --smoke 300
 ```
 
-That is what makes the screenshots reachable from CI too — `--shot` at frame 45
-gives you the settings screen, 190 the HUD, 205 the pause overlay over live
-gameplay.
+That also makes screenshots reachable from CI: `--shot` at frame 45 gives you the
+settings screen, 190 the HUD, and 205 the pause overlay over live gameplay.
 
 ## The debug overlay
 
@@ -195,10 +194,10 @@ diagnostic in the project and the one you will reach for first.
 
 | Number | Healthy | What a bad value means |
 |---|---|---|
-| `builds` | 0 at rest | something is dirtying itself — usually an unquantised `Watch` |
+| `builds` | 0 at rest | something is dirtying itself, usually an unquantised `Watch` |
 | `layouts` | 0 at rest, small on change | an `observeForLayout` where a paint path exists |
 | `paints` | small | a repaint boundary is missing |
-| `passes` | 0 or 1 | layout dirtied an ancestor — a real bug |
+| `passes` | 0 or 1 | layout dirtied an ancestor, which is a real bug |
 | `tickers` | matches what is visibly moving | an animation in a hidden subtree; wrap it in `TickerMode` |
 | `cmds` | stable for a stable screen | something is recording per-frame that should not |
 
@@ -244,21 +243,21 @@ int App::run() {
 2. **Add the debug overlay** before you need it. Wondering why a frame is slow is
    much worse than reading six numbers.
 
-3. **Read the findings.** Everything this demo hit — what was missing, what was
-   awkward, and what it would take to fix — is on one page.
+3. **Read the findings.** What was missing, what was awkward, and what it would
+   take to fix, all on one page.
 
 </Steps>
 
-<Aside type="tip" title="What the whole walkthrough proved">
+<Aside type="note" title="Where that leaves the framework">
 fltr drives a real game UI on a real renderer: five screens, page transitions in
 and out, a live HUD over a running simulation, an overlay that animates away, full
-keyboard navigation, and a scrollable list — in about 4,500 lines, a third of which
-is raylib integration written once.
+keyboard navigation, and a scrollable list. About 4,500 lines, a third of which is
+raylib integration written once.
 
-Layout converges in one pass. An idle frame re-records nothing. No paragraph leaks.
-Hovering a button rebuilds nothing at all.
+Layout converges in one pass. An idle frame re-records nothing. No paragraph
+leaks. Hovering a button rebuilds nothing at all.
 
-And the demo found real gaps, which was the point of building it.
+It also turned up a dozen real gaps, which was the point of building it.
 </Aside>
 
 <LinkCard

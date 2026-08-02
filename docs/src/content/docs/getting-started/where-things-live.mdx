@@ -1,13 +1,13 @@
 ---
 title: Where things live
-description: The header map, the single namespace, and the two places the layout deliberately breaks its own rule.
+description: The header map, the single namespace, and the two places the layout breaks its own rule.
 ---
 
 import { Aside, FileTree } from '@astrojs/starlight/components';
 
 Everything public is in one flat namespace, `fltr`. There is no per-subsystem
 nesting: `fltr::Row`, `fltr::RenderFlex` and `fltr::GestureArena` all sit
-together. The directory structure is about *dependency order*, not about naming.
+together. The directory structure reflects dependency order, not naming.
 
 <FileTree>
 
@@ -93,18 +93,18 @@ together. The directory structure is about *dependency order*, not about naming.
 owns the three trees and runs the three phases. It pulls in `widgets/basic.hpp`,
 so the widget catalogue comes with it.
 
-## Two deliberate exceptions
+## Two exceptions
 
-The layout has a rule — a directory only depends on directories below it — and
-breaking it twice was cheaper than the alternative.
+The layout has a rule: a directory only depends on directories below it. It gets
+broken twice, both times because the alternative was worse.
 
 <Aside type="note" title="RenderPointerRegion lives in gestures/, not render/">
-It is a render object, but it is the *only* one that knows the gesture layer
-exists. Putting it in `render/` would make the entire render tree depend on
-`gestures/`. Instead, `RenderBox` exposes one virtual hook —
-`asPointerRegion()`, which returns non-null for exactly one class — and the class
-itself lives with the subsystem it serves. The same reasoning puts
-`RenderViewport` and `RenderScrollbarThumb` in `scroll/`.
+It is a render object, but the only one that knows the gesture layer exists.
+Putting it in `render/` would make the entire render tree depend on `gestures/`.
+Instead `RenderBox` exposes one virtual hook, `asPointerRegion()`, which returns
+non-null for exactly one class, and that class lives with the subsystem it
+serves. Same reasoning for `RenderViewport` and `RenderScrollbarThumb` in
+`scroll/`.
 </Aside>
 
 <Aside type="note" title="harness.hpp sits at the top level">

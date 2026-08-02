@@ -6,16 +6,15 @@ description: A layer above the tree, entries anchored to a widget, and the one m
 import { Aside, Steps } from '@astrojs/starlight/components';
 
 Tooltips, dropdowns, context menus, drag ghosts and modal dialogs all need to
-draw outside their parent's subtree. That is what the overlay is. Dialogs and
-menus additionally need to survive their own removal long enough to fade out —
-that is a separate, much more expensive mechanism, and it is worth understanding
-why.
+draw outside their parent's subtree. That is what the overlay is for. Dialogs and
+menus additionally need to survive their own removal long enough to fade out,
+which is a separate and much more expensive mechanism.
 
 ## The overlay
 
 ```mermaid
 flowchart TD
-  OV["RenderOverlay"] --> BASE["child 0 — the base<br/><b>alone decides the size</b>"]
+  OV["RenderOverlay"] --> BASE["child 0, the base:<br/>alone decides the size"]
   OV --> E1["entry 1<br/>laid out inside that size"]
   OV --> E2["entry 2"]
 
@@ -31,7 +30,7 @@ flowchart TD
 ```
 
 The base alone decides the layout. However large an entry is, the tree underneath
-it is laid out exactly as it would have been without the overlay — inserting a
+it is laid out exactly as it would have been without the overlay, so inserting a
 dropdown cannot reflow the page behind it.
 
 ```cpp
@@ -39,8 +38,9 @@ dropdown cannot reflow the page behind it.
 // no scope, and no extra render object.
 Overlay::make({.child = yourApp})
 
-// Later, from a callback — never from a build.
-OverlayState* overlay = Overlay::of(context);   // an ambient read, so: during a build
+// Reading the overlay is an ambient read, so it happens during a build.
+OverlayState* overlay = Overlay::of(context);
+// Inserting happens later, from a callback.
 overlay->insert(entry);
 ```
 
@@ -60,8 +60,8 @@ safe: destroying an inserted entry removes it, and an overlay going away first
 clears the entry's back-pointer.
 
 <Aside type="note" title="An entry is named by id, not by pointer">
-The host widget that builds an entry refers to it by an `std::int64_t`, not by
-address — precisely because an entry can be destroyed part-way through the build
+The host widget that builds an entry refers to it by an `std::int64_t` rather
+than by address, because an entry can be destroyed part-way through the build
 that would have rebuilt it. `entryById` returns null once it is gone, which is a
 lookup rather than a dangling read.
 </Aside>
@@ -87,22 +87,21 @@ Anchored::make({
 })
 ```
 
-**Size is resolved at layout; position is resolved at paint.** Paint is the one
-phase where every ancestor offset is final, so that is where the anchor's
-rectangle in root space is actually knowable. `keepOnScreen` clamps a menu opened
-near an edge.
+Size is resolved at layout; position is resolved at paint. Paint is the one phase
+where every ancestor offset is final, so that is where the anchor's rectangle in
+root space is knowable. `keepOnScreen` clamps a menu opened near an edge.
 
 <Aside type="caution" title="An anchored entry follows a repaint, not a movement">
-If something moves the anchor without laying it out — a scroll, which is a paint
-operation — the entry does not know. Call `AnchorLink::markMoved()` in that case.
-This is a recorded divergence: tying the entry to layout instead would have made
-every scroll frame relayout the overlay.
+If something moves the anchor without laying it out, which is what scrolling
+does, the entry does not know. Call `AnchorLink::markMoved()` in that case. Tying
+the entry to layout instead would have made every scroll frame relayout the
+overlay.
 </Aside>
 
 ## Exit animations
 
-This is the single most expensive item in fltr per unit of user-visible benefit,
-and it is worth knowing exactly what it does.
+This is the most expensive item in fltr per unit of user-visible benefit, so it
+is worth knowing exactly what it does.
 
 ```cpp
 AnimatedSwitcher::make({
@@ -115,22 +114,21 @@ AnimatedSwitcher::make({
 
 ### The mechanism was already there
 
-`AnimatedSwitcher` retains the outgoing **element** — not the widget — by
-re-emitting its stale `WidgetRef` on every build. Recall from
-[three trees](/fltr/architecture/overview/) that reconciliation reads:
+`AnimatedSwitcher` retains the outgoing element, not the widget, by re-emitting
+its stale `WidgetRef` on every build. Reconciliation reads:
 
 ```cpp
 if (!widget.stale()) child->update(widget);
 ```
 
-A stale ref means *unchanged*, so the subtree stays mounted, keeps its `State`,
-keeps ticking, and is **never rebuilt** while it leaves.
+A stale ref means unchanged, so the subtree stays mounted, keeps its `State`,
+keeps ticking, and is never rebuilt while it leaves.
 
 <Steps>
 
 1. **A subtree on its way out is inert.** `IgnorePointer` and
-   `Focus(canRequestFocus = false)` guards are *always* present, with only their
-   flag moving — so a leaving panel does not change the tree's shape and does not
+   `Focus(canRequestFocus = false)` guards are always present, with only their
+   flag moving, so a leaving panel does not change the tree's shape and does not
    swallow a click aimed at what is behind it.
 
 2. **Interruption re-enters rather than duplicating.** Reopening a menu that is
@@ -138,17 +136,17 @@ keeps ticking, and is **never rebuilt** while it leaves.
    creating a second copy that crossfades with the first.
 
 3. **Letting go happens in the build.** The element is dropped on the first build
-   after its presence reaches zero — not from inside the animation callback,
-   which would be tearing down a tree from within a notification it is walking.
+   after its presence reaches zero, rather than from inside the animation
+   callback, which would tear down a tree from within a notification it is
+   walking.
 
 </Steps>
 
 <Aside type="danger" title="Keys must be unique per presence">
 Two subtrees are alive at once during a transition, and the switcher tells them
-apart by key. Two presences with the same key is the exact hazard that makes a
-stale ref reach `inflate` — a contract violation with checks on, undefined
-behaviour with them off. Key by *what the page is*, not by what widget it
-happens to be.
+apart by key. Two presences with the same key is what makes a stale ref reach
+`inflate`: a contract violation with checks on, undefined behaviour with them
+off. Key by what the page is, not by what widget it happens to be.
 </Aside>
 
 ## Writing a transition
@@ -159,8 +157,8 @@ using PresenceTransition = Callback<WidgetRef(WidgetRef, ValueListenable<float>&
 WidgetRef fadePresence(WidgetRef child, ValueListenable<float>& presence);  // the default
 ```
 
-The presence value is a `ValueListenable<float>` going from 0 to 1, and it is
-handed to a render object, so a fade costs one repaint per frame and no builds.
+The presence value is a `ValueListenable<float>` running from 0 to 1. It is handed
+to a render object, so a fade costs one repaint per frame and no builds.
 
 To slide as well as fade you need a `ValueListenable<Transform2D>`, which means
 owning a small adapter in a `State`:
@@ -178,6 +176,6 @@ every page transition and for the pause panel.
 
 ## What is not here
 
-**Drag and drop.** The overlay is the piece a drag ghost needs, and it exists.
-The drop machinery — draggables, drop targets, and the hit testing between them —
-was never built.
+**Drag and drop.** The overlay is the piece a drag ghost needs, and it exists. The
+drop machinery (draggables, drop targets, and the hit testing between them) was
+never built.

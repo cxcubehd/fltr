@@ -1,5 +1,5 @@
 ---
-title: 6 — Styled primitives
+title: 6. Styled primitives
 description: RawButton publishes states, StyledSurface animates them, and hovering rebuilds nothing at all.
 ---
 
@@ -67,9 +67,8 @@ BoxDecoration resolveSurface(const SurfaceStyle& style, WidgetStates states) noe
 }
 ```
 
-Most specific last. **Focus composes rather than replaces** — it recolours the
-border of whichever surface won, so a focused *and* hovered control still looks
-hovered.
+Most specific last. Focus composes rather than replaces: it recolours the border
+of whichever surface won, so a focused and hovered control still looks hovered.
 
 Three presets cover the whole demo:
 
@@ -138,9 +137,9 @@ WidgetRef StyledSurfaceState::build(BuildContext& context) {
 }
 ```
 
-That distinction is the whole trick. `statesOf` creates an *ambient* dependency on
-the scope — which effectively never changes — and the subscription to the
-controller is one we make **explicitly**, so we choose where it goes.
+That distinction is the trick. `statesOf` creates an ambient dependency on the
+scope, which effectively never changes, and the subscription to the controller is
+one we make explicitly, so we choose where it goes.
 
 ### The retarget
 
@@ -187,7 +186,7 @@ in and out of a button repeatedly is continuous and accumulates no error.
 ## The two paths, side by side
 
 <Tabs>
-  <TabItem label="StatesBuilder — a rebuild per hover">
+  <TabItem label="StatesBuilder: a rebuild per hover">
 
 ```cpp
 StatesBuilder::make({
@@ -203,11 +202,11 @@ StatesBuilder::make({
 Simple, and matches Flutter's idiom. Every pointer enter and exit rebuilds this
 subtree, then lays it out, then paints it.
 
-Correct when the visual's **structure** changes with the state — a checkmark that
+Correct when the visual's structure changes with the state: a checkmark that
 appears, a spinner replacing a label.
 
   </TabItem>
-  <TabItem label="StyledSurface — zero rebuilds">
+  <TabItem label="StyledSurface: zero rebuilds">
 
 ```cpp
 StyledSurface::make({.style = buttonStyle(theme), .child = label()})
@@ -280,9 +279,9 @@ TextStyle labelFor(const Theme& theme, const MenuButtonSpec& spec) {
 ```
 
 <Aside type="tip" title="The division that makes this work">
-Let the **surface** carry hover and press — interaction, animated, zero rebuilds.
-Let the **label** carry enabled and selected — configuration, known at build time,
-no animation needed.
+Let the surface carry hover and press: interaction, animated, zero rebuilds. Let
+the label carry enabled and selected: configuration, known at build time, no
+animation needed.
 
 Nothing rebuilds on either.
 </Aside>
@@ -294,7 +293,7 @@ design that happens to also be the only one available. On the
 [gaps list](/fltr/project/gaps-and-rework/).
 </Aside>
 
-## Padding, deliberately
+## The padding numbers
 
 ```cpp
 EdgeInsets::symmetric(theme.unit * 1.75f, theme.unit * 1.25f)   // 14 × 10
@@ -304,14 +303,12 @@ Slim rows: more horizontal than vertical padding, a 6px radius, a 1px border, an
 a 0.985 press scale that is felt more than seen. Nothing in the demo has a shadow
 because nothing in `BoxDecoration` can.
 
-<Aside type="tip" title="What this step proved">
-The component layer is the framework's strongest idea. Splitting behaviour from
-appearance at the `WidgetStates` boundary meant one 130-line file gave every
-control in the demo animated hover, press, focus and disabled states — for the
-cost of one repaint per frame of animation and **zero** rebuilds.
+<Aside type="note" title="The component layer is the best idea in the framework">
+Splitting behaviour from appearance at the `WidgetStates` boundary meant one
+130-line file gave every control in the demo animated hover, press, focus and
+disabled states, for one repaint per frame of animation and no rebuilds.
 
-Measured, not claimed: the smoke test asserts `buildCount()` stays put while
-hovering.
+The smoke test asserts `buildCount()` stays put while hovering.
 </Aside>
 
 <LinkCard

@@ -7,7 +7,7 @@ import { Aside, Card, CardGrid } from '@astrojs/starlight/components';
 
 There is no tracing garbage collector, no shared ownership in the hot path, and
 no per-frame heap allocation in the steady state. Those three constraints shape
-almost every API in fltr, and this page is the single place they are collected.
+almost every API in fltr.
 
 ## Three lifetimes
 
@@ -49,9 +49,9 @@ template <class T, class... Args> T* createOwning(Args&&...);  // registers a de
 void reset();                                                  // rewind + bump a generation
 ```
 
-`reset()` rewinds to the first chunk and increments a generation counter — a
-pointer store and an increment. Chunks are **retained**, so once the tree has
-built once, building it again allocates nothing.
+`reset()` rewinds to the first chunk and increments a generation counter: a
+pointer store and an increment. Chunks are retained, so once the tree has built
+once, building it again allocates nothing.
 
 The generation counter is what makes `WidgetRef::stale()` work: a ref records the
 generation it was created in, and comparing it to the current one is how the
@@ -62,8 +62,7 @@ framework knows whether the memory behind the pointer is still what it was.
 > **Anything a widget names by pointer is consumer-owned and must outlive the
 > widget.**
 
-This is not a style guideline; it is the memory model. The list is finite and
-worth memorising:
+That is the memory model rather than a style guideline, and the list is short:
 
 | Type | Typically owned by |
 |---|---|
@@ -78,10 +77,10 @@ worth memorising:
 | The `string_view` inside a `Text` | a literal, or a buffer your game owns |
 
 <Aside type="danger" title="Text does not copy">
-`Text::Args::text` is a `std::string_view` and it is **not** copied into the
-arena. It must point at storage that outlives the build. A literal is fine; a
+`Text::Args::text` is a `std::string_view` and it is not copied into the arena.
+It must point at storage that outlives the build. A literal is fine; a
 `std::string` you build in the builder and let go of is a use-after-free that
-will usually look like garbled glyphs rather than a crash.
+usually looks like garbled glyphs rather than a crash.
 
 The walkthrough's `Session` keeps `char[16]` buffers for exactly this reason.
 </Aside>
@@ -100,8 +99,8 @@ class OwnedStates {
 ```
 
 A `Subscription` unhooks itself when its `Listenable` dies, so a controller
-destroyed while the component is still mounted reads as **gone** rather than
-being written into. It costs two pointer stores and no allocation.
+destroyed while the component is still mounted reads as gone rather than being
+written into. It costs two pointer stores and no allocation.
 
 `OwnedFocusNode` does the same for focus nodes, and `ScrollController` and
 `ScrollPosition` clear each other's pointer on destruction so either outliving
@@ -122,14 +121,14 @@ template <class R, class... Args> class Callback<R(Args...)> {
 };
 ```
 
-The captured state must be **trivially copyable** and fit in 32 bytes. Both are
-`static_assert`s with readable messages. This keeps a `Callback` trivially
-destructible and therefore arena-safe.
+The captured state must be trivially copyable and fit in 32 bytes. Both are
+`static_assert`s with readable messages, and together they keep a `Callback`
+trivially destructible and therefore arena-safe.
 
 <CardGrid>
   <Card title="What fits" icon="approve-check">
-    `[&app]`, `[this]`, `[&app, index]`, `[&app, screen]` — one or two pointers
-    and a small value. This covers essentially every UI callback.
+    `[&app]`, `[this]`, `[&app, index]`, `[&app, screen]`: one or two pointers and
+    a small value. That covers nearly every UI callback.
   </Card>
   <Card title="What does not" icon="error">
     A `Callback` captured inside another `Callback`: 40+ bytes nested in a 32-byte
@@ -139,29 +138,27 @@ destructible and therefore arena-safe.
 </CardGrid>
 
 `FunctionRef<Sig>` is the non-owning sibling, used where the callee does not
-outlive the call — visitors, layout callbacks, `setState`.
+outlive the call: visitors, layout callbacks, `setState`.
 
 ## No per-frame heap churn
 
-Every drain loop in the framework uses a member scratch vector rather than a
-local one — `layoutScratch_`, `paintScratch_`, `buildScratch_`, `routing_`,
-`firing_`, `dispatching_`, and the hover diff's `before_` / `after_`.
+Every drain loop in the framework uses a member scratch vector rather than a local
+one: `layoutScratch_`, `paintScratch_`, `buildScratch_`, `routing_`, `firing_`,
+`dispatching_`, and the hover diff's `before_` / `after_`.
 `DisplayList::beginRecording` clears but retains capacity.
 
 The test suite overrides global `operator new` and `operator delete` to count
 allocations, so "a steady-state frame allocates nothing" is a number the tests
-assert rather than an aspiration.
+assert.
 
 <Aside type="note" title="Even the timeout list">
-Gesture timeouts are kept sorted with an insertion sort, deliberately, because
-`std::sort` allocates a temporary buffer for some inputs. That is the level at
-which this rule is taken seriously.
+Gesture timeouts are kept sorted with an insertion sort rather than `std::sort`,
+which allocates a temporary buffer for some inputs.
 </Aside>
 
 ## Teardown order
 
-`WidgetBinding` declares its members in the order they must be destroyed in
-reverse — which is to say, deliberately:
+`WidgetBinding` declares its members in reverse destruction order:
 
 ```cpp
 PointerBinding pointers_;    // outlives the tree: a region being dropped withdraws from it

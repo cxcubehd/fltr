@@ -1,13 +1,12 @@
 ---
-title: 2 — The loop
+title: 2. The loop
 description: Seven named steps, each in its own function, and the ordering constraints between them.
 ---
 
 import { Aside, LinkCard, Steps } from '@astrojs/starlight/components';
 
-fltr is a library your loop calls, not a framework that calls your loop. This is
-the shape, and each step is a separate function because the ordering between them
-is load-bearing rather than incidental.
+fltr is a library your loop calls, not a framework that calls your loop. Each step
+below is a separate function because the ordering between them matters.
 
 ## `app/loop.hh`
 
@@ -92,8 +91,8 @@ void pumpWindowEvents(App& app) {
 }
 ```
 
-Unconditional on purpose. `setSurface` compares before it invalidates, so a
-frame in which the window did not move costs one `Size` comparison.
+Unconditional. `setSurface` compares before it invalidates, so a frame in which
+the window did not move costs one `Size` comparison.
 
 ### `pumpInput`
 
@@ -125,8 +124,8 @@ void stepSimulation(App& app, float dt) {
 }
 ```
 
-**Before** `buildAndLayout`, so a value the game pushed this frame is visible to
-the build that follows it. Pushing after would show it one frame late.
+Before `buildAndLayout`, so a value the game pushed this frame is visible to the
+build that follows it. Pushing after would show it one frame late.
 
 ### `buildAndLayout`
 
@@ -138,8 +137,8 @@ Scene buildAndLayout(App& app, float dt) {
 }
 ```
 
-One line, and it is the entire framework-facing surface of the loop. Everything
-else on this page is yours.
+The entire framework-facing surface of the loop. Everything else on this page is
+yours.
 
 ### `applyCursor`
 
@@ -147,8 +146,8 @@ else on this page is yours.
 void applyCursor(App& app) { app.window().applyCursor(app.binding().cursor()); }
 ```
 
-**After** `drawFrame`, because hover is resolved inside it. Reading the cursor
-before would apply last frame's answer.
+After `drawFrame`, because hover is resolved inside it. Reading the cursor before
+would apply last frame's answer.
 
 ### `present`
 
@@ -162,8 +161,7 @@ void present(App& app, const Scene& scene) {
 }
 ```
 
-The game and the UI are drawn by different code into the same framebuffer. That is
-the whole integration.
+The game and the UI are drawn by different code into the same framebuffer.
 
 ```cpp title="docs/demo/src/app/loop.cc"
 /// The game is drawn by raylib directly; only the UI goes through fltr. Keeping
@@ -198,34 +196,31 @@ void drawField(const Session& session, fltr::Size surface) {
 }
 ```
 
-## What the ordering actually buys
+## What the ordering buys
 
 <Steps>
 
-1. **Clock before everything** — `dt` is one number, measured once, and every
+1. **Clock before everything.** `dt` is one number, measured once, and every
    consumer of it gets the same value.
 
-2. **Surface before input** — a resize that arrived this frame is applied before a
+2. **Surface before input.** A resize that arrived this frame is applied before a
    pointer position is interpreted against the old layout.
 
-3. **Input before simulation** — the ship acts on this frame's keys, not last
-   frame's.
+3. **Input before simulation.** The ship acts on this frame's keys.
 
-4. **Simulation before build** — a value pushed into an `Observable<T>` is read by
+4. **Simulation before build.** A value pushed into an `Observable<T>` is read by
    the build that follows it, so the HUD is never a frame behind.
 
-5. **Cursor after build** — hover is resolved inside `drawFrame`.
+5. **Cursor after build.** Hover is resolved inside `drawFrame`.
 
-6. **Present last** — the game is drawn under the UI, into the same framebuffer.
+6. **Present last.** The game is drawn under the UI, into the same framebuffer.
 
 </Steps>
 
-<Aside type="tip" title="What this step proved">
-The framework does not want to own your loop, and it shows: seven steps, one of
-which is a call into fltr. The other six are things a game already does.
-
-The cost, recorded honestly: nothing checks this ordering for you. Calling
-`applyCursor` before `drawFrame` compiles, runs, and is subtly wrong.
+<Aside type="note" title="One caveat">
+Seven steps, one of which calls into fltr; the other six are things a game already
+does. Nothing checks the ordering for you, though. Calling `applyCursor` before
+`drawFrame` compiles, runs, and is subtly wrong.
 </Aside>
 
 <LinkCard

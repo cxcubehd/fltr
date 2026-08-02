@@ -1,6 +1,6 @@
 ---
 title: Layout
-description: Constraints down, sizes up, one pass — and the boundary rule that keeps the cost proportional to what changed.
+description: Constraints down, sizes up, one pass, and the boundary rule that keeps the cost proportional to what changed.
 ---
 
 import { Aside, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
@@ -60,10 +60,10 @@ than to the tree.
 A node is a **relayout boundary** when its size cannot change without its
 parent's constraints changing first. That is true in three cases:
 
-- the parent passed `parentUsesSize = false` — it has already committed to not
+- the parent passed `parentUsesSize = false`, so it has already committed to not
   caring;
-- the incoming constraints are tight — there is only one legal size;
-- the node is `sizedByParent()` — its size is a function of constraints alone.
+- the incoming constraints are tight, so there is only one legal size;
+- the node is `sizedByParent()`, so its size is a function of constraints alone.
 
 ```cpp title="src/render_object.cpp"
 void RenderObject::markNeedsLayout() {
@@ -100,9 +100,9 @@ reason.
    `childConstraints(0, kInf)` on the main axis. Now the free space is known.
 
 2. **Divide what is left.** Each flexible child gets `freeSpace * flex /
-   totalFlex`. The **last** flexible child absorbs the rounding remainder — when
-   `remainingFlex == d.flex`, its extent is simply `remainingSpace` — so children
-   exactly fill the row instead of leaving a sub-pixel gap.
+   totalFlex`. The last flexible child absorbs the rounding remainder: when
+   `remainingFlex == d.flex` its extent is just `remainingSpace`, so children
+   fill the row exactly instead of leaving a sub-pixel gap.
 
 </Steps>
 
@@ -111,7 +111,7 @@ and cross-axis alignment computes each child's cross offset.
 
 | Situation | What happens |
 |---|---|
-| Cross axis unbounded and `CrossAxisAlignment::Stretch` | Degrades to loose — there is nothing to stretch to |
+| Cross axis unbounded and `CrossAxisAlignment::Stretch` | Degrades to loose, since there is nothing to stretch to |
 | Main axis unbounded (`canFlex == false`) | Flexible children behave as inflexible; nothing can be a share of infinity |
 | `MainAxisSize::Min` | The flex sizes itself to its children rather than to its constraints |
 
@@ -137,8 +137,8 @@ constraints.loosen()               // drop the minimums
 BoxConstraints::unbounded()        // 0..inf on both axes
 BoxConstraints{.maxWidth = 560}    // bounded one way only
 ```
-A `Scrollable` lays its child out with the scroll axis unbounded — which is why
-a `Column` inside one must not itself be unbounded on that axis.
+A `Scrollable` lays its child out with the scroll axis unbounded, which is why a
+`Column` inside one must not itself be unbounded on that axis.
   </TabItem>
   <TabItem label="Combining">
 ```cpp
@@ -156,7 +156,7 @@ protocol. fltr has exactly one, `BoxConstraints`, passed by value.
 
 **What it costs:** adopting the full sliver protocol later would mean making
 constraints polymorphic, which touches every `performLayout` in the tree. That is
-the recorded price of not having lazy, pinned or floating scroll children — see
+the recorded price of not having lazy, pinned or floating scroll children. See
 [scrolling](/fltr/architecture/scrolling/).
 
 ## What is missing

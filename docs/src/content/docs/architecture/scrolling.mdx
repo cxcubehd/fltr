@@ -1,12 +1,12 @@
 ---
 title: Scrolling
-description: Scrolling as a paint operation, physics as a stateless policy, activities as an enum, and the non-lazy limitation stated plainly.
+description: Scrolling as a paint operation, physics as a stateless policy, activities as an enum, and where the non-lazy viewport runs out.
 ---
 
 import { Aside, Card, CardGrid } from '@astrojs/starlight/components';
 
-The single most important thing about scrolling in fltr: **it is a paint
-operation, and that is measured, not asserted.**
+Scrolling in fltr is a paint operation, and the test suite measures that rather
+than assuming it.
 
 ```mermaid
 flowchart TD
@@ -28,7 +28,7 @@ flowchart TD
   class CHILD cold
 ```
 
-`RenderViewport` lays its child out **once**, with the scroll axis unbounded, then
+`RenderViewport` lays its child out once, with the scroll axis unbounded, then
 paints it at a negative offset inside a clip:
 
 ```cpp title="src/scroll_viewport.cpp"
@@ -39,9 +39,10 @@ void RenderViewport::paint(PaintingContext& context, Offset offset) {
 }
 ```
 
-It `observeForPaint`s the position and is a repaint boundary, so **a frame of
-scrolling re-records one clip and one `DrawList` reference** — not the content.
-Hit testing applies the same `paintOffset()`, so what you click is what you see.
+It `observeForPaint`s the position and is a repaint boundary, so a frame of
+scrolling re-records one clip and one `DrawList` reference rather than the
+content. Hit testing applies the same `paintOffset()`, so what you click is what
+you see.
 
 ## `ScrollPosition`
 
@@ -74,7 +75,7 @@ Flutter has a `ScrollActivity` class hierarchy. fltr has:
 enum class ScrollActivityKind : std::uint8_t { Idle, Drag, Ballistic, Wheel, Driven };
 ```
 
-A drag or a wheel notch therefore starts **without allocating anything**.
+A drag or a wheel notch therefore starts without allocating anything.
 
 **What it costs:** a sixth mode means editing a switch statement, and consumers
 cannot add their own activity kind.
@@ -91,13 +92,14 @@ class ScrollPhysics {
 };
 ```
 
-Shipped as shared constants — `ClampingScrollPhysics` (Android),
-`BouncingScrollPhysics` (iOS), `NeverScrollPhysics` (disabled *without losing the
-position*). Nothing allocates a physics object per scrollable; you point at one.
+Shipped as shared constants: `ClampingScrollPhysics` (Android),
+`BouncingScrollPhysics` (iOS), and `NeverScrollPhysics` (disabled without losing
+the position). Nothing allocates a physics object per scrollable; you point at
+one.
 
-Overscroll is simply **what the boundary refused**: `applyBoundaryConditions`
-returns the part of a delta it would not accept, and the stretch is rendered
-through the existing render-attached transform path.
+Overscroll is what the boundary refused. `applyBoundaryConditions` returns the
+part of a delta it would not accept, and the stretch is rendered through the
+existing render-attached transform path.
 
 ## The widgets
 
@@ -121,11 +123,10 @@ Scrollbar::make({
 ```
 
 <Aside type="note" title="Why they wrap rather than listen">
-Because there is no notification bus. An indicator drawn *outside* a scrollable
+Because there is no notification bus. An indicator drawn outside a scrollable
 cannot passively observe it, so it is handed the same controller instead. The
-controller is also watched, not just the position — an indicator wrapping a
-scrollable is built first, before the scrollable below it has a position at all,
-and has to tolerate that rather than assume it away.
+controller is watched as well as the position: an indicator wrapping a scrollable
+is built first, before the scrollable below it has a position at all.
 </Aside>
 
 <Aside type="caution" title="One controller drives at most one position">
@@ -133,11 +134,11 @@ Flutter allows a controller to drive several. Here it is one, and the two clear
 each other's pointer on destruction so either outliving the other is inert.
 </Aside>
 
-## The limitation, stated plainly
+## The limitation
 
 <CardGrid>
   <Card title="Non-lazy, single child" icon="warning">
-    A `Scrollable` lays out **one** child with the scroll axis unbounded. Every
+    A `Scrollable` lays out one child with the scroll axis unbounded. Every
     descendant is built and laid out whether or not it is visible.
 
     A few hundred children are fine and cost nothing per frame in steady state. A
@@ -150,9 +151,8 @@ each other's pointer on destruction so either outliving the other is inert.
   </Card>
 </CardGrid>
 
-This was a deliberate choice, and the reasoning is worth keeping: position,
-physics, activities, controller, wheel, overscroll and the scrollbar are all
-**identical** whether or not children are lazy. Adding laziness later requires
-build-during-layout — a scoped exemption from phase separation plus keeping the
-build arena open across layout — but it does not require revisiting any of the
-above.
+The reasoning behind the choice: position, physics, activities, controller,
+wheel, overscroll and the scrollbar are all identical whether or not children are
+lazy. Adding laziness later needs build-during-layout, which means a scoped
+exemption from phase separation plus keeping the build arena open across layout,
+but it does not need any of the above revisited.

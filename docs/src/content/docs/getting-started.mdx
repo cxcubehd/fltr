@@ -5,15 +5,15 @@ description: What fltr is, what it refuses to do, and how the pieces fit togethe
 
 import { Aside, Card, CardGrid, LinkCard, Steps } from '@astrojs/starlight/components';
 
-fltr is a **retained-mode** UI framework for embedding in a game engine. It is a
-deliberate port of Flutter's architecture to C++23 — the same three-tree split,
-the same layout protocol, the same gesture arena — with no Dart, no garbage
-collector, and no dependency on any graphics API.
+fltr is a retained-mode UI framework for embedding in a game engine. It ports
+Flutter's architecture to C++23: the same three-tree split, the same layout
+protocol, the same gesture arena, with no Dart, no garbage collector, and no
+dependency on a graphics API.
 
 ## The bargain
 
-fltr owns three things: a widget tree, a render tree, and the pipeline that
-turns one into the other. **You** own everything else.
+fltr owns a widget tree, a render tree, and the pipeline that turns one into the
+other. You own everything else.
 
 | You own | fltr sees |
 |---|---|
@@ -25,15 +25,15 @@ turns one into the other. **You** own everything else.
 | The renderer | A `DisplayList` you translate |
 | Game state | An `Observable<T>` you push into |
 
-Nothing in that right-hand column is a plugin point that fltr calls back into on
-its own schedule. Everything happens because your loop asked for it.
+Nothing in that right-hand column is a plugin point fltr calls back into on its
+own schedule. Everything happens because your loop asked for it.
 
 ## What one frame looks like
 
 <Steps>
 
-1. **Dispatch whatever input arrived.** This is not part of the frame — an event
-   goes in when it arrives, at whatever rate your platform produces them.
+1. **Dispatch whatever input arrived.** Not part of the frame: an event goes in
+   when it arrives, at whatever rate your platform produces them.
 
    ```cpp
    binding.dispatchPointer(event);
@@ -47,14 +47,14 @@ its own schedule. Everything happens because your loop asked for it.
    hull.set(ship.hull() / kHullMax);   // notifies nobody if it did not move
    ```
 
-3. **Ask for a frame.** Animations advance, what is dirty is rebuilt, what that
-   made dirty is laid out and painted.
+3. **Ask for a frame.** Animations advance, what is dirty is rebuilt, and what
+   that made dirty is laid out and painted.
 
    ```cpp
    const fltr::Scene scene = binding.drawFrame(deltaSeconds);
    ```
 
-4. **Submit what came out.** A flat array of commands, in order.
+4. **Submit what came out.**
 
    ```cpp
    submit(*scene.root);
@@ -63,10 +63,10 @@ its own schedule. Everything happens because your loop asked for it.
 </Steps>
 
 <Aside type="tip" title="A frame that costs nothing">
-`drawFrame` is meant to be called unconditionally rather than guarded, because a
-frame with nothing dirty already does no work in any phase. If you want to skip
-the *submission* too, compare `scene.revision` with last frame's: unchanged means
-nothing anywhere was re-recorded.
+Call `drawFrame` unconditionally rather than guarding it. A frame with nothing
+dirty already does no work in any phase, and guarding risks getting the condition
+wrong. If submission itself is expensive, compare `scene.revision` against last
+frame's: unchanged means nothing anywhere was re-recorded.
 </Aside>
 
 ## Where to go next
@@ -79,12 +79,12 @@ nothing anywhere was re-recorded.
   />
   <LinkCard
     title="Your first frame"
-    description="A complete program that builds a tree, runs the pipeline and prints the display list — with no renderer at all."
+    description="A complete program that builds a tree, runs the pipeline and prints the display list, with no renderer at all."
     href="/fltr/getting-started/first-frame/"
   />
   <LinkCard
     title="Where things live"
-    description="The header map, and the two places the directory layout deliberately breaks its own rule."
+    description="The header map, and the two places the directory layout breaks its own rule."
     href="/fltr/getting-started/where-things-live/"
   />
   <LinkCard

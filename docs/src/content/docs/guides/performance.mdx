@@ -6,8 +6,8 @@ description: The numbers that turn claims into assertions, the three sinks ranke
 import { Aside, Card, CardGrid, Steps } from '@astrojs/starlight/components';
 
 This runs inside a game frame. A steady-state frame should cost effectively
-nothing, and a typical HUD update should touch a handful of nodes. Both of those
-are measurable rather than aspirational.
+nothing, and a typical HUD update should touch a handful of nodes. Both are
+measurable.
 
 ## The instruments
 
@@ -39,15 +39,15 @@ std::snprintf(debug_, sizeof(debug_),
 
 | Sink | What it invalidates | When to reach for it |
 |---|---|---|
-| `observeForPaint` — every `animation` field except `Align`'s | one render object repaints | colour, alpha, transform, scroll offset |
+| `observeForPaint`, which is every `animation` field except `Align`'s | one render object repaints | colour, alpha, transform, scroll offset |
 | `Watch<T>` | one subtree rebuilds, then lays out and paints | the tree's *shape* changes with the value |
-| `observeForLayout` — `Align::animation` | the subtree relayouts every frame | genuinely animating a size or a position that layout owns |
+| `observeForLayout`, which is only `Align::animation` | the subtree relayouts every frame | animating a size or a position that layout owns |
 
 <Aside type="tip" title="Most things you would reach for a rebuild for have a paint path">
-A progress bar is a `Transform` scaling a full-width fill about its left edge — a
-repaint. A switch thumb is a `Transform` translating — a repaint. A hover
-highlight is a `DecoratedBox` with an animated decoration — a repaint. Only text
-genuinely needs a rebuild, because there is no animated text.
+A progress bar is a `Transform` scaling a full-width fill about its left edge, a
+repaint. A switch thumb is a `Transform` translating, a repaint. A hover highlight
+is a `DecoratedBox` with an animated decoration, a repaint. Only text genuinely
+needs a rebuild, because there is no animated text.
 </Aside>
 
 ## Boundaries
@@ -63,14 +63,14 @@ Worth adding around:
 
 - a HUD whose numbers tick while the rest of the screen is still;
 - anything animating continuously next to a large static tree;
-- a scrollable's content — `RenderViewport` is already a boundary for you.
+- a scrollable's content, though `RenderViewport` is already a boundary for you.
 
 Not worth adding around small leaves. Each boundary is a `DisplayList` object and
 one extra command in the parent.
 
-Relayout boundaries are free and you get them by giving a subtree tight
-constraints — a `SizedBox` or a tight `ConstrainedBox` around something whose
-size you already know stops layout invalidation from propagating past it.
+Relayout boundaries are free, and you get them by giving a subtree tight
+constraints. A `SizedBox` or a tight `ConstrainedBox` around something whose size
+you already know stops layout invalidation from propagating past it.
 
 ## Quantise before you push
 
@@ -79,7 +79,7 @@ speed.set(static_cast<int>(std::lround(ship_.speed())));   // not the float
 ```
 
 An `Observable<T>` set to an equal value notifies nobody. The float changes every
-frame; the digits you draw do not. This one line is the difference between
+frame; the digits you draw do not. That one line is the difference between
 rebuilding a readout sixty times a second and rebuilding it when it has something
 new to say.
 
@@ -99,9 +99,9 @@ To keep that true on your side:
     rebuilding a different tree each frame.
   </Card>
   <Card title="Do not" icon="error">
-    Build a `std::string` inside a builder and hand a view of it to `Text` — that
-    is both an allocation and a dangling pointer. Allocate a controller per
-    frame. Reach for `std::function` where a `Callback` fits.
+    Build a `std::string` inside a builder and hand a view of it to `Text`, which
+    is both an allocation and a dangling pointer. Allocate a controller per frame.
+    Reach for `std::function` where a `Callback` fits.
   </Card>
 </CardGrid>
 
@@ -121,9 +121,10 @@ To keep that true on your side:
    An animation in a hidden subtree is still ticking. Wrap it in
    `TickerMode({.enabled = false})`, or let `AnimatedSwitcher` remove it.
 
-4. **Is `layoutPasses` greater than 1?** Laying out a node dirtied an ancestor
-   that had already been visited. This is a real bug and the drain caps it at 32
-   passes rather than freezing — so it shows up as a stale frame, not a hang.
+4. **Is `layoutPasses` greater than 1?** Laying out a node dirtied an ancestor that
+   had already been visited. That is a real bug, and the drain caps it at 32
+   passes rather than freezing, so it shows up as a stale frame rather than a
+   hang.
 
 5. **Is `stats.layouts` large when only a colour changed?** Something is on
    `observeForLayout` that should be on `observeForPaint`. In the shipped
@@ -154,6 +155,6 @@ screen, which is what turned "it seems fine" into a number that fails a build.
 <Aside type="note" title="Where the framework caps rather than asserts">
 The build drain and the layout drain are both capped at 32 passes. In a checked
 build the cap is reported; in a release build it degrades to one stale frame with
-no diagnostic. That is a deliberate choice — a frozen game is worse than a late
-one — and it is why asserting on `layoutPasses` yourself is worth the two lines.
+no diagnostic. A frozen game is worse than a late one, which is why asserting on
+`layoutPasses` yourself is worth the two lines.
 </Aside>

@@ -6,8 +6,8 @@ description: The display list, the repaint-boundary seam, and why there is no ba
 import { Aside, Card, CardGrid } from '@astrojs/starlight/components';
 
 There is no `Canvas`, no `Renderer` abstract base, and nothing to subclass.
-Painting produces a **flat, trivially copyable, contiguous array of commands**,
-and a consumer walks it. That is the entire contract.
+Painting produces a flat, trivially copyable, contiguous array of commands, and a
+consumer walks it.
 
 ```cpp title="paint/display_list.hpp"
 enum class PaintOp : std::uint8_t {
@@ -25,13 +25,13 @@ static_assert(std::is_trivially_destructible_v<PaintCmd>);
 static_assert(std::is_trivially_copyable_v<PaintCmd>);
 ```
 
-Those two `static_assert`s are the design. A list is an array you can `memcpy`,
+Those two `static_assert`s are in the header. A list is an array you can `memcpy`,
 walk without indirection, hand to another thread, or serialise.
 
 ## `DrawList` is where the cost savings live
 
-A repaint boundary owns its own `DisplayList`. Its parent does not inline it —
-the parent records a **reference** to it, with an offset:
+A repaint boundary owns its own `DisplayList`. Its parent does not inline it, but
+records a reference to it with an offset:
 
 ```mermaid
 flowchart TD
@@ -60,7 +60,7 @@ flowchart TD
 ```
 
 Moving a boundary re-records only the parent's (tiny) list. Repainting a
-boundary's *contents* re-records only that boundary's list. Neither touches the
+boundary's contents re-records only that boundary's list. Neither touches the
 other.
 
 ```cpp title="src/render_object.cpp"
@@ -80,8 +80,8 @@ void PaintingContext::paintChild(RenderObject& child, Offset offset) {
 }
 ```
 
-Note that a boundary paints at its own origin. That is what lets the parent
-reposition it with one command instead of re-recording its subtree.
+A boundary paints at its own origin, which is what lets the parent reposition it
+with one command instead of re-recording its subtree.
 
 **Boundaries in the tree today:** `RenderView` (the root, always), any
 `RepaintBoundary` widget you add, and every `RenderViewport`.
@@ -94,12 +94,12 @@ counts re-recordings across the whole pipeline.
 <CardGrid>
   <Card title="Immediate-mode backends" icon="seti:shell">
     raylib, or anything that redraws the framebuffer each frame, walks the list
-    every frame regardless. `Scene::revision` is still useful — combined with
+    every frame regardless. `Scene::revision` is still useful: combined with
     `needsFrame()` it tells you the frame is identical to the last one.
   </Card>
   <Card title="Retained-mode backends" icon="seti:db">
-    Translate a list once into whatever your renderer retains — a command buffer,
-    a vertex batch, a scene node — and key the cache on the pair
+    Translate a list once into whatever your renderer retains (a command buffer,
+    a vertex batch, a scene node) and key the cache on the pair
     `(const DisplayList*, revision())`. A boundary whose revision has not moved
     is byte-for-byte the recording you already translated.
   </Card>
@@ -127,8 +127,8 @@ walkthrough backend drops the corners and says so.
 **`PushOpacity` has no analogue in an immediate-mode renderer.** There is no
 global alpha to set. The backend has to multiply the alpha into every colour it
 emits inside the group, which is correct for non-overlapping content and subtly
-wrong for content that overlaps itself. A backend that wants it exact renders the
-group to a texture and composites once.
+wrong for content that overlaps itself. Rendering the group to a texture and
+compositing once is the exact version.
 </Aside>
 
 ## Resources are yours
@@ -145,7 +145,7 @@ between you and your own registry.
 
 `Color` is straight (non-premultiplied) RGBA8. The framework never blends.
 
-## `Transform2D` is 2D affine, on purpose
+## Why `Transform2D` is 2D affine
 
 Six floats, 24 bytes, `{a, b, c, d, tx, ty}`:
 
@@ -155,10 +155,10 @@ constexpr Offset apply(Offset p) const noexcept {
 }
 ```
 
-**Why not 4×4:** hit testing has to invert the transform *exactly* to map a
-global point into a local one. A 4×4 with perspective inverts only partially, and
-a partially-correct hit test is worse than a restricted transform. Rotation,
-scale, skew and translation are all expressible; perspective is not.
+**Why not 4×4:** hit testing has to invert the transform exactly to map a global
+point into a local one. A 4×4 with perspective inverts only partially, and a
+partially-correct hit test is worse than a restricted transform. Rotation, scale,
+skew and translation are all expressible; perspective is not.
 
 ## What a backend actually looks like
 
@@ -183,7 +183,7 @@ command, and the walkthrough builds a complete raylib one in about 180 lines.
 
 ## No compositing layer tree
 
-There is not one, and adding one would be additive rather than a rewrite:
-`DrawListCmd` is exactly where a compositor would slot in — give it a transform
-and opacity slot and let a compositor own those lists. That is deferred until a
-real backend demonstrates it is needed.
+There is not one, and adding one would be additive rather than a rewrite.
+`DrawListCmd` is where a compositor would slot in: give it a transform and an
+opacity slot and let a compositor own those lists. Deferred until a real backend
+demonstrates it is needed.

@@ -1,6 +1,6 @@
 ---
 title: Three trees
-description: The Widget / Element / RenderObject split — three lifetimes, three ownership rules, and the divergences from Flutter that make it work without a garbage collector.
+description: "The Widget / Element / RenderObject split: three lifetimes, three ownership rules, and the divergences from Flutter that make it work without a garbage collector."
 ---
 
 import { Aside, Card, CardGrid } from '@astrojs/starlight/components';
@@ -12,17 +12,17 @@ answer, and fltr's, is to stop pretending they are the same object.
 
 ```mermaid
 flowchart LR
-  subgraph W["Widget — one build phase"]
+  subgraph W["Widget: one build phase"]
     direction TB
     W1["Row"] --> W2["Text"]
     W1 --> W3["Meter"]
   end
-  subgraph E["Element — until reconciled away"]
+  subgraph E["Element: until reconciled away"]
     direction TB
     E1["RowElement"] --> E2["TextElement"]
     E1 --> E3["MeterElement"]
   end
-  subgraph R["RenderObject — until its element dies"]
+  subgraph R["RenderObject: until its element dies"]
     direction TB
     R1["RenderFlex"] --> R2["RenderParagraph"]
     R1 --> R3["RenderTransform"]
@@ -53,12 +53,12 @@ points downward and only downward; every upward reference is non-owning.
 
 ### Widgets are arena scratch
 
-A build allocates its widgets from a bump allocator and the whole arena is reset
-at the end of the phase — a pointer store and a generation bump. Chunks are
-retained, so the steady state allocates **nothing**.
+A build allocates its widgets from a bump allocator, and the whole arena is reset
+at the end of the phase with a pointer store and a generation bump. Chunks are
+retained, so the steady state allocates nothing.
 
-That is only affordable if resetting is free, which means widgets must be
-trivially destructible. `Arena::create<T>` enforces it:
+That only works if resetting is free, which means widgets must be trivially
+destructible. `Arena::create<T>` enforces it:
 
 ```cpp
 // Rejected at compile time if T has a non-trivial destructor.
@@ -68,15 +68,14 @@ template <class T, class... Args> T* create(Args&&...);
 template <class T, class... Args> T* createOwning(Args&&...);
 ```
 
-The verbosity of `createOwning` is the point: a widget that owns heap memory
-should read as the exception it is.
+`createOwning` is deliberately more verbose, so a widget that owns heap memory
+reads as the exception.
 
 <Aside type="caution" title="What this costs you">
-Anything a widget refers to by pointer — a `ScrollController`, a `FocusNode`, a
-`WidgetStatesController`, a `ValueListenable<T>`, the `string_view` inside a
-`Text` — must outlive the widget, because the widget will not keep it alive.
-This rule recurs everywhere; see [memory and
-lifetimes](/fltr/architecture/memory-and-lifetimes/).
+Anything a widget refers to by pointer must outlive the widget, because the
+widget will not keep it alive. That covers `ScrollController`, `FocusNode`,
+`WidgetStatesController`, `ValueListenable<T>`, and the `string_view` inside a
+`Text`. See [memory and lifetimes](/fltr/architecture/memory-and-lifetimes/).
 </Aside>
 
 ## Divergence: elements adopt their configuration by value
@@ -85,8 +84,9 @@ Flutter's `Element` holds a pointer to a `Widget` that the garbage collector
 keeps alive as long as the element needs it. With an arena that resets every
 build, that pointer would dangle before the next frame.
 
-**Chosen:** each `Element<W>` stores a `W` **by value**. `update()` is one
-assignment — a `memcpy` for the plain-old-data configurations that are the norm.
+**Chosen:** each `Element<W>` stores a `W` by value. `update()` is one
+assignment, and a `memcpy` for the plain-old-data configurations that are the
+norm.
 
 ```cpp title="widgets/framework.hpp"
 void update(WidgetRef widget) final {
@@ -104,27 +104,26 @@ its configuration came from.
 
 ## `WidgetRef`, and why a stale one means "unchanged"
 
-A build hands back a `WidgetRef` — a fat handle carrying the widget pointer, its
+A build hands back a `WidgetRef`: a fat handle carrying the widget pointer, its
 type, its key, and the arena generation it was created in. Type and key are
-carried **by value**, so a ref whose arena has since been reset can still be
-compared for reconciliation without being dereferenced.
+carried by value, so a ref whose arena has since been reset can still be compared
+for reconciliation without being dereferenced.
 
-That is not a micro-optimisation; it is load-bearing. `Element::updateChild`
-reads:
+`Element::updateChild` reads:
 
 ```cpp
 if (!widget.stale()) child->update(widget);
 ```
 
-Re-emitting a stale ref is how a subtree is *retained without being rebuilt* —
-which is exactly what [`AnimatedSwitcher`](/fltr/architecture/overlay/) does to
-keep a subtree alive while it animates away.
+Re-emitting a stale ref retains a subtree without rebuilding it, which is how
+[`AnimatedSwitcher`](/fltr/architecture/overlay/) keeps a subtree alive while it
+animates away.
 
 <Aside type="danger" title="The sharp edge">
-A stale ref reaching `inflate` — being used to build something new rather than to
-match something existing — is a contract violation. With `FLTR_CHECKS=1` it
-traps; with checks off it is undefined behaviour. In practice this only happens
-if you cache a `WidgetRef` across frames, so don't.
+A stale ref reaching `inflate`, meaning it is used to build something new rather
+than to match something existing, is a contract violation. With `FLTR_CHECKS=1`
+it traps; with checks off it is undefined behaviour. In practice this only
+happens if you cache a `WidgetRef` across frames, so don't.
 </Aside>
 
 ## Reconciliation
@@ -136,7 +135,7 @@ old tree meets the new configuration. Two things can match:
 - its **`Key`**.
 
 Both must agree, or the old element is discarded and a new one inflated. That is
-`Widget::canUpdate`, and it is the whole identity model — there is no immediate
+`Widget::canUpdate`, and it is the whole identity model. There is no immediate
 mode ID stack and nothing is hashed per frame.
 
 For lists, `ChildList::update` runs Flutter's algorithm: match a leading
@@ -147,7 +146,7 @@ of the middle. The scratch buffers are members, so reconciling allocates nothing
   <Card title="Keyed children survive reordering" icon="approve-check">
     A keyed element keeps its `State`, its render object, its layout results and
     its animation drivers when it moves. An unkeyed one is matched by position,
-    so moving it means the state stays where the *position* was.
+    so moving it leaves the state where the position was.
   </Card>
   <Card title="String keys must outlive the element" icon="warning">
     `Key::of(const char*)` stores the pointer and a hash of the contents, with a
@@ -183,7 +182,7 @@ struct Slot {
 
 Statically typed, no allocation, and a child cannot be asked for parent data that
 belongs to a different kind of parent. `ParentDataSlot` carries a type tag, so
-putting a `Flexible` inside a `Stack` is *refused* rather than reinterpreting
+putting a `Flexible` inside a `Stack` is refused rather than reinterpreting
 memory.
 
 **What it costs:** a child cannot read its own parent data. Nothing in the

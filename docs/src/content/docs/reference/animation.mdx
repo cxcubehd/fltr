@@ -24,13 +24,13 @@ public:
 
 The frame clock. Time comes from the consumer's game loop, so this holds the
 current frame's elapsed seconds and every active ticker reads it from here. The
-elapsed time is variable by nature — the consumer's loop is not vsync-driven and
-may run at any rate. Negative deltas are a contract violation.
+elapsed time is variable by nature, since the consumer's loop is not vsync-driven
+and may run at any rate. Negative deltas are a contract violation.
 
 It is a `Listenable` rather than a list of tickers, which buys two things: starting
-or stopping a ticker from inside a tick is safe, and **a ticker that is not running
-holds no subscription** — so "an animation in a hidden panel costs nothing" is a
-count anyone can check rather than a claim.
+or stopping a ticker from inside a tick is safe, and a ticker that is not running
+holds no subscription. "An animation in a hidden panel costs nothing" is therefore
+a count anyone can check.
 
 ```cpp
 class Ticker {
@@ -50,8 +50,8 @@ public:
 };
 ```
 
-A ticker is owned by the object that created it — a `State`, through the driver it
-holds — and receives time only while it is **started, unmuted, and attached**.
+A ticker is owned by the object that created it, usually a `State` through the
+driver it holds, and receives time only while it is started, unmuted and attached.
 Anything else and it is not subscribed at all.
 
 Until it has a registry it behaves as muted, so a driver started before its element
@@ -116,7 +116,7 @@ public:
   void setMuted(bool);                    bool muted() const noexcept;
 
   float progress() const noexcept;        // before easing
-  float value() const noexcept;           // after easing — what an interpolation samples
+  float value() const noexcept;           // after easing; what an interpolation samples
   AnimationStatus status() const noexcept;
   bool isAnimating() const noexcept;
   bool ticking() const noexcept;
@@ -132,10 +132,10 @@ public:
 };
 ```
 
-Value and status are notified **independently** — a value listener runs every tick, a
-status listener only at the transitions — so logic that waits for an animation to
-settle or turn around is not woken by every frame of it. `statusChanges()` is that
-separate channel.
+Value and status are notified independently: a value listener runs every tick, a
+status listener only at the transitions. Logic that waits for an animation to
+settle or turn around is therefore not woken by every frame of it.
+`statusChanges()` is that separate channel.
 
 <Aside type="tip" title="duration is the time for the full range">
 A shorter journey takes proportionally less time. Reversing from 0.3 takes 30% of
@@ -186,10 +186,10 @@ public:
 };
 ```
 
-Same interface as `Observable<T>`, different reason for changing — which is the
-whole point of sharing `ValueListenable`. A render object observing this repaints
-itself and nothing else; a `Watch` over it rebuilds a subtree. No
-animation-specific machinery on either path.
+Same interface as `Observable<T>`, different reason for changing, which is the
+point of sharing `ValueListenable`. A render object observing this repaints itself
+and nothing else; a `Watch` over it rebuilds a subtree. No animation-specific
+machinery on either path.
 
 <Aside type="tip" title="retarget re-bases the interval, it does not retarget the driver">
 The new interval begins **where the last one had actually reached**, so the value
@@ -217,7 +217,7 @@ public:
 
 `AnimationDriver` is normalized 0..1 over a duration; a `Simulation` is **unbounded
 in value and ends by tolerance**, so it stands alongside the driver rather than
-replacing it. Nothing here knows what the number means — scrolling reads it as
+replacing it. Nothing here knows what the number means; scrolling reads it as
 pixels.
 
 Every simulation settles asymptotically, so "done" is a tolerance rather than an
@@ -247,7 +247,7 @@ SpringSimulation(SpringDescription spring, float start, float end, float velocit
                  Tolerance settling = {});
 ```
 
-A ratio of one is critically damped — the fastest approach that does not overshoot.
+A ratio of one is critically damped, the fastest approach that does not overshoot.
 Below one overshoots and rings; above one crawls in.
 
 Solved in **closed form rather than integrated**, so a frame of it is a handful of

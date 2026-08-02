@@ -8,7 +8,7 @@ import { Aside, Badge, LinkCard, Steps } from '@astrojs/starlight/components';
 fltr was built in two phases, each planned before it started and each verified
 before the next began. This is where it stands.
 
-## Phase one — the architecture
+## Phase one: the architecture
 
 M1–M8. Prove that Flutter's three-tree split ports to C++23 without a GC, and that
 the invalidation model actually pays for itself.
@@ -24,7 +24,7 @@ the invalidation model actually pays for itself.
 | M7 | Animation | `TickerRegistry`, `AnimationDriver`, `Tween`, `AnimatedValue` |
 | M8 | Implicit animations, render-attached properties | `AnimatedOpacity` and friends; the zero-rebuild path |
 
-## Phase two — usability
+## Phase two: usability
 
 M9–M15. Turn "the architecture is proved" into "you can build a game UI with it".
 
@@ -40,8 +40,8 @@ M9–M15. Turn "the architecture is proved" into "you can build a game UI with i
 
 <Aside type="note" title="M15 was never built, until now">
 `CMakeLists.txt` globs `examples/*.cpp`, and that directory has never existed in
-git history. So until the walkthrough demo, **nothing had driven this framework
-end-to-end against a real renderer** — 376 tests, all headless, none of them a
+git history. So until the walkthrough demo, nothing had driven this framework
+end-to-end against a real renderer: 376 tests, all headless, none of them a
 screen.
 
 That is why the demo exists and why its output is the
@@ -84,19 +84,19 @@ reasoning. In order:
 
 3. **Extend `TextService`** with byte→caret, range rectangles and cluster
    boundaries. Cheap today, a breaking change once anyone has shipped an
-   implementation — and text editing is impossible without it.
+   implementation, and text editing is impossible without it.
 
 4. **A reference `TextService`.** Every consumer currently writes one before they
    can draw a label.
 
-5. **Workstreams H, I and K** — text spans and an ambient `DefaultTextStyle`, the
+5. **Workstreams H, I and K**: text spans and an ambient `DefaultTextStyle`, the
    layout shorthands (`Center`, `Container`, `Spacer`, a grid), and ambient view
    metrics. All three were previously deferred under "add widgets when a screen
    needs them". A screen now needs them.
 
-6. **`LayoutBuilder`** (workstream F). The expensive one — it punches a hole in
-   phase separation. The demo wanted it exactly once, for a slider that could fill
-   its row. Worth doing when a second thing wants it.
+6. **`LayoutBuilder`** (workstream F). The expensive one, since it punches a hole
+   in phase separation. The demo wanted it exactly once, for a slider that could
+   fill its row. Worth doing when a second thing wants it.
 
 </Steps>
 
@@ -120,6 +120,6 @@ reasoning. In order:
 
 <LinkCard
   title="Design notes"
-  description="An index into DESIGN.md by milestone — the reasoning behind each decision."
+  description="An index into DESIGN.md by milestone: the reasoning behind each decision."
   href="/fltr/project/design-notes/"
 />

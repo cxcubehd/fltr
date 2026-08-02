@@ -107,11 +107,12 @@ struct KeyEvent {
 };
 ```
 
-**Physical** is where the key sits on the keyboard, independent of layout — what
-movement binds to, so WASD stays under the same fingers on AZERTY. **Logical** is
-what the key means under the active layout — what a shortcut binds to. They are
-separate enums for the reason Flutter keeps them separate: the same position
-produces different meanings, and the same meaning comes from different positions.
+**Physical** is where the key sits on the keyboard, independent of layout, and is
+what movement binds to so that WASD stays under the same fingers on AZERTY.
+**Logical** is what the key means under the active layout, and is what a shortcut
+binds to. They are separate enums for the reason Flutter keeps them separate: the
+same position produces different meanings, and the same meaning comes from
+different positions.
 
 `character` is the code point this keystroke produces, or zero. Which one that is
 depends on the layout and the IME, both of which live on the consumer's side, so
@@ -145,7 +146,7 @@ public:
 Handlers are offered events in **registration order**; there is no notion here of
 what is focused. The focus system registers itself as one more handler, so a game
 that never builds a focus scope holds no handler here and pays nothing for the
-fact that one exists — `handlerCount() == 0` is that claim, measured.
+fact that one exists. `handlerCount() == 0` is how you check.
 
 The held-key set is worth having on its own: a game reads it directly for movement,
 where an event stream is the wrong shape. `clearPressed()` is what you call when
@@ -184,12 +185,11 @@ Exactly one member wins; every other is told it lost, so it can undo whatever
 provisional feedback it gave.
 
 Members join while the down event travels the hit-test path, so they are ordered
-**deepest-first** — the sweep therefore awards the innermost region under the
-point.
+deepest-first, so the sweep awards the innermost region under the point.
 
-`hold` is for a recognizer whose gesture is not over when the pointer comes up — a
-double tap waiting for the second one — so the sweep cannot award the arena to a
-contender in the meantime.
+`hold` is for a recognizer whose gesture is not over when the pointer comes up,
+such as a double tap waiting for the second one, so the sweep cannot award the
+arena to a contender in the meantime.
 
 `remove` deliberately awards nothing: it is what a recognizer being destroyed
 calls, and firing a game callback out of a destructor is worse than leaving the
@@ -245,9 +245,9 @@ through a recognizer.
 </Aside>
 
 <Aside type="note" title="A signal never enters the arena">
-There is nothing to contest — the pointer is not pressed and no gesture is
-forming — so the innermost scrollable that can still move takes it, and the rest
-see it only if that one declines. This is what a browser does when a
+There is nothing to contest, since the pointer is not pressed and no gesture is
+forming, so the innermost scrollable that can still move takes it and the rest see
+it only if that one declines. This is what a browser does when a
 scrolled-to-the-end list lets the page scroll instead.
 </Aside>
 
@@ -294,7 +294,7 @@ on the same region: a down holding none of them is not offered to the recognizer
 at all.
 
 Deadlines are measured on the gesture clock, so they land on a frame boundary
-rather than at an arbitrary instant — the same bargain the ticker makes.
+rather than at an arbitrary instant, the same bargain the ticker makes.
 
 ### Constants
 
@@ -364,9 +364,9 @@ bool awaitingSecondTap() const noexcept;
 ```
 
 The awkward part is not the second tap, it is the first: when it comes up, the
-arena would sweep and award the pointer to whoever else is contending — a plain
-tap, usually — before this recognizer knows whether a second tap is coming. So it
-**holds** the arena across that gap.
+arena would sweep and award the pointer to whoever else is contending, usually a
+plain tap, before this recognizer knows whether a second tap is coming. So it
+holds the arena across that gap.
 
 That is why a region with both a tap and a double tap fires its single tap one
 timeout late. Flutter has exactly this behaviour, for exactly this reason.
@@ -405,14 +405,14 @@ tap.
 
 | `startBehavior` | Measured from | Wanted by |
 |---|---|---|
-| `Start` | where the slop was cleared — content does not jump | a scroll view |
-| `Down` | where the pointer went down — content keeps up with the finger exactly | dragging an object |
+| `Start` | where the slop was cleared, so content does not jump | a scroll view |
+| `Down` | where the pointer went down, so content keeps up with the finger exactly | dragging an object |
 
 `primaryDelta` is the component along a constrained axis; zero for a pan, which
 has no primary axis to report.
 
 <Aside type="note" title="Divergence: one recognizer with an axis">
-Flutter has three recognizer classes — vertical, horizontal and pan. The arena
+Flutter has three recognizer classes: vertical, horizontal and pan. The arena
 behaviour is identical; what differs is only which distance is compared against
 which slop, and one class is a great deal less to instantiate from a widget that
 has to pick at runtime.
@@ -444,14 +444,14 @@ public:
 ```
 
 A least-squares quadratic fit over a bounded window (20 samples, 0.1 s horizon),
-as Flutter does — rather than the difference between the last two samples, which a
+as Flutter does, rather than the difference between the last two samples, which a
 finger decelerating into a release turns into a fling that does not match what the
 hand did.
 
-`time` is the gesture clock, so several samples may share one value — a game pumps
-its input queue at a frame boundary. **A repeated time replaces the sample** rather
-than adding a second one at the same instant, which would weight that instant
-twice in the fit.
+`time` is the gesture clock, so several samples may share one value when a game
+pumps its input queue at a frame boundary. A repeated time replaces the sample
+rather than adding a second one at the same instant, which would weight that
+instant twice in the fit.
 
 Storage is a ring, so a long drag neither grows nor shifts anything.
 

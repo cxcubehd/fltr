@@ -1,6 +1,6 @@
 ---
 title: widgets
-description: The widget framework — Widget, Element, State, reconciliation — plus the shipped catalogue, the binding, Ambient, Watch, and the implicit-animation layer.
+description: The widget framework (Widget, Element, State, reconciliation) plus the shipped catalogue, the binding, Ambient, Watch, and the implicit-animation layer.
 ---
 
 import { Aside } from '@astrojs/starlight/components';
@@ -56,8 +56,8 @@ public:
 };
 ```
 
-A fat handle carrying **type and key** rather than reading them back through the
-pointer — so a ref that outlived its arena can still be reconciled without being
+A fat handle carrying type and key rather than reading them back through the
+pointer, so a ref that outlived its arena can still be reconciled without being
 dereferenced.
 
 <Aside type="tip" title="A stale ref means &quot;unchanged&quot;">
@@ -66,7 +66,7 @@ re-emits the child ref it stored from an earlier build. The configuration behind
 it cannot have changed since, because the element holding it copied it verbatim,
 so the subtree it names needs no work.
 
-This is also the entire mechanism behind `AnimatedSwitcher`'s exit animations —
+It is also the entire mechanism behind `AnimatedSwitcher`'s exit animations:
 re-emitting a stale ref retains the subtree.
 </Aside>
 
@@ -93,8 +93,8 @@ The braced list at the call site is a temporary, so entries are copied into the
 build arena. **Null refs are dropped**, which makes
 `visible ? Badge::make({...}) : WidgetRef{}` work inline.
 
-`generate` is the same list where the call site cannot spell its length — an
-overlay's entries, a switcher's live subtrees.
+`generate` is the same list where the call site cannot spell its length, such as an
+overlay's entries or a switcher's live subtrees.
 
 ### `Widget`
 
@@ -112,7 +112,7 @@ protected:
 ```
 
 Immutable configuration, alive for one build phase and released wholesale. A
-widget is never deleted and never destroyed polymorphically — hence the protected
+widget is never deleted and never destroyed polymorphically, hence the protected
 non-virtual destructor, which also keeps concrete widgets trivially destructible
 and so arena-safe.
 
@@ -174,8 +174,8 @@ protected:
 };
 ```
 
-`dependOnInherited` is **only valid from a build** — that is what re-registers the
-dependency. A read from anywhere else would be dropped by the next rebuild and
+`dependOnInherited` is only valid from a build, because that is what re-registers
+the dependency. A read from anywhere else would be dropped by the next rebuild and
 silently stop updating.
 
 `detachRenderObject` destroys the subtree's render objects and is called once at
@@ -183,7 +183,7 @@ the top of a subtree being discarded. `unmount` runs *after* it and must therefo
 never touch a render object.
 
 `didMount` runs once the element is linked and its ambient scope resolved, still
-before its first build — so a `State` reaches the tree's services from `initState`
+before its first build, so a `State` reaches the tree's services from `initState`
 rather than having to wait for a build.
 
 ### `ParentDataSlot`
@@ -276,7 +276,7 @@ runtime type, the element that carries it, and the arena-allocating factory that
 call sites use.
 
 The `Self` template parameter defers naming `Derived::Args` until the call, by
-which point the derived widget is complete. It never deduces — a braced
+which point the derived widget is complete. It never deduces, because a braced
 initialiser is a non-deduced context, so the default always wins. That is what
 makes `Padding::make({.padding = ..., .child = ...})` compile.
 
@@ -344,14 +344,14 @@ public:
 };
 ```
 
-It owns the three trees and runs the three phases — build, layout, paint — in that
-order, once per frame. It owns **neither the window nor the clock**: the surface
-size is pushed in, and a frame happens when the consumer asks for one.
+It owns the three trees and runs build, layout and paint in that order, once per
+frame. It owns neither the window nor the clock: the surface size is pushed in,
+and a frame happens when the consumer asks for one.
 
 `attachRoot` runs `buildRoot` inside a `BuildScope` and wraps the result in a
 `View`. It is called exactly once.
 
-The two dispatch `bool`s answer the same question — did the UI take it? — so an
+The two dispatch `bool`s answer the same question, did the UI take it, so an
 unconsumed wheel notch or key belongs to the game.
 
 `needsFrame()` is true if any of: dirty elements, dirty layout or paint, an
@@ -359,9 +359,9 @@ unresolved hover, an active ticker, a pending gesture timeout.
 
 <Aside type="caution" title="Declaration order is teardown order">
 The element tree unmounts before the pipeline detaches, which is before the build
-owner drops the render tree — and a region being dropped withdraws from the
-pointer binding, while a `State` being disposed releases its ticker, so those two
-outlive them all. The `TextService` you pass in must outlive the binding.
+owner drops the render tree. A region being dropped withdraws from the pointer
+binding, and a `State` being disposed releases its ticker, so those two outlive
+them all. The `TextService` you pass in must outlive the binding.
 </Aside>
 
 ---
@@ -477,21 +477,21 @@ Three separate mechanisms share one region:
 - a **gesture** is contested in the arena and only the winner is told;
 - **hover** is resolved by diffing what lies under the cursor and is never
   contested;
-- a **signal** is offered to each region innermost-first until one takes it —
+- a **signal** is offered to each region innermost-first until one takes it, and
   returning `true` from `onSignal` consumes it.
 
 Only the recognizers a call site actually asks for are created, so a region that
 just reports hover holds none.
 
-`onTapDown` fires when this region **wins** the pointer, which is when press
-feedback is correct to show — not necessarily the instant the pointer went down.
-Adding `onDoubleTap` delays a single tap by the double-tap timeout, because until
-it elapses the first tap may still turn out to be the first half of one.
+`onTapDown` fires when this region wins the pointer, which is when press feedback
+is correct to show rather than the instant the pointer went down. Adding
+`onDoubleTap` delays a single tap by the double-tap timeout, because until it
+elapses the first tap may still turn out to be the first half of one.
 
 <Aside type="caution" title="Callback captures must outlive the widget">
 A callback is copied into the region and invoked from `dispatchPointer` or, for
 enter and exit, from the start of a frame. Anything it captures by reference must
-outlive the widget. `Callback` also has a 32-byte inline budget — see
+outlive the widget. `Callback` also has a 32-byte inline budget; see
 [core](/fltr/reference/core/).
 </Aside>
 
@@ -540,16 +540,17 @@ public:
 };
 ```
 
-Ambient data for a subtree — a theme, a layout scale — read with `of` in **O(1)**
-rather than by walking ancestors. Changing it rebuilds exactly the elements whose
-last build read it; a widget between the value and its readers is not disturbed.
+Ambient data for a subtree, such as a theme or a layout scale, read with `of` in
+O(1) rather than by walking ancestors. Changing it rebuilds exactly the elements
+whose last build read it; a widget between the value and its readers is not
+disturbed.
 
 `T` is copied into the build arena, so it must be trivially destructible, and it
-`static_assert`s on `std::equality_comparable` — an unchanged ambient value
+`static_assert`s on `std::equality_comparable`, since an unchanged ambient value
 notifies nobody.
 
-`of` asserts that an `Ambient<T>` exists above. `TickerMode::of` is the deliberate
-exception that returns a default instead.
+`of` asserts that an `Ambient<T>` exists above. `TickerMode::of` is the one
+exception, returning a default instead.
 
 ```cpp
 template <class T>
@@ -568,7 +569,7 @@ Watch<int>::make({
 ```
 
 Rebuilds its own subtree, and nothing else, when the value changes. A push of an
-equal value never reaches it at all. It does not care *why* the value moved — a
+equal value never reaches it at all. It does not care why the value moved: a
 game-pushed `Observable<T>` and an `AnimatedValue<T>` are the same thing to it.
 
 Use it when the **structure** of the subtree changes with the value; when only the
@@ -594,9 +595,8 @@ public:
 A **snapshot rather than a path to walk**. An element that introduces a value
 copies its parent's entries and adds its own; every other element points at its
 parent's scope. A scope holds no link to the one it was extended from, so a lookup
-structurally *cannot* become an ancestor walk — it is one hash probe whatever the
-depth. The table is open-addressed, power-of-two sized and never more than half
-full.
+cannot become an ancestor walk. It is one hash probe whatever the depth, and the
+table is open-addressed, power-of-two sized and never more than half full.
 
 `InheritedElement::adopt` notifies readers **before** the subtree below is
 reconciled, so a reader deeper down is built by the same frame even when the
@@ -621,8 +621,8 @@ public:
 
 Mutes every ticker in its subtree. A panel that is hidden rather than removed keeps
 its state and its subscriptions but costs no time at all, and resumes exactly
-where it stopped — tickers carry a per-frame delta, so a muted one has no elapsed
-time to reconcile when it comes back.
+where it stopped, because tickers carry a per-frame delta and a muted one has no
+elapsed time to reconcile when it comes back.
 
 A tree with no `TickerMode` in it pays nothing for the mechanism.
 
@@ -651,9 +651,9 @@ AnimatedOpacity::make({
 })
 ```
 
-A configuration change **re-targets the interpolation from the value on screen**
-and runs the driver from zero, so an interruption is continuous and repeated
-interruption accumulates no error — every new interval begins where the last one
+A configuration change re-targets the interpolation from the value on screen and
+runs the driver from zero, so an interruption is continuous and repeated
+interruption accumulates no error: every new interval begins where the last one
 had actually reached.
 
 Only the configuration change rebuilds. Each tick after it invalidates exactly one
@@ -696,8 +696,8 @@ transition receives the subtree and how present it is: **0 gone, 1 fully there**
 
 The outgoing subtree is *retained*: it stays mounted, keeps its `State` and its
 render objects, keeps ticking, and is discarded only once its animation has
-finished. That needed no change to reconciliation — a widget ref outlives the
-arena that made it, and re-emitting a stale one already means "this subtree is
+finished. That needed no change to reconciliation, because a widget ref outlives
+the arena that made it and re-emitting a stale one already means "this subtree is
 unchanged, skip it".
 
 Two children are the **same child** when their type and key match, the same rule
@@ -708,8 +708,8 @@ A subtree on its way out is inert: it takes no pointer input and nothing in it c
 hold the focus, so a control cannot be pressed or tabbed into while it disappears.
 Both guards are always present and only their flag moves.
 
-**Null is a child too** — it animates whatever is there out and leaves nothing,
-which is how a panel is dismissed.
+Null is a child too: it animates whatever is there out and leaves nothing, which
+is how a panel is dismissed.
 
 ```cpp
 AnimatedSwitcherState::liveCount()   // the shown subtree plus every one still leaving

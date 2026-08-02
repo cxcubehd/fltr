@@ -5,9 +5,9 @@ description: One walk instead of four layers, build-order traversal, directional
 
 import { Aside, Steps } from '@astrojs/starlight/components';
 
-The focus subsystem is **ambient**. A tree with no `FocusScope` above it holds no
-focus nodes, no key handlers and no subscriptions — `KeyboardBinding::handlerCount()`
-is literally zero. That is not an optimisation; it is what makes pointer-only a
+The focus subsystem is ambient. A tree with no `FocusScope` above it holds no
+focus nodes, no key handlers and no subscriptions, and
+`KeyboardBinding::handlerCount()` is zero. That is what makes pointer-only a
 configuration rather than a phase the design passed through.
 
 ```mermaid
@@ -19,7 +19,7 @@ flowchart TD
   N2 -->|"not handled"| N3["Shortcuts node<br/>match a KeyStroke?"]
   N3 -->|"not handled"| SC["scope root"]
   SC -->|"still not handled"| TR["traversal:<br/>Tab / arrows"]
-  TR -->|"nothing moved"| GAME["returns false —<br/>the key is the game's"]
+  TR -->|"nothing moved"| GAME["returns false:<br/>the key is the game's"]
 
   classDef route fill:none,stroke:#c084fc,stroke-width:1.6px
   classDef fall fill:none,stroke:#fbbf24,stroke-width:1.6px
@@ -31,8 +31,8 @@ flowchart TD
 
 Flutter routes a key through `HardwareKeyboard`, then the focus chain, then
 `Shortcuts`, then `Actions`, with an `Intent` object in between. fltr offers the
-event to every node from the focused node up to the root, and **traversal is what
-is left when nobody took it**.
+event to every node from the focused node up to the root, and traversal is what
+is left when nobody took it.
 
 **What it costs:** a shortcut is bound to its callback where it is declared, so an
 ancestor cannot re-target what a descendant means by "activate". If you need
@@ -41,19 +41,19 @@ re-bindable actions, you build that indirection yourself.
 ## Divergence: tab order is build order
 
 Flutter's default policy sorts nodes geometrically into reading order. fltr uses
-Flutter's *other* policy — `WidgetOrderTraversalPolicy` — because it needs no
+Flutter's other policy, `WidgetOrderTraversalPolicy`, because it needs no
 rectangles and works before the first layout has run.
 
-Directional traversal, which is what a D-pad or a stick produces, **does** use
+Directional traversal, which is what a D-pad or a stick produces, does use
 rectangles:
 
 <Steps>
 
 1. Take the focused node's rectangle in root space, via `getTransformTo`.
 2. Find candidates whose centre lies beyond it in the requested direction.
-3. **Prefer one whose extent overlaps on the other axis** — the "band". Moving
-   right along a row of buttons should not jump to something diagonally below
-   just because it happens to be nearer.
+3. Prefer one whose extent overlaps on the other axis. Moving right along a row of
+   buttons should not jump to something diagonally below just because it happens
+   to be nearer.
 4. Among those, take the nearest.
 
 </Steps>
@@ -83,9 +83,9 @@ class FocusScopeNode final : public FocusNode {
 
 <Aside type="note" title="Divergence: the scope is the traversal group">
 Flutter separates `FocusScope` from `FocusTraversalGroup`. Here they are one
-object. **What it costs:** you cannot have a traversal group that is not also a
-focus scope, so "these five buttons wrap around among themselves but share the
-enclosing scope's focus memory" is not expressible.
+object. **What it costs:** a traversal group that is not also a focus scope is not
+expressible, so "these five buttons wrap around among themselves but share the
+enclosing scope's focus memory" cannot be written.
 </Aside>
 
 ## Widgets
@@ -97,7 +97,7 @@ enclosing scope's focus memory" is not expressible.
 | `FocusMarker` | The ambient value that publishes the current node downwards; `FocusMarker::of(context)` is null when there is no focus tree. |
 | `Shortcuts` | A focus node that never takes focus, so keys reach it on the way up. Holds a `ShortcutList` of `KeyStroke` → `Callback<void()>`. |
 
-A `KeyStroke` matches **exactly**: Ctrl-S is not Ctrl-Shift-S, the same rule
+A `KeyStroke` matches exactly: Ctrl-S is not Ctrl-Shift-S, the same rule
 Flutter's `SingleActivator` follows.
 
 ```cpp
@@ -111,16 +111,16 @@ Shortcuts::make({
 ```
 
 The braced list is a temporary, so entries are copied into the build arena and
-then copied again into the `State` when the configuration is adopted — because a
-key arrives long after that arena was released.
+then copied again into the `State` when the configuration is adopted. A key
+arrives long after that arena was released.
 
 ## Physical versus logical keys
 
 ```cpp
 struct KeyEvent {
   KeyEventType type;      // Down | Up | Repeat
-  PhysicalKey physical;   // where it is on the keyboard — WASD stays under the same fingers
-  LogicalKey logical;     // what it means under the active layout — what a shortcut binds to
+  PhysicalKey physical;   // where it is on the keyboard: WASD stays under the same fingers
+  LogicalKey logical;     // what it means under the active layout: what a shortcut binds to
   KeyModifiers modifiers;
   char32_t character = 0; // reported by you, never derived
 };
@@ -132,9 +132,9 @@ reported rather than derived, because layout and IME both live on your side.
 ## Two objects that know each other
 
 A `FocusNode` may be owned by the `State` that created it, or supplied by the
-consumer. `OwnedFocusNode` handles both, and uses a `Subscription` as a
-**liveness token**: if a consumer destroys a node while a component still names
-it, the component reads it as *gone* rather than dangling.
+consumer. `OwnedFocusNode` handles both, and uses a `Subscription` as a liveness
+token: if a consumer destroys a node while a component still names it, the
+component reads it as gone rather than dangling.
 
 ```cpp
 // Null once a consumer-supplied node has been destroyed.
@@ -142,16 +142,15 @@ Node* get() const noexcept;
 ```
 
 The same pattern appears for `WidgetStatesController`, `ScrollController` and
-`AnchorLink`. It is the closest thing fltr has to a weak pointer, and it costs
-two pointer stores.
+`AnchorLink`. It is the closest thing fltr has to a weak pointer, and it costs two
+pointer stores.
 
 ## Components get keyboard activation for free
 
-Focus landed **before** the component layer, deliberately. That is why every
-`RawButton`, `RawToggle` and `RawSlider` has keyboard activation, a focus state
-in its published `WidgetStates`, and gamepad navigation designed in rather than
-retrofitted — and why turning all of it off is one flag rather than a different
-widget:
+Focus landed before the component layer, which is why every `RawButton`,
+`RawToggle` and `RawSlider` has keyboard activation, a focus state in its
+published `WidgetStates`, and gamepad navigation designed in rather than
+retrofitted. Turning all of it off is one flag rather than a different widget:
 
 ```cpp
 RawButton::make({
