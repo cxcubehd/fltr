@@ -1,0 +1,113 @@
+---
+title: Install
+description: Adding fltr to a CMake project, the compiler baseline, and the build option that changes what your headers mean.
+---
+
+import { Aside, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
+
+## Requirements
+
+| | |
+|---|---|
+| Language | C++23, no compiler extensions |
+| Compilers | Clang 17+ or GCC 13+ |
+| CMake | 3.24 or newer |
+| Dependencies | **None.** Every include in `include/` and `src/` is either a standard header or another fltr header. |
+
+C++26 features are feature-detected (`__cpp_explicit_this_parameter`,
+`__cpp_reflection`, `__cpp_contracts`) and every one of them has a working C++23
+fallback. Nothing requires a newer toolchain than the baseline.
+
+## With FetchContent
+
+```cmake title="CMakeLists.txt"
+include(FetchContent)
+
+# Turn these off before making fltr available: they default to ON, and they are
+# plain option()s rather than prefixed dependent ones, so a consumer that leaves
+# them alone builds fltr's whole test suite as a side effect.
+set(FLTR_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(FLTR_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+
+FetchContent_Declare(
+  fltr
+  GIT_REPOSITORY https://github.com/cxcubehd/fltr.git
+  GIT_TAG main
+  GIT_SHALLOW TRUE
+)
+FetchContent_MakeAvailable(fltr)
+
+target_link_libraries(my_game PRIVATE fltr)
+```
+
+<Aside type="caution" title="There is no namespaced alias">
+fltr exports `fltr`, not `fltr::fltr`, and ships no `install()` rules, no
+`export()` set and no package config. `FetchContent` and `add_subdirectory` work;
+`find_package(fltr)` does not. This is on the
+[gaps list](/fltr/project/gaps-and-rework/) rather than being a design decision.
+</Aside>
+
+## Build options
+
+| Option | Default | What it does |
+|---|---|---|
+| `FLTR_ENABLE_CHECKS` | `ON` | Defines `FLTR_CHECKS=1` **PUBLIC**, turning on `FLTR_EXPECTS` / `FLTR_ENSURES` / `FLTR_ASSERT` |
+| `FLTR_BUILD_TESTS` | `ON` | Builds `fltr_tests` and registers it with CTest |
+| `FLTR_BUILD_EXAMPLES` | `ON` | Globs `examples/*.cpp` (no-op when the directory is absent) |
+
+<Aside type="danger" title="FLTR_CHECKS is part of your ABI">
+`FLTR_CHECKS` is defined `PUBLIC` and is read by inline functions in the public
+headers, so a library built with checks on and a consumer compiled with them off
+do not agree on what those functions do. Match the setting across your whole
+build, or you will get behaviour that depends on which translation unit inlined
+what.
+</Aside>
+
+### What a contract violation does
+
+By default it throws `fltr::ContractViolation`, which is what lets the test suite
+assert that an invariant actually trips. A shipping game should not rely on that:
+
+<Tabs>
+  <TabItem label="Install a handler">
+```cpp
+fltr::detail::setViolationHandler(
+    [](const char* expr, const char* msg, const char* file, int line) {
+      logFatal("fltr contract: %s (%s) at %s:%d", msg, expr, file, line);
+      std::abort();
+    });
+```
+  </TabItem>
+  <TabItem label="Compile them out">
+```cmake
+set(FLTR_ENABLE_CHECKS OFF CACHE BOOL "" FORCE)
+```
+With checks off, `FLTR_EXPECTS` compiles to nothing — including the ones that
+currently *catch* undefined behaviour, such as a stale `WidgetRef` reaching
+`inflate`. Ship with them off only once you are confident, and keep them on in
+every test and development build.
+  </TabItem>
+</Tabs>
+
+## Verifying the checkout
+
+<Steps>
+
+1. Configure and build with the tests on.
+
+   ```bash
+   cmake -S . -B build -G Ninja
+   cmake --build build
+   ```
+
+2. Run them.
+
+   ```bash
+   ctest --test-dir build --output-on-failure
+   ```
+
+   The suite is entirely headless: it drives the real pipeline and asserts
+   against textual dumps of the trees and command lists, so it needs no display,
+   no GPU and no font.
+
+</Steps>

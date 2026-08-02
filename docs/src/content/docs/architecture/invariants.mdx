@@ -1,0 +1,145 @@
+---
+title: Invariants and sharp edges
+description: The four things that cannot move, and the handful of behaviours that will surprise you exactly once.
+---
+
+import { Aside, Card, CardGrid } from '@astrojs/starlight/components';
+
+## The four invariants
+
+These are the reasons for choosing this architecture at all. Nothing below is
+negotiable without a redesign, and if a change seems to simplify one of them
+away, the change is wrong.
+
+<CardGrid>
+  <Card title="1 · Immutable config, persistent element, render object" icon="seti:cpp">
+    Declarative authoring stays compatible with incremental update because the
+    thing you write is not the thing that persists and not the thing that lays
+    out and paints.
+  </Card>
+  <Card title="2 · Constraints down, sizes up, single pass" icon="puzzle">
+    A parent hands a child `BoxConstraints`; the child returns a `Size`. A child
+    cannot see its parent's size. This is what makes layout linear rather than
+    iterative.
+  </Card>
+  <Card title="3 · Relayout and repaint boundaries" icon="approve-check">
+    Update cost is proportional to the dirty set, not the tree. Layout
+    invalidation and paint invalidation are **separate paths with separate dirty
+    lists**.
+  </Card>
+  <Card title="4 · The gesture arena" icon="rocket">
+    Overlapping interactive regions resolve deterministically, and a recognizer
+    keeps receiving events after the pointer leaves the region it started in.
+  </Card>
+</CardGrid>
+
+Three more rules are enforced everywhere and worth stating alongside them:
+
+- **Widget configs stay trivially destructible and arena-allocated.** A
+  controller is consumer-owned and referred to by pointer — never owned by a
+  widget.
+- **Steady state allocates nothing.** A frame of fling, a frame of wheel easing
+  and a frame of hover animation each allocate zero bytes.
+- **No shared ownership in the tree.** `unique_ptr` down, raw up, and a
+  `Subscription` where a weak reference is genuinely needed.
+
+---
+
+## Sharp edges
+
+Each of these is deliberate and documented. Each will surprise you exactly once.
+
+<Aside type="danger" title="A stale WidgetRef reaching inflate is undefined behaviour">
+With `FLTR_CHECKS=1` it traps with a readable message. With checks off it reads
+freed arena memory.
+
+**When it happens:** caching a `WidgetRef` across frames, or giving two
+simultaneously-live `AnimatedSwitcher` presences the same key.
+
+**What to do:** never store a `WidgetRef` in anything that outlives the build,
+and key switcher children by what the page *is*.
+</Aside>
+
+<Aside type="caution" title="Non-convergence degrades to a stale frame, silently">
+Build and layout drains are capped at 32 passes. Two nodes that dirty each other
+therefore produce one stale frame rather than a freeze — and in a release build,
+no diagnostic at all.
+
+**What to do:** assert `PipelineOwner::stats().layoutPasses <= 1` in a smoke test.
+A healthy frame is 0 or 1.
+</Aside>
+
+<Aside type="caution" title="globalToLocal on a degenerate transform returns the origin">
+A non-invertible transform — anything scaled to zero on an axis — makes the
+mapping impossible, and `globalToLocal` reports `Offset::zero()` rather than
+failing. It is a deliberate "report the origin rather than a wrong point", and it
+is silent.
+
+**When it happens:** hit testing inside something animating a scale through zero.
+</Aside>
+
+<Aside type="caution" title="String keys and Text views must outlive the element">
+`Key::of(const char*)` stores the pointer plus an FNV-1a hash of the contents,
+with a `strcmp` fallback on collision. `Text::Args::text` is a `string_view` that
+is not copied.
+
+Both must point at storage that outlives the build. Literals are the intended
+case; a `std::string` local to a builder is not.
+</Aside>
+
+<Aside type="caution" title="IgnorePointer and AbsorbPointer do not invalidate on change">
+Changing `ignoring` or `absorbing` marks nothing dirty. This is *correct* — hit
+tests are resolved fresh on every event, so the new value is already in effect —
+but it looks like a missing `markNeedsPaint` until you know why.
+</Aside>
+
+<Aside type="caution" title="A disabled component absorbs the pointer">
+A disabled `RawButton` still swallows the click. It does not leak through to
+whatever is drawn behind it, which is almost always what you want for a modal or
+an overlaid panel.
+
+**To want the other thing,** wrap it in `IgnorePointer` yourself.
+</Aside>
+
+<Aside type="note" title="Press feedback follows the arena, not the finger">
+`onTapDown` fires when the recognizer **wins the arena**, not when the pointer
+goes down. Inside a scrollable, that means press feedback appears a moment later
+— after the gesture has proven it is not a scroll. That is the correct behaviour
+and it looks like latency until you know what it is.
+</Aside>
+
+<Aside type="note" title="An anchored overlay entry follows a repaint, not a movement">
+Scrolling moves an anchor without laying it out, so an anchored entry will not
+notice. Call `AnchorLink::markMoved()`.
+</Aside>
+
+<Aside type="caution" title="A drag inside a rotated subtree cannot map its delta">
+`HitTestResult` records resolved local positions rather than transforms, so there
+is nothing to invert afterwards. Translation and scale are fine; rotation is the
+case that breaks, and it is an accepted limitation rather than a bug.
+</Aside>
+
+<Aside type="danger" title="FLTR_CHECKS is part of your ABI">
+It is defined `PUBLIC` and read by inline functions in the public headers. A
+library built with checks on and a consumer compiled with them off do not agree
+on what those functions do. Match the setting across your whole build.
+</Aside>
+
+---
+
+## What is deliberately absent
+
+Not gaps — decisions, each with a stated cost.
+
+| Not built | Why, and what it costs |
+|---|---|
+| Notification bubbling | Ambient scope covers every current consumer. Cost: an *ancestor* cannot passively observe a descendant scrolling. |
+| A compositing layer tree | Display lists with boundaries already give scrolling a cheap path. `DrawListCmd` is where one would slot in, additively. |
+| The full sliver protocol | Would force `Constraints` to become polymorphic. Cost: no lazy children, no pinned or floating headers. |
+| Navigation, routes, a screen stack | A game engine already has one. The walkthrough hand-rolls a router in about forty lines. |
+| Semantics and accessibility | Out of scope — but the component layer is exactly where it would attach, so building components did not close that door. |
+| An inspector or hot reload | Extend the harness dump instead. |
+| Internationalisation and bidi | The `TextService` boundary was designed to permit it; nothing above it assumes otherwise. |
+
+The things that are genuine gaps rather than decisions are collected separately,
+in [gaps and rework](/fltr/project/gaps-and-rework/).
