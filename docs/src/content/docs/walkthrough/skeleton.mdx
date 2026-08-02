@@ -1,0 +1,269 @@
+---
+title: 1 — Skeleton
+description: FetchContent for fltr and raylib, the two options a consumer has to turn off, and a window that opens.
+---
+
+import { Aside, LinkCard, Steps } from '@astrojs/starlight/components';
+
+Two dependencies, one executable, and a window. Nothing here touches fltr's API
+yet — this step exists because the *build* is where the first real gap shows up.
+
+## `CMakeLists.txt`
+
+```cmake title="docs/demo/CMakeLists.txt"
+cmake_minimum_required(VERSION 3.24)
+project(fltr_demo LANGUAGES CXX VERSION 0.1.0)
+
+set(CMAKE_CXX_STANDARD 23)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+  set(CMAKE_BUILD_TYPE RelWithDebInfo CACHE STRING "" FORCE)
+endif()
+
+include(FetchContent)
+
+# fltr defaults FLTR_BUILD_TESTS and FLTR_BUILD_EXAMPLES to ON, and they are
+# plain option()s rather than prefixed, dependent ones -- so a consumer that
+# does not turn them off here builds fltr's whole test suite as a side effect of
+# depending on it. See the "Gaps and rework" page.
+set(FLTR_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(FLTR_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+
+# Configure with -DFETCHCONTENT_SOURCE_DIR_FLTR=/path/to/fltr to build against a
+# checkout instead of the tag -- which is what this repository's own CI does,
+# since the demo lives inside it.
+FetchContent_Declare(
+  fltr
+  GIT_REPOSITORY https://github.com/cxcubehd/fltr.git
+  GIT_TAG main
+  GIT_SHALLOW TRUE
+)
+
+FetchContent_Declare(
+  raylib
+  GIT_REPOSITORY https://github.com/raysan5/raylib.git
+  GIT_TAG 5.5
+  GIT_SHALLOW TRUE
+)
+
+set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+set(CUSTOMIZE_BUILD ON CACHE BOOL "" FORCE)
+set(SUPPORT_MODULE_RAUDIO OFF CACHE BOOL "" FORCE)
+
+FetchContent_MakeAvailable(fltr raylib)
+
+add_executable(demo src/main.cc)
+
+target_include_directories(demo PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+
+# fltr exports no namespaced alias, so this is the bare target name.
+target_link_libraries(demo PRIVATE fltr raylib)
+
+target_compile_definitions(demo PRIVATE
+  DEMO_ASSET_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets"
+)
+
+target_compile_options(demo PRIVATE -Wall -Wextra -Wpedantic -Wno-missing-field-initializers)
+```
+
+<Aside type="caution" title="Two things a consumer has to know without being told">
+`set(FLTR_BUILD_TESTS OFF)` before `FetchContent_MakeAvailable` is **not
+optional**. Without it, depending on fltr builds its 376-test suite as a side
+effect. The options are plain unprefixed `option()`s, so nothing warns you.
+
+And the link line is `fltr`, not `fltr::fltr` — the project defines no `ALIAS`
+target, no `install()` and no package config, so `find_package` is not an option
+either. Both are on the [gaps list](/fltr/project/gaps-and-rework/).
+</Aside>
+
+`-Wno-missing-field-initializers` is worth explaining: every fltr widget is
+configured with a designated-initialiser `Args` struct, and you almost never set
+every field. That warning would fire on essentially every call site.
+
+## `src/main.cc`
+
+The entry point does argument parsing and nothing else. The four flags are what
+make the demo verifiable later.
+
+```cpp title="docs/demo/src/main.cc"
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+
+#include "app/app.hh"
+
+namespace {
+
+void usage() {
+  std::printf(
+      "drift -- the fltr walkthrough demo\n"
+      "\n"
+      "  --smoke [frames]  run a scripted sequence, assert, and exit\n"
+      "  --dump            print the last frame's display list\n"
+      "  --shot PATH       write a PNG of the last frame\n"
+      "  --size W H        window size (default 1280 720)\n");
+}
+
+}  // namespace
+
+int main(int argc, char** argv) {
+  demo::Options options;
+
+  for (int i = 1; i < argc; ++i) {
+    const char* arg = argv[i];
+    if (std::strcmp(arg, "--smoke") == 0) {
+      options.smoke = true;
+      if (i + 1 < argc && argv[i + 1][0] != '-') options.smokeFrames = std::atoi(argv[++i]);
+    } else if (std::strcmp(arg, "--dump") == 0) {
+      options.dump = true;
+    } else if (std::strcmp(arg, "--shot") == 0 && i + 1 < argc) {
+      options.shot = argv[++i];
+    } else if (std::strcmp(arg, "--size") == 0 && i + 2 < argc) {
+      options.width = std::atoi(argv[++i]);
+      options.height = std::atoi(argv[++i]);
+    } else {
+      usage();
+      return arg[0] == '-' ? 2 : 0;
+    }
+  }
+
+  demo::App app(options);
+  return app.run();
+}
+```
+
+## The window
+
+fltr owns no window, so this is entirely yours. `GraphicsSettings` is the settings
+screen's model, defined here because the window is what enforces it.
+
+```cpp title="docs/demo/src/platform/window.hh"
+#pragma once
+
+#include "fltr/core/geometry.hpp"
+#include "fltr/gestures/events.hpp"
+
+namespace demo {
+
+/// Everything the settings screen can change. Equality-comparable so the app can
+/// apply it only when it actually moved -- raylib's window calls are not free.
+struct GraphicsSettings {
+  bool fullscreen = false;
+  bool vsync = true;
+  /// 0 means uncapped. The slider offers a handful of stops rather than a
+  /// continuous range, which is what `RawSlider`'s `divisions` is for.
+  int maxFps = 144;
+
+  friend constexpr bool operator==(const GraphicsSettings&,
+                                   const GraphicsSettings&) noexcept = default;
+};
+
+/// The window, and the only thing in the demo that owns one. fltr never does:
+/// the surface size is pushed in, and the cursor is read out once a frame.
+class Window {
+public:
+  void open(int width, int height, const char* title, const GraphicsSettings& settings);
+  void close();
+
+  bool shouldClose() const;
+  fltr::Size surface() const;
+
+  /// Applies whatever differs from what is already applied.
+  void apply(const GraphicsSettings& settings);
+  const GraphicsSettings& settings() const noexcept { return settings_; }
+
+  void applyCursor(fltr::MouseCursor cursor);
+
+private:
+  GraphicsSettings settings_;
+  fltr::MouseCursor cursor_ = fltr::MouseCursor::Basic;
+  bool open_ = false;
+};
+
+}  // namespace demo
+```
+
+```cpp title="docs/demo/src/platform/window.cc"
+void Window::open(int width, int height, const char* title, const GraphicsSettings& settings) {
+  unsigned int flags = FLAG_WINDOW_RESIZABLE | FLAG_MSAA_4X_HINT;
+  if (settings.vsync) flags |= FLAG_VSYNC_HINT;
+  SetConfigFlags(flags);
+  SetTraceLogLevel(LOG_WARNING);
+  InitWindow(width, height, title);
+  open_ = true;
+
+  settings_ = GraphicsSettings{.fullscreen = false, .vsync = settings.vsync, .maxFps = -1};
+  apply(settings);
+}
+
+fltr::Size Window::surface() const {
+  if (!open_) return {};
+  return {static_cast<float>(GetScreenWidth()), static_cast<float>(GetScreenHeight())};
+}
+```
+
+Opening with `maxFps = -1` and immediately calling `apply` means the real
+`SetTargetFPS` goes through the one code path that will also serve the settings
+screen. There is no second way to change the frame cap.
+
+We come back to `apply` and `applyCursor` in
+[step 10](/fltr/walkthrough/settings/).
+
+## The clock
+
+```cpp title="docs/demo/src/app/clock.hh"
+#pragma once
+
+namespace demo {
+
+/// Where the frame's elapsed time comes from.
+///
+/// fltr owns no clock: `drawFrame(seconds)` takes a delta the consumer
+/// measured. That is also what makes the smoke test possible -- a fixed step
+/// here drives animations deterministically, with no real time involved.
+class Clock {
+public:
+  explicit Clock(float fixedStep = 0.0f) noexcept : fixedStep_(fixedStep) {}
+
+  /// Seconds since the previous call, clamped so a breakpoint or a stalled
+  /// frame does not teleport the ship across the field.
+  float advance();
+
+  float elapsed() const noexcept { return elapsed_; }
+
+private:
+  float fixedStep_ = 0.0f;
+  float elapsed_ = 0.0f;
+};
+
+}  // namespace demo
+```
+
+```cpp title="docs/demo/src/app/clock.cc"
+float Clock::advance() {
+  const float dt = fixedStep_ > 0.0f ? fixedStep_ : GetFrameTime();
+  const float clamped = std::clamp(dt, 0.0f, 0.1f);
+  elapsed_ += clamped;
+  return clamped;
+}
+```
+
+Twenty lines, and one of them is the reason the smoke test in
+[step 14](/fltr/walkthrough/verify/) can assert on animation state at all: with
+`fixedStep_` set, every run of the demo produces the identical sequence of frames.
+
+<Aside type="tip" title="What this step proved">
+The build works, and it cost two `set()` calls and a bare target name that a
+consumer has no way to discover. That is the first finding, and it happened before
+a single line of UI code.
+</Aside>
+
+<LinkCard
+  title="Next: the loop"
+  description="Seven named steps, and why the ordering between them is load-bearing."
+  href="/fltr/walkthrough/the-loop/"
+/>

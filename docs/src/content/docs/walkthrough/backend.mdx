@@ -1,0 +1,374 @@
+---
+title: 3 — The backend
+description: Translating a DisplayList into raylib calls — three state stacks, one scissor, and the command that promises more than raylib can deliver.
+---
+
+import { Aside, LinkCard, Steps } from '@astrojs/starlight/components';
+
+There is **no backend interface to implement**. Painting produces an ordered,
+trivially-copyable command array; a consumer walks it. That is the entire
+contract, so what follows is a switch statement and some stacks. Nothing is
+registered, subclassed, or handed back to the framework.
+
+## `platform/backend.hh`
+
+```cpp title="docs/demo/src/platform/backend.hh"
+#pragma once
+
+#include <vector>
+
+#include "fltr/paint/display_list.hpp"
+#include "platform/text.hh"
+#include "raylib.h"
+
+namespace demo {
+
+/// Translates a recorded `DisplayList` into raylib calls.
+class Backend {
+public:
+  explicit Backend(RaylibTextService& text) noexcept : text_(text) {}
+
+  /// One frame. Safe to call with a scene whose root is null.
+  void submit(const fltr::Scene& scene);
+
+  /// GPU resources are consumer-owned; the framework only ever sees the handle.
+  fltr::ImageHandle registerTexture(Texture2D texture);
+
+  /// Commands translated during the last `submit`, for the debug readout.
+  std::size_t lastCommandCount() const noexcept { return commands_; }
+
+private:
+  /// Which stack a `Pop` unwinds. The display list guarantees pushes and pops
+  /// nest, but not that they alternate, so the only way to close the right group
+  /// is to remember the order they were opened in.
+  enum class Group : unsigned char { Transform, Clip, Opacity };
+
+  void run(const fltr::DisplayList& list, fltr::Offset origin);
+  void pushTransform(const fltr::Transform2D& transform);
+  void popTransform();
+  void pushClip(fltr::Rect rect);
+  void popClip();
+  void applyClip() const;
+
+  ::Color tinted(fltr::Color color) const noexcept;
+
+  RaylibTextService& text_;
+  std::vector<Texture2D> textures_;
+
+  /// Alpha is a stack because `PushOpacity` nests, and raylib has no global
+  /// alpha: every colour emitted inside the group is multiplied by the product.
+  std::vector<float> alpha_{1.0f};
+  /// Scissor rectangles, already intersected with their parent and already in
+  /// screen space. raylib has one scissor, so a pop has to restore the previous.
+  std::vector<fltr::Rect> clips_;
+  /// The same transform the GPU matrix stack holds, kept on the CPU because a
+  /// scissor rectangle is not affected by the matrix and has to be mapped here.
+  fltr::Transform2D transform_;
+  std::vector<fltr::Transform2D> transforms_;
+  std::vector<Group> groups_;
+
+  std::size_t commands_ = 0;
+};
+
+}  // namespace demo
+```
+
+<Aside type="danger" title="The bug you will write first">
+There are three push kinds and one `Pop`. The obvious implementation — compare
+stack depths and guess which one closed — is **wrong**, because pushes nest but do
+not alternate:
+
+```text
+PushTransform
+  PushOpacity
+    PushClipRect
+    Pop        ← closes the clip
+  Pop          ← closes the opacity
+Pop            ← closes the transform
+```
+
+The only correct answer is to record the order groups were opened in. That is what
+`groups_` is, and it is three lines you will otherwise spend an afternoon finding.
+</Aside>
+
+## `submit`
+
+```cpp title="docs/demo/src/platform/backend.cc"
+void Backend::submit(const Scene& scene) {
+  commands_ = 0;
+  alpha_.resize(1);
+  alpha_[0] = 1.0f;
+  clips_.clear();
+  transforms_.clear();
+  groups_.clear();
+  transform_ = Transform2D::identity();
+  if (scene.root != nullptr) run(*scene.root, Offset::zero());
+  EndScissorMode();
+}
+```
+
+Reset, walk, and make sure the scissor is off on the way out — the game draws into
+the same framebuffer next frame.
+
+## The walk
+
+```cpp title="docs/demo/src/platform/backend.cc"
+void Backend::run(const DisplayList& list, Offset origin) {
+  // A list is embedded at an offset rather than re-recorded at its new position,
+  // so translation is the caller's job -- this is the only place it happens.
+  const bool shifted = origin.dx != 0.0f || origin.dy != 0.0f;
+  if (shifted) pushTransform(Transform2D::translation(origin));
+
+  for (const PaintCmd& cmd : list.commands()) {
+    ++commands_;
+    switch (cmd.op) {
+      case PaintOp::PushTransform:
+        pushTransform(cmd.pushTransform.transform);
+        groups_.push_back(Group::Transform);
+        break;
+
+      case PaintOp::PushClipRect:
+        // A rounded clip cannot be expressed as a scissor rectangle. The corners
+        // are dropped, which is visible only where something actually overflows.
+        pushClip(cmd.pushClipRect.rect);
+        groups_.push_back(Group::Clip);
+        break;
+
+      case PaintOp::PushOpacity:
+        alpha_.push_back(alpha_.back() * cmd.pushOpacity.alpha);
+        groups_.push_back(Group::Opacity);
+        break;
+
+      case PaintOp::Pop:
+        if (!groups_.empty()) {
+          const Group group = groups_.back();
+          groups_.pop_back();
+          if (group == Group::Opacity) {
+            alpha_.pop_back();
+          } else if (group == Group::Clip) {
+            popClip();
+          } else {
+            popTransform();
+          }
+        }
+        break;
+```
+
+### Transforms
+
+```cpp title="docs/demo/src/platform/backend.cc"
+void Backend::pushTransform(const Transform2D& m) {
+  const float matrix[16] = {m.a,  m.b,  0.0f, 0.0f, m.c,  m.d,  0.0f, 0.0f,
+                            0.0f, 0.0f, 1.0f, 0.0f, m.tx, m.ty, 0.0f, 1.0f};
+  rlPushMatrix();
+  rlMultMatrixf(matrix);
+  transforms_.push_back(transform_);
+  transform_ = m.then(transform_);
+}
+
+void Backend::popTransform() {
+  rlPopMatrix();
+  transform_ = transforms_.back();
+  transforms_.pop_back();
+}
+```
+
+fltr's `Transform2D` is a 2×3 affine matrix; `rlMultMatrixf` wants a column-major
+4×4. The mapping is mechanical, and the zeros are load-bearing — get one wrong and
+everything shears.
+
+The CPU copy in `transform_` is not redundant. A scissor rectangle is applied to
+the framebuffer, not through the modelview matrix, so it has to be mapped by hand.
+
+### Clips
+
+```cpp title="docs/demo/src/platform/backend.cc"
+void Backend::pushClip(Rect rect) {
+  // The scissor is applied to the framebuffer, not to the modelview matrix, so
+  // the rectangle has to be mapped into screen space here.
+  Rect mapped = transform_.applyToRect(rect);
+  if (!clips_.empty()) mapped = mapped.intersect(clips_.back());
+  if (mapped.isEmpty()) mapped = Rect::fromLTWH(mapped.left, mapped.top, 0.0f, 0.0f);
+  clips_.push_back(mapped);
+  applyClip();
+}
+
+void Backend::popClip() {
+  clips_.pop_back();
+  applyClip();
+}
+
+void Backend::applyClip() const {
+  if (clips_.empty()) {
+    EndScissorMode();
+    return;
+  }
+  const Rect& clip = clips_.back();
+  BeginScissorMode(static_cast<int>(std::floor(clip.left)), static_cast<int>(std::floor(clip.top)),
+                   static_cast<int>(std::ceil(clip.width())),
+                   static_cast<int>(std::ceil(clip.height())));
+}
+```
+
+Three things at once: map into screen space, intersect with the enclosing clip
+(raylib has one scissor, not a stack), and re-apply the parent's on pop.
+
+<Aside type="caution" title="PushClipRect carries a radius raylib cannot honour">
+`PushClipRectCmd` has a `BorderRadius`. `BeginScissorMode` is rectangle-only.
+Honouring it would need stencil work, so the demo drops the corners — visible only
+where something actually overflows a rounded container.
+
+This is a real mismatch between what the command promises and what a simple
+backend can deliver, and it is on the
+[gaps list](/fltr/project/gaps-and-rework/).
+</Aside>
+
+### Opacity
+
+```cpp title="docs/demo/src/platform/backend.cc"
+::Color Backend::tinted(fltr::Color color) const noexcept {
+  const float a = alpha_.back();
+  return ::Color{color.r, color.g, color.b,
+                 static_cast<unsigned char>(std::lround(static_cast<float>(color.a) * a))};
+}
+```
+
+raylib has no global alpha, so `PushOpacity` becomes "multiply every colour
+emitted inside this group". Every draw case calls `tinted()`; none of them may
+skip it.
+
+<Aside type="tip" title="The framework already skipped the hard cases">
+`PaintingContext::pushOpacity` records **nothing at all** for `alpha <= 0` and no
+group for `alpha >= 1`. So a fully-faded subtree costs zero commands, not a group
+full of invisible ones, and your backend never sees a degenerate group.
+</Aside>
+
+### Draws
+
+```cpp title="docs/demo/src/platform/backend.cc"
+      case PaintOp::DrawRect:
+        DrawRectangleRec(toRectangle(cmd.drawRect.rect), tinted(cmd.drawRect.color));
+        break;
+
+      case PaintOp::DrawRRect: {
+        const Rect bounds = cmd.drawRRect.rect;
+        const Rectangle rec = toRectangle(bounds);
+        const float roundness = roundnessFor(cmd.drawRRect.radius, bounds);
+        if (cmd.drawRRect.fill.a > 0) {
+          if (roundness <= 0.0f) {
+            DrawRectangleRec(rec, tinted(cmd.drawRRect.fill));
+          } else {
+            DrawRectangleRounded(rec, roundness, 8, tinted(cmd.drawRRect.fill));
+          }
+        }
+        if (cmd.drawRRect.borderWidth > 0.0f && cmd.drawRRect.border.a > 0) {
+          if (roundness <= 0.0f) {
+            DrawRectangleLinesEx(rec, cmd.drawRRect.borderWidth, tinted(cmd.drawRRect.border));
+          } else {
+            DrawRectangleRoundedLinesEx(rec, roundness, 8, cmd.drawRRect.borderWidth,
+                                        tinted(cmd.drawRRect.border));
+          }
+        }
+        break;
+      }
+```
+
+`DrawRRect` is one command carrying fill **and** border, so both come out of one
+case. The zero-roundness branch is not an optimisation — raylib's rounded
+routines misbehave at roundness zero.
+
+```cpp title="docs/demo/src/platform/backend.cc"
+/// raylib takes one roundness for the whole rectangle, as a fraction of half its
+/// shorter side, while fltr carries four corners with independent x and y radii.
+/// The top-left x radius is used for all four; the demo never asks for more, and
+/// the mismatch is recorded rather than hidden.
+float roundnessFor(const BorderRadius& radius, Rect bounds) noexcept {
+  const float half = std::min(bounds.width(), bounds.height()) * 0.5f;
+  if (half <= 0.0f) return 0.0f;
+  return std::clamp(radius.topLeft.x / half, 0.0f, 1.0f);
+}
+```
+
+### Images
+
+```cpp title="docs/demo/src/platform/backend.cc"
+      case PaintOp::DrawImage: {
+        const fltr::ImageHandle handle = cmd.drawImage.image;
+        if (handle == 0 || handle > textures_.size()) break;
+        const Texture2D& texture = textures_[static_cast<std::size_t>(handle) - 1u];
+        Rectangle source = toRectangle(cmd.drawImage.src);
+        if (source.width <= 0.0f || source.height <= 0.0f) {
+          source = Rectangle{0.0f, 0.0f, static_cast<float>(texture.width),
+                             static_cast<float>(texture.height)};
+        }
+        DrawTexturePro(texture, source, toRectangle(cmd.drawImage.dst), Vector2{0.0f, 0.0f}, 0.0f,
+                       tinted(cmd.drawImage.tint));
+        break;
+      }
+```
+
+`ImageHandle` is an opaque `uint64_t` the framework never interprets.
+`registerTexture` returns `index + 1` so zero stays available as "no image".
+
+### Paragraphs
+
+```cpp title="docs/demo/src/platform/backend.cc"
+      case PaintOp::DrawParagraph:
+        // The text service measured it and the text service draws it: nothing
+        // here knows what a glyph or a run is.
+        text_.draw(cmd.drawParagraph.paragraph, cmd.drawParagraph.offset,
+                   {cmd.drawParagraph.tint.r, cmd.drawParagraph.tint.g, cmd.drawParagraph.tint.b,
+                    tinted(cmd.drawParagraph.tint).a});
+        break;
+```
+
+The backend hands the handle straight back to the service that issued it. The
+alpha goes through `tinted()` so an `Opacity` above a `Text` reaches the glyphs;
+the RGB does not, because the service multiplies per-run colours itself.
+
+### Sub-lists
+
+```cpp title="docs/demo/src/platform/backend.cc"
+      case PaintOp::DrawList:
+        // The repaint-boundary seam. A boundary's list is re-recorded only when
+        // that subtree repaints; an immediate-mode backend still walks it every
+        // frame, but a retained one would cache on (pointer, revision()).
+        if (cmd.drawList.list != nullptr) run(*cmd.drawList.list, cmd.drawList.offset);
+        break;
+```
+
+This is where a retained-mode backend earns its keep. `(list pointer,
+list->revision())` is a complete cache key: unchanged revision means the
+translated state from last frame is still valid.
+
+## What it cost
+
+<Steps>
+
+1. **~200 lines**, of which the three stacks are about 40.
+
+2. **One mismatch that cannot be papered over** — rounded clipping.
+
+3. **One thing that is fine but undocumented** — `PushOpacity` having no analogue
+   in an immediate-mode renderer, so the backend must fold alpha into every colour
+   it emits.
+
+</Steps>
+
+<Aside type="tip" title="What this step proved">
+"No graphics API coupling" is literally true. The framework's entire output is an
+array of PODs, and translating it needed no cooperation from fltr at all — no
+registration, no virtual calls back into the consumer, no lifetime negotiation.
+</Aside>
+
+<LinkCard
+  title="Guide: writing a backend"
+  description="The same material renderer-neutral, including the caching strategy."
+  href="/fltr/guides/writing-a-backend/"
+/>
+
+<LinkCard
+  title="Next: text"
+  description="A real TextService, because the shipped one is a stand-in."
+  href="/fltr/walkthrough/text/"
+/>

@@ -1,0 +1,212 @@
+---
+title: 8 — Main menu
+description: A column of buttons, autofocus, arrow traversal, Escape, and the 32-byte budget a Callback gives you.
+---
+
+import { Aside, LinkCard } from '@astrojs/starlight/components';
+
+Everything is already in place: `menuButton` carries behaviour and appearance, the
+root supplies a `FocusScope`. The menu is a `Column`.
+
+## The screen
+
+```cpp title="docs/demo/src/ui/screens/main_menu.cc"
+WidgetRef mainMenuScreen(App& app, const Theme& theme) {
+  return sheet(
+      Key::of("screen.menu"), theme, 460.0f,
+      Column::make({
+          .crossAxisAlignment = CrossAxisAlignment::Stretch,
+          .mainAxisSize = MainAxisSize::Min,
+          .spacing = theme.unit * 2.0f,
+          .children =
+              {
+                  Column::make({
+                      .crossAxisAlignment = CrossAxisAlignment::Start,
+                      .mainAxisSize = MainAxisSize::Min,
+                      .spacing = theme.unit * 0.5f,
+                      .children =
+                          {
+                              display(theme, "DRIFT"),
+                              label(theme, "AN ASTEROID FIELD, A FLOATY SHIP, AND A USER "
+                                           "INTERFACE"),
+                          },
+                  }),
+                  panel(theme, EdgeInsets::all(theme.unit * 0.75f),
+                        Column::make({
+                            .crossAxisAlignment = CrossAxisAlignment::Stretch,
+                            .mainAxisSize = MainAxisSize::Min,
+                            .spacing = theme.unit * 0.5f,
+                            .children =
+                                {
+                                    menuButton(theme,
+                                               {
+                                                   .key = Key::of("menu.launch"),
+                                                   .label = "Launch",
+                                                   .trailing = "ENTER",
+                                                   // One captured pointer: a
+                                                   // `Callback` stores 32 bytes
+                                                   // inline and refuses more.
+                                                   .onPressed = [&app] {
+                                                     app.goTo(Screen::LevelSelect);
+                                                   },
+                                                   .autofocus = true,
+                                               }),
+                                    menuButton(theme,
+                                               {
+                                                   .key = Key::of("menu.settings"),
+                                                   .label = "Settings",
+                                                   .trailing = "S",
+                                                   .onPressed = [&app] {
+                                                     app.goTo(Screen::Settings);
+                                                   },
+                                               }),
+                                    menuButton(theme,
+                                               {
+                                                   .key = Key::of("menu.quit"),
+                                                   .label = "Quit",
+                                                   .trailing = "ESC",
+                                                   .onPressed = [&app] { app.quit(); },
+                                               }),
+                                },
+                        })),
+                  Row::make({
+                      .children =
+                          {
+                              label(theme, "BEST"),
+                              spacer(),
+                              body(theme, app.session().bestText()),
+                          },
+                  }),
+              },
+      }));
+}
+```
+
+## `MainAxisSize::Min` matters here
+
+The outer `Column` is inside a `sheet`, which centres it. `MainAxisSize::Max` — the
+default — would make it fill the whole surface height, and centring something that
+already fills its parent does nothing. `Min` makes the column exactly as tall as
+its children, so the `Align` above it has something to centre.
+
+`CrossAxisAlignment::Stretch` on the button column is what makes every button the
+same width without any of them being told a width.
+
+## The keyboard, without configuring anything
+
+The buttons are focusable, tabbable, arrow-navigable and Enter-activatable, and
+none of that is set up in this file.
+
+```cpp
+.autofocus = true    // on "Launch" only
+```
+
+That is the entire keyboard configuration on this screen. Everything else comes
+from two facts:
+
+<div class="sl-flex" />
+
+1. `RawButton` builds a `Focus` internally, so it is already a focus node.
+2. The root supplies a `FocusScope`, which is what brings the focus tree into
+   existence and is *also* the traversal group.
+
+```cpp title="docs/demo/src/ui/root.cc"
+.child = FocusScope::make({
+    .child = Shortcuts::make({ ... }),
+}),
+```
+
+| Key | What happens | Where it comes from |
+|---|---|---|
+| Tab / Shift-Tab | next / previous, wrapping | `FocusManager::nextFocus`, build order |
+| ↑ ↓ ← → | nearest node in that direction | `moveFocusInDirection`, geometric with an overlap band |
+| Enter / Space | activate | `RawButton`'s own key handler |
+| Escape | `togglePause()` | `Shortcuts` at the root |
+| Backspace | back to the menu | `Shortcuts` at the root |
+
+<Aside type="tip" title="A tree with no FocusScope pays nothing">
+Remove the scope and every `RawButton` in the tree becomes pointer-only. No node
+attaches, no manager exists, `KeyboardBinding::handlerCount()` is zero, and no key
+event is offered to anything.
+
+That is worth knowing for a HUD, which wants clickable regions and has no business
+in any tab order.
+</Aside>
+
+### Build-order traversal
+
+Tab follows the order the buttons were **built**, not their positions. For a
+column that is the same thing. For a two-column form it would not be, and the
+framework says so plainly rather than sorting geometrically.
+
+## Escape means different things
+
+```cpp title="docs/demo/src/app/app.cc"
+void App::togglePause() {
+  if (screen_.value() != Screen::Playing) {
+    // Escape outside gameplay means "back", not "pause".
+    goTo(screen_.value() == Screen::MainMenu ? Screen::MainMenu : Screen::MainMenu);
+    return;
+  }
+  // A finished run cannot be un-paused: its panel is the result screen.
+  if (session_.outcome.value() != Outcome::Flying) return;
+  setPaused(!paused_.value());
+}
+```
+
+One shortcut registration at the root, and the meaning is resolved by app state.
+The alternative — a `Shortcuts` per screen — would mean four registrations and four
+chances for two of them to be live at once during a page transition.
+
+## Callbacks and the 32-byte budget
+
+```cpp
+.onPressed = [&app] { app.goTo(Screen::LevelSelect); },
+```
+
+`Callback<void()>` stores captures **inline**, in `4 * sizeof(void*)` = 32 bytes on
+a 64-bit target, and static-asserts if they do not fit. It never allocates.
+
+<Aside type="caution" title="What fits, and what does not">
+One reference is 8 bytes. A reference plus an index — as level select uses — is 16.
+Capturing three or four things by value is where it starts to be tight, and
+capturing a `std::string` fails to compile outright, because the captures must be
+trivially copyable as well as small.
+
+The way out is the way the demo already works: capture `&app` and reach for what
+you need through it.
+</Aside>
+
+## Formatted text
+
+```cpp
+body(theme, app.session().bestText())
+```
+
+Not `std::to_string(best)`. `Text` takes a `std::string_view` and **does not copy
+it** — the storage has to outlive the build.
+
+```cpp title="docs/demo/src/game/session.hh"
+std::string_view bestText() const noexcept { return bestText_; }
+...
+char bestText_[16] = "0";
+```
+
+A `char` buffer the session owns, reformatted when the value changes. Building a
+`std::string` inside the builder would be both an allocation and a dangling
+pointer.
+
+<Aside type="tip" title="What this step proved">
+Full keyboard navigation — tab, arrows, activation, and two global shortcuts — cost
+one `FocusScope`, one `.autofocus = true`, and two `Shortcuts` entries.
+
+The finding is small but real: `Text`'s `string_view` contract turns every
+formatted label into a buffer somebody has to own. Every screen in this demo has
+one, and a new consumer will hit it on their first score counter.
+</Aside>
+
+<LinkCard
+  title="Next: level select"
+  description="Scrollable, Scrollbar, Overscroll, and locked entries."
+  href="/fltr/walkthrough/level-select/"
+/>

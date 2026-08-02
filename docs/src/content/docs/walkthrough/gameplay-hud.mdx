@@ -1,0 +1,340 @@
+---
+title: 11 — Gameplay and HUD
+description: The game publishes numbers, the HUD reads them, and neither knows the other exists.
+---
+
+import { Aside, LinkCard } from '@astrojs/starlight/components';
+
+The ship flies now. What matters on this page is not the physics — it is the
+**seam**: how a simulation running at 60 Hz feeds a UI without either side
+knowing about the other.
+
+## The game half
+
+```cpp title="docs/demo/src/game/ship.hh"
+/// What the player is holding down this frame. Filled by the input layer from
+/// keys the UI declined, so a menu that has the keyboard silently stops the ship
+/// rather than fighting it.
+struct ShipInput {
+  bool thrust = false;
+  bool left = false;
+  bool right = false;
+  bool fire = false;
+};
+
+/// A floaty ship: thrust accelerates along the heading, nothing decelerates it
+/// but a small drag, and the velocity carries. Turning does not change where you
+/// are going, which is the whole feel.
+class Ship {
+public:
+  static constexpr float kHullMax = 100.0f;
+  static constexpr float kShieldMax = 50.0f;
+  static constexpr float kRadius = 14.0f;
+
+  void reset(fltr::Offset at);
+  void tick(const ShipInput& input, float dt, fltr::Size bounds);
+  bool takeShot(fltr::Offset& muzzle, fltr::Offset& velocity);
+  void applyDamage(float amount);
+  ...
+};
+```
+
+The floatiness is not decoration. Momentum means the HUD numbers change
+**continuously**, which is exactly the load the reactivity layer should be shown
+under — a readout that only moves when you press a button proves nothing.
+
+## The seam
+
+```cpp title="docs/demo/src/game/session.hh"
+/// The seam between the game and the UI.
+///
+/// The game writes plain members; `publish()` pushes them into observables once
+/// per frame. Pushing an unchanged value is a no-op in fltr, so a frame in which
+/// the score did not move rebuilds nothing that reads the score -- which is why
+/// the readouts are separate observables rather than one snapshot struct.
+class Session {
+public:
+  ...
+  // ---- What the UI names ------------------------------------------------
+  // Public because the widgets refer to them by pointer, which is fltr's rule
+  // for everything a widget does not own.
+
+  fltr::Observable<float> hullFraction{1.0f};
+  fltr::Observable<float> shieldFraction{1.0f};
+  fltr::Observable<int> remaining{0};
+  fltr::Observable<int> score{0};
+  /// Rounded to whole units on purpose: the ship's speed changes every frame,
+  /// and an observable that only moves when the displayed digits move is the
+  /// difference between rebuilding a readout 60 times a second and rebuilding it
+  /// when it has something new to say.
+  fltr::Observable<int> speed{0};
+  fltr::Observable<Outcome> outcome{Outcome::Flying};
+```
+
+<Aside type="tip" title="Separate observables, not one snapshot struct">
+A single `Observable<HudSnapshot>` would notify every reader whenever *any* field
+moved — and something always moves. Six separate observables mean the score
+readout hears about the score and nothing else.
+</Aside>
+
+```cpp title="docs/demo/src/game/session.cc"
+void Session::publish() {
+  hullFraction.set(ship_.hull() / Ship::kHullMax);
+  shieldFraction.set(ship_.shield() / Ship::kShieldMax);
+  remaining.set(static_cast<int>(field_.asteroids().size()));
+  score.set(scoreValue_);
+  speed.set(static_cast<int>(std::lround(ship_.speed())));
+  format();
+}
+```
+
+Unconditional, every frame. `Observable<T>::set` compares first, so pushing
+everything costs a handful of comparisons and notifies only what moved.
+
+### Quantise before you push
+
+```cpp
+speed.set(static_cast<int>(std::lround(ship_.speed())));   // not the float
+```
+
+One `lround` is the difference between rebuilding the speed readout **sixty times
+a second** and rebuilding it when the digits change. fltr cannot make that decision
+for you — it does not know how you are going to render the number.
+
+### The text buffers
+
+```cpp title="docs/demo/src/game/session.cc"
+/// snprintf into a fixed buffer and hand back a view of exactly what it wrote.
+/// No allocation, and the storage belongs to the caller, which is what `Text`
+/// requires of every string it is given.
+std::string_view print(char* buffer, std::size_t capacity, int value) {
+  const int written = std::snprintf(buffer, capacity, "%d", value);
+  if (written <= 0) return {buffer, 0};
+  return {buffer, static_cast<std::size_t>(written)};
+}
+```
+
+Four `char[16]`s the session owns. Not one allocation on the whole HUD path.
+
+## Taking the controls away
+
+```cpp title="docs/demo/src/platform/input.cc"
+void Input::pump(fltr::WidgetBinding& binding) {
+  pumpPointer(binding);
+  pumpSignals(binding);
+  pumpKeys(binding);
+
+  // Held keys are read straight from raylib rather than accumulated from the
+  // events above: a game wants the current state of the stick, not the history
+  // of it. `gameHasFocus_` is what a menu uses to take the ship's hands off the
+  // controls without either side knowing about the other.
+  ship_ = ShipInput{};
+  if (!gameHasFocus_) return;
+  ship_.thrust = IsKeyDown(KEY_W) || IsKeyDown(KEY_UP);
+  ship_.left = IsKeyDown(KEY_A) || IsKeyDown(KEY_LEFT);
+  ship_.right = IsKeyDown(KEY_D) || IsKeyDown(KEY_RIGHT);
+  ship_.fire = IsKeyDown(KEY_SPACE);
+}
+```
+
+```cpp title="docs/demo/src/app/app.cc"
+bool App::gameHasFocus() const noexcept {
+  return screen_.value() == Screen::Playing && !paused_.value() &&
+         session_.outcome.value() == Outcome::Flying;
+}
+```
+
+Discrete key events go to fltr for focus and shortcuts. Held keys are **polled**,
+because a game wants the current position of the stick, not the log of how it got
+there. One boolean gates the second from reaching the ship.
+
+## The HUD
+
+```cpp title="docs/demo/src/ui/screens/hud.cc"
+WidgetRef hudScreen(App& app, const Theme& theme) {
+  const float inset = theme.unit * 2.5f;
+
+  // A repaint boundary around the HUD means a frame in which only the HUD moved
+  // re-records the HUD's own list and leaves the root's alone.
+  return RepaintBoundary::make({
+      .key = Key::of("screen.hud"),
+      .child = Stack::make({
+          .fit = StackFit::Expand,
+          .children =
+              {
+                  Positioned::make({
+                      .left = inset, .top = inset,
+                      .child = scoreCluster(app, theme),
+                  }),
+                  Positioned::make({
+                      .top = inset, .right = inset,
+                      .child = Row::make({ ... statusCluster, pause button ... }),
+                  }),
+                  Positioned::make({
+                      .left = inset, .bottom = inset, .width = 240.0f,
+                      .child = gauges(app, theme),
+                  }),
+                  Positioned::make({
+                      .right = inset, .bottom = inset,
+                      // Nothing here is interactive, and an invisible warning
+                      // must not eat a click that was aimed at the field.
+                      .child = IgnorePointer::make({.child = criticalWarning(app)}),
+                  }),
+              },
+      }),
+  });
+}
+```
+
+`StackFit::Expand` makes the stack's size depend only on its constraints, which
+also makes it `sizedByParent` — an unconditional relayout boundary. A HUD cluster
+resizing never reaches the view.
+
+<Aside type="tip" title="Why IgnorePointer and not AbsorbPointer">
+The critical warning is faded to zero opacity most of the time, but it is still
+*there*, and a zero-alpha box is still hit-testable. `IgnorePointer` makes it and
+everything below it invisible to the pointer, so a click aimed at an asteroid
+reaches the field.
+
+`AbsorbPointer` would do the opposite — swallow the click. That is what a disabled
+control over live content wants, and it is not what this wants.
+</Aside>
+
+## The cheap gauge
+
+```cpp title="docs/demo/src/ui/widgets/readout.hh"
+class MeterState final : public fltr::State<Meter> {
+  ...
+private:
+  /// A 0..1 fraction turned into a horizontal scale about the left edge. The
+  /// `Transform` render object observes this and repaints itself; the meter is
+  /// never rebuilt, however fast the value moves.
+  MappedValue<fltr::Transform2D> scale_;
+};
+
+/// A hairline bar that fills from the left. Takes a `ValueListenable<float>`,
+/// which is what both `Observable<float>` and `RawProgress` publish, so the same
+/// widget serves a pushed game value and a component's fraction.
+class Meter final : public fltr::Configure<Meter, fltr::StatefulWidget> {
+public:
+  struct Args {
+    fltr::Key key;
+    fltr::ValueListenable<float>* fraction = nullptr;
+    fltr::Color fill;
+    fltr::Color track;
+    float height = 6.0f;
+  };
+  ...
+};
+```
+
+The hull bar takes hits at whatever rate the asteroids arrive, and it costs one
+repaint per frame of animation. **`buildCount()` never moves.**
+
+That it takes a plain `ValueListenable<float>` is the point: `Observable<float>`
+from the game and `ComponentScope::fractionOf` from a `RawProgress` are the same
+type, so one widget serves both.
+
+## The expensive counter, on purpose
+
+```cpp title="docs/demo/src/ui/widgets/readout.hh"
+/// A number that rolls up to its new value.
+///
+/// This one *does* rebuild every frame it animates, and it has to: the animated
+/// quantity is a string, and there is no render-attached animated text in fltr.
+/// It is here as the deliberate counterexample to `Meter` -- one screen, both
+/// paths, and the cost of each visible in the frame stats.
+class CountUp final : public fltr::Configure<CountUp, fltr::StatefulWidget> {
+public:
+  struct Args {
+    fltr::Key key;
+    fltr::ValueListenable<int>* value = nullptr;
+    fltr::TextStyle style;
+    float duration = 0.45f;
+  };
+  ...
+private:
+  fltr::AnimationDriver driver_;
+  fltr::AnimatedValue<float> shown_{driver_, {}};
+  fltr::Subscription target_;
+  fltr::Subscription tick_;
+  char buffer_[16] = "0";
+  std::string_view text_{buffer_, 1};
+};
+```
+
+Both are on the same screen, deliberately. Shoot an asteroid and watch the debug
+readout: `builds` climbs for 0.45 s while the score rolls, then goes flat. The
+gauges never touch it.
+
+## The `Callback` budget, again
+
+```cpp title="docs/demo/src/ui/widgets/readout.hh"
+/// Where a statistic's displayed text comes from. A function pointer and an
+/// owner rather than a closure: `Callback` stores 32 bytes inline and static-
+/// asserts on more, which is a real constraint the call sites have to respect.
+using TextSource = std::string_view (*)(const void* owner);
+
+fltr::WidgetRef statistic(const Theme& theme, std::string_view name,
+                          fltr::ValueListenable<int>* value, TextSource source,
+                          const void* owner);
+```
+
+```cpp title="docs/demo/src/ui/screens/hud.cc"
+std::string_view speedOf(const void* owner) {
+  return static_cast<const Session*>(owner)->speedText();
+}
+
+statistic(theme, "SPEED", &app.session().speed, &speedOf, &app.session())
+```
+
+A free function plus an owner pointer, rather than a capturing lambda. Slightly
+more ceremony, and it fits.
+
+## The implicit animation
+
+```cpp title="docs/demo/src/ui/screens/hud.cc"
+/// The one implicit animation in the demo: a configuration change starts an
+/// interpolation, and the value goes down to a render object rather than being
+/// snapshotted into a widget.
+WidgetRef criticalWarning(App& app) {
+  return Watch<float>::make({
+      .value = &app.session().hullFraction,
+      .builder = [](BuildContext& context, const float& hull) -> WidgetRef {
+        const Theme& current = ThemeScope::of(context);
+        return AnimatedOpacity::make({
+            .opacity = hull < 0.35f ? 1.0f : 0.0f,
+            .animation = {.duration = 0.25f, .curve = fltr::Curves::easeInOut},
+            .child = panel(current, EdgeInsets::symmetric(current.unit * 1.5f, current.unit),
+                           fltr::Text::make({
+                               .text = "HULL CRITICAL",
+                               .style = monoStyle(current, current.danger),
+                           })),
+        });
+      },
+  });
+}
+```
+
+The `Watch` rebuilds whenever the hull fraction moves — which is often. The
+`AnimatedOpacity` retargets only when the **boolean** flips, because
+`ImplicitlyAnimatedState::didUpdateWidget` compares targets before retargeting.
+
+Frames of the fade after that rebuild nothing: what the built widget hands down is
+the animated value itself, not a snapshot of it.
+
+<Aside type="tip" title="What this step proved">
+The reactivity layer holds up under a continuously-changing simulation. Six
+observables, pushed unconditionally at 60 Hz, and the only thing that rebuilds is
+the one readout whose digits actually changed — plus the count-up, which cannot
+avoid it.
+
+The finding is the count-up itself: **there is no animated text**. A rolling number
+is a rebuild per frame, and no arrangement of the existing pieces avoids it.
+</Aside>
+
+<LinkCard
+  title="Next: the pause menu"
+  description="Overlay, a consumer-owned entry, and an exit animation."
+  href="/fltr/walkthrough/pause-menu/"
+/>
