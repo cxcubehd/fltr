@@ -36,6 +36,18 @@ FetchContent_Declare(
   GIT_SHALLOW TRUE
 )
 
+# A UI is only as legible as its font, and the fallback -- raylib's built-in
+# bitmap face -- is not legible at these sizes. Fetching the real one keeps a
+# 300KB binary out of the repository without leaving the demo's appearance up to
+# whichever monospace face the machine happens to have installed.
+FetchContent_Declare(
+  jetbrains_mono
+  URL https://github.com/JetBrains/JetBrainsMono/releases/download/v2.304/JetBrainsMono-2.304.zip
+  URL_HASH SHA256=6f6376c6ed2960ea8a963cd7387ec9d76e3f629125bc33d1fdcd7eb7012f7bbf
+  DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+)
+FetchContent_MakeAvailable(jetbrains_mono)
+
 set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 set(CUSTOMIZE_BUILD ON CACHE BOOL "" FORCE)
@@ -83,6 +95,7 @@ target_link_libraries(demo PRIVATE fltr raylib)
 
 target_compile_definitions(demo PRIVATE
   DEMO_ASSET_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets"
+  DEMO_FONT_FILE="${jetbrains_mono_SOURCE_DIR}/fonts/ttf/JetBrainsMono-Regular.ttf"
 )
 
 target_compile_options(demo PRIVATE -Wall -Wextra -Wpedantic -Wno-missing-field-initializers)

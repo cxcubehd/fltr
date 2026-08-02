@@ -19,10 +19,21 @@ void App::runScript(int frame) {
   switch (frame) {
     case 10: goTo(Screen::Settings); break;
     case 30: applyGraphics({.fullscreen = false, .vsync = false, .maxFps = 60}); break;
+    case 40: pressEscape(); break;
+    case 44: check(screen_.value() == Screen::MainMenu, "escape did not leave the settings"); break;
     case 45: goTo(Screen::LevelSelect); break;
+    case 55: scrollLevelList(); break;
+    case 68:
+      // Sampled while the list is still mounted: its controller lets go of the
+      // position the moment the screen changes.
+      scrolled_ = levelScroll_.positionOrNull() != nullptr ? levelScroll_.positionOrNull()->pixels()
+                                                           : 0.0f;
+      break;
     case 70: startLevel(0); break;
-    case 200: togglePause(); break;
-    case 240: togglePause(); break;
+    case 200: pressEscape(); break;
+    case 204: check(paused_.value(), "escape did not pause the run"); break;
+    case 240: pressEscape(); break;
+    case 244: check(!paused_.value(), "escape did not resume the run"); break;
     case 270: abandonRun(); goTo(Screen::MainMenu); break;
     default: break;
   }
@@ -36,7 +47,22 @@ void App::runScript(int frame) {
 ```
 
 Every screen, both page-transition directions, a settings change that reaches the
-window, a real flight with thrust and shooting, a pause and an un-pause.
+window, a wheel notch that has to move the level list, a real flight with thrust
+and shooting, a pause and an un-pause.
+
+The navigation steps press the key rather than call the method, so what the
+smoke run tests is the path a keystroke actually takes:
+
+```cpp title="docs/demo/src/app/app.cc"
+void App::pressEscape() {
+  // The rule the platform layer applies to a real keypress: the UI is offered
+  // the key, and what it declines is the app's.
+  const fltr::KeyEvent event{.type = fltr::KeyEventType::Down,
+                             .physical = fltr::PhysicalKey::Escape,
+                             .logical = fltr::LogicalKey::Escape};
+  if (!binding_->dispatchKey(event)) back();
+}
+```
 
 It is deterministic because of one line from [step 1](/fltr/walkthrough/skeleton/):
 

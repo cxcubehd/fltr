@@ -30,7 +30,7 @@ virtual std::uint32_t byteOffsetAt(ParagraphHandle h, Offset local) const = 0;
 ```cpp title="docs/demo/src/platform/text.hh"
 class RaylibTextService final : public fltr::TextService {
 public:
-  explicit RaylibTextService(std::span<const char* const> fontPaths, int atlasSize = 48);
+  explicit RaylibTextService(std::span<const char* const> fontPaths);
   ~RaylibTextService() override;
 
   fltr::ParagraphHandle acquire(const fltr::ParagraphSpec& spec, float maxWidth) override;
@@ -57,8 +57,16 @@ private:
     fltr::ParagraphMetrics metrics;
   };
 
-  Font font_{};
-  bool ownsFont_ = false;
+  /// A glyph atlas rasterised for one pixel size. `owned` is false for raylib's
+  /// built-in font, which belongs to raylib and must not be unloaded here.
+  struct Atlas {
+    int pixels = 0;
+    Font font{};
+    bool owned = false;
+  };
+
+  std::string fontFile_;
+  mutable std::vector<Atlas> atlases_;
   float ascentRatio_ = 0.78f;
   std::size_t live_ = 0;
   std::vector<Slot> slots_;
@@ -73,40 +81,118 @@ glyphs and runs inside the service, and the backend never learns what a run is.
 ## The font, and the baseline
 
 ```cpp title="docs/demo/src/platform/text.cc"
-RaylibTextService::RaylibTextService(std::span<const char* const> fontPaths, int atlasSize) {
+RaylibTextService::RaylibTextService(std::span<const char* const> fontPaths) {
   for (const char* path : fontPaths) {
-    if (path == nullptr || !FileExists(path)) continue;
-    font_ = LoadFontEx(path, atlasSize, nullptr, 0);
-    ownsFont_ = font_.glyphCount > 0;
-    if (ownsFont_) break;
+    if (path != nullptr && FileExists(path)) {
+      fontFile_ = path;
+      break;
+    }
   }
-  if (!ownsFont_) font_ = GetFontDefault();
 
   // The baseline is derived from the font rather than guessed: raylib places a
   // glyph at `offsetY` below the line top, so the bottom of a capital letter is
   // where the baseline sits. fltr's placeholder service hardcodes this ratio and
   // says so; a real one should not.
-  const int index = GetGlyphIndex(font_, 'H');
-  if (index >= 0 && index < font_.glyphCount && font_.baseSize > 0) {
-    const float top = static_cast<float>(font_.glyphs[index].offsetY);
-    const float height = font_.recs[index].height;
-    ascentRatio_ = (top + height) / static_cast<float>(font_.baseSize);
+  const Font reference = fontFor(kReferenceSize);
+  const int index = GetGlyphIndex(reference, 'H');
+  if (index >= 0 && index < reference.glyphCount && reference.baseSize > 0) {
+    const float top = static_cast<float>(reference.glyphs[index].offsetY);
+    const float height = reference.recs[index].height;
+    ascentRatio_ = (top + height) / static_cast<float>(reference.baseSize);
   }
 
   slots_.reserve(64);
 }
 ```
 
-The paths are tried in order and the first that loads wins, ending with raylib's
-built-in bitmap font:
+## One atlas per size
+
+A single atlas rasterised at some middle size and scaled to everything else is
+the usual shortcut, and it is why so much game UI text looks soft at 12px and
+chunky at 30px. Glyphs are rasterised here at the pixel size the style asks for,
+once, and kept:
+
+```cpp title="docs/demo/src/platform/text.cc"
+Font RaylibTextService::fontFor(float size) const {
+  const int pixels = std::clamp(static_cast<int>(std::lround(size)), kMinSize, kMaxSize);
+  for (const Atlas& atlas : atlases_) {
+    if (atlas.pixels == pixels) return atlas.font;
+  }
+
+  Atlas atlas{.pixels = pixels, .font = {}, .owned = !fontFile_.empty()};
+  if (atlas.owned) atlas.font = LoadFontEx(fontFile_.c_str(), pixels, nullptr, 0);
+  if (atlas.font.glyphCount <= 0) {
+    atlas.font = GetFontDefault();
+    atlas.owned = false;
+  }
+  SetTextureFilter(atlas.font.texture, TEXTURE_FILTER_BILINEAR);
+  return atlases_.emplace_back(atlas).font;
+}
+```
+
+A UI asks for a handful of sizes -- this demo uses four -- so the cache stays
+small, and `draw` rounds a run's origin to whole pixels to keep a glyph on the
+texel grid it was rasterised on.
+
+## Where the line sits, and where the box ends
+
+Two decisions that a text service makes for every panel above it.
+
+The first is where the baseline goes inside a line box. Hanging the glyphs from
+the top and leaving all the leading underneath -- the obvious implementation --
+is what makes every padded button in a UI look bottom-heavy. This one centres
+the capitals in the line box instead:
+
+```cpp title="docs/demo/src/platform/text.cc"
+float RaylibTextService::baselineIn(const TextStyle& style) const noexcept {
+  return (style.size * style.lineHeight + style.size * capRatio_) * 0.5f;
+}
+```
+
+The second is what the paragraph reports as its own height. A font's box
+reserves room for ascenders and descenders whether or not the text has any, so a
+label above a number ends up further from the bottom of its panel than from the
+top. The box is trimmed to the text itself -- cap top to baseline -- and the
+padding around it becomes the whole of the space that shows:
+
+```cpp title="docs/demo/src/platform/text.cc"
+  trimTop = std::max(0.0f, first.baseline - capHeightOf(slot, first));
+  trimBottom = std::max(0.0f, last.bounds.height() - last.baseline);
+  for (PositionedRun& run : slot.runs) run.offset.dy -= trimTop;
+```
+
+Only the outer edges are trimmed: between lines the full line height still
+applies, so a wrapped paragraph reads exactly as before.
+
+<Aside type="note" title="Both ratios come from the font">
+`ascentRatio_` and `capRatio_` are read from the font's own 'H' at startup.
+fltr's placeholder service hardcodes the first and says so; a real one should
+not have to guess either.
+</Aside>
+
+The paths are tried in order and the first that exists wins, ending with
+raylib's built-in bitmap font. The second entry is the JetBrains Mono the build
+fetches, which is what makes the demo look the same on every machine without a
+font binary in the repository:
 
 ```cpp title="docs/demo/src/app/app.cc"
 constexpr const char* kFontPaths[] = {
     DEMO_ASSET_DIR "/JetBrainsMono-Regular.ttf",
+    DEMO_FONT_FILE,
     "/usr/share/fonts/truetype/jetbrains-mono/JetBrainsMono-Regular.ttf",
-    "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
-    "/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf",
+    "/usr/share/fonts/jetbrains-mono-fonts/JetBrainsMono-Regular.ttf",
+    // ... the usual places on the usual distributions ...
 };
+```
+
+```cmake title="docs/demo/CMakeLists.txt"
+FetchContent_Declare(
+  jetbrains_mono
+  URL https://github.com/JetBrains/JetBrainsMono/releases/download/v2.304/JetBrainsMono-2.304.zip
+  URL_HASH SHA256=6f6376c6ed2960ea8a963cd7387ec9d76e3f629125bc33d1fdcd7eb7012f7bbf
+  DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+)
+FetchContent_MakeAvailable(jetbrains_mono)
 ```
 
 <Aside type="tip" title="Falling back rather than failing is the point of the boundary">
@@ -323,7 +409,7 @@ void RaylibTextService::draw(ParagraphHandle handle, Offset origin, Color tint) 
 
     // raylib positions text by the top-left of its line box, which is exactly
     // what a `PositionedRun` offset is, so no baseline arithmetic is needed here.
-    DrawTextEx(font_, scratch_.c_str(),
+    DrawTextEx(fontFor(style.size), scratch_.c_str(),
                Vector2{origin.dx + run.offset.dx, origin.dy + run.offset.dy}, style.size,
                style.letterSpacing, colour);
   }

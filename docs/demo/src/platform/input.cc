@@ -26,6 +26,10 @@ struct KeyPair {
   int raylib;
   PhysicalKey physical;
   LogicalKey logical;
+  /// Flown with. A key the ship uses is withheld from the UI while the ship has
+  /// the controls, so thrusting or firing cannot also activate whatever the
+  /// focus happens to be sitting on.
+  bool flies = false;
 };
 
 constexpr KeyPair kKeys[] = {
@@ -33,21 +37,22 @@ constexpr KeyPair kKeys[] = {
     {KEY_ENTER, PhysicalKey::Enter, LogicalKey::Enter},
     {KEY_KP_ENTER, PhysicalKey::NumpadEnter, LogicalKey::Enter},
     {KEY_TAB, PhysicalKey::Tab, LogicalKey::Tab},
-    {KEY_SPACE, PhysicalKey::Space, LogicalKey::Space},
+    {KEY_SPACE, PhysicalKey::Space, LogicalKey::Space, true},
     {KEY_BACKSPACE, PhysicalKey::Backspace, LogicalKey::Backspace},
-    {KEY_LEFT, PhysicalKey::ArrowLeft, LogicalKey::ArrowLeft},
-    {KEY_RIGHT, PhysicalKey::ArrowRight, LogicalKey::ArrowRight},
-    {KEY_UP, PhysicalKey::ArrowUp, LogicalKey::ArrowUp},
-    {KEY_DOWN, PhysicalKey::ArrowDown, LogicalKey::ArrowDown},
+    {KEY_LEFT, PhysicalKey::ArrowLeft, LogicalKey::ArrowLeft, true},
+    {KEY_RIGHT, PhysicalKey::ArrowRight, LogicalKey::ArrowRight, true},
+    {KEY_UP, PhysicalKey::ArrowUp, LogicalKey::ArrowUp, true},
+    {KEY_DOWN, PhysicalKey::ArrowDown, LogicalKey::ArrowDown, true},
     {KEY_HOME, PhysicalKey::Home, LogicalKey::Home},
     {KEY_END, PhysicalKey::End, LogicalKey::End},
     {KEY_PAGE_UP, PhysicalKey::PageUp, LogicalKey::PageUp},
     {KEY_PAGE_DOWN, PhysicalKey::PageDown, LogicalKey::PageDown},
-    {KEY_W, PhysicalKey::KeyW, LogicalKey::KeyW},
-    {KEY_A, PhysicalKey::KeyA, LogicalKey::KeyA},
+    {KEY_W, PhysicalKey::KeyW, LogicalKey::KeyW, true},
+    {KEY_A, PhysicalKey::KeyA, LogicalKey::KeyA, true},
     {KEY_S, PhysicalKey::KeyS, LogicalKey::KeyS},
-    {KEY_D, PhysicalKey::KeyD, LogicalKey::KeyD},
+    {KEY_D, PhysicalKey::KeyD, LogicalKey::KeyD, true},
     {KEY_P, PhysicalKey::KeyP, LogicalKey::KeyP},
+    {KEY_Q, PhysicalKey::KeyQ, LogicalKey::KeyQ},
 };
 
 KeyModifiers currentModifiers() {
@@ -131,13 +136,16 @@ void Input::pumpSignals(fltr::WidgetBinding& binding) {
 
 void Input::pumpKeys(fltr::WidgetBinding& binding) {
   const KeyModifiers modifiers = currentModifiers();
+  backRequested_ = false;
 
   for (const KeyPair& pair : kKeys) {
+    if (pair.flies && gameHasFocus_) continue;
     if (IsKeyPressed(pair.raylib)) {
-      binding.dispatchKey(KeyEvent{.type = KeyEventType::Down,
-                                   .physical = pair.physical,
-                                   .logical = pair.logical,
-                                   .modifiers = modifiers});
+      const bool taken = binding.dispatchKey(KeyEvent{.type = KeyEventType::Down,
+                                                      .physical = pair.physical,
+                                                      .logical = pair.logical,
+                                                      .modifiers = modifiers});
+      if (!taken && pair.logical == LogicalKey::Escape) backRequested_ = true;
     }
     if (IsKeyReleased(pair.raylib)) {
       binding.dispatchKey(KeyEvent{.type = KeyEventType::Up,

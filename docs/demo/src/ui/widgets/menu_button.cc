@@ -34,7 +34,9 @@ TextStyle labelFor(const Theme& theme, const MenuButtonSpec& spec) {
   return style;
 }
 
-WidgetRef shell(const Theme& theme, const MenuButtonSpec& spec, WidgetRef body) {
+}  // namespace
+
+WidgetRef pressable(const Theme& theme, const MenuButtonSpec& spec, WidgetRef body) {
   SurfaceStyle style = spec.selected ? listItemStyle(theme) : buttonStyle(theme);
   style.pressScale = 0.985f;
 
@@ -48,38 +50,56 @@ WidgetRef shell(const Theme& theme, const MenuButtonSpec& spec, WidgetRef body) 
   });
 }
 
-}  // namespace
-
 WidgetRef menuButton(const Theme& theme, const MenuButtonSpec& spec) {
   TextStyle trailing = labelStyle(theme);
   if (!spec.enabled) trailing.color = theme.textFaint;
 
-  return shell(theme, spec,
-               Padding::make({
-                   .padding = EdgeInsets::symmetric(theme.unit * 1.75f, theme.unit * 1.25f),
-                   .child = Row::make({
-                       .children =
-                           {
-                               Text::make({.text = spec.label, .style = labelFor(theme, spec)}),
-                               spacer(),
-                               Text::make({.text = spec.trailing, .style = trailing}),
-                           },
-                   }),
-               }));
+  return pressable(theme, spec,
+                   Padding::make({
+                       .padding = EdgeInsets::all(theme.unit * 1.75f),
+                       .child = Row::make({
+                           .children =
+                               {
+                                   Text::make({.text = spec.label, .style = labelFor(theme, spec)}),
+                                   spacer(),
+                                   Text::make({.text = spec.trailing, .style = trailing}),
+                               },
+                       }),
+                   }));
+}
+
+WidgetRef backButton(const Theme& theme, fltr::Callback<void()> onPressed) {
+  return pressable(theme, {.key = fltr::Key::of("nav.back"), .onPressed = onPressed},
+                   Padding::make({
+                       .padding = EdgeInsets::symmetric(theme.unit * 1.25f, theme.unit * 0.75f),
+                       .child = Row::make({
+                           .mainAxisSize = fltr::MainAxisSize::Min,
+                           .spacing = theme.unit,
+                           .children =
+                               {
+                                   Text::make({.text = "ESC", .style = labelStyle(theme)}),
+                                   Text::make({.text = "Back", .style = bodyStyle(theme)}),
+                               },
+                       }),
+                   }));
 }
 
 WidgetRef listCard(const Theme& theme, const MenuButtonSpec& spec, std::string_view blurb) {
   TextStyle trailing = labelStyle(theme);
-  if (!spec.enabled) trailing.color = theme.textFaint;
+  TextStyle description = labelStyle(theme);
+  if (!spec.enabled) {
+    trailing.color = theme.textFaint;
+    description.color = theme.textFaint;
+  }
 
-  return shell(
+  return pressable(
       theme, spec,
       Padding::make({
-          .padding = EdgeInsets::symmetric(theme.unit * 1.75f, theme.unit * 1.5f),
+          .padding = EdgeInsets::all(theme.unit * 1.75f),
           .child = Column::make({
               .crossAxisAlignment = CrossAxisAlignment::Stretch,
               .mainAxisSize = MainAxisSize::Min,
-              .spacing = theme.unit * 0.5f,
+              .spacing = theme.unit,
               .children =
                   {
                       Row::make({
@@ -91,7 +111,7 @@ WidgetRef listCard(const Theme& theme, const MenuButtonSpec& spec, std::string_v
                                   Text::make({.text = spec.trailing, .style = trailing}),
                               },
                       }),
-                      Text::make({.text = blurb, .style = labelStyle(theme)}),
+                      Text::make({.text = blurb, .style = description}),
                   },
           }),
       }));

@@ -5,7 +5,8 @@ description: Scrollable, Scrollbar and Overscroll around a keyed list, and what 
 
 import { Aside, LinkCard } from '@astrojs/starlight/components';
 
-Five asteroid fields, later ones locked. This is the step that exercises scrolling,
+Eight asteroid fields, later ones locked -- more than the viewport can show, so
+the list genuinely scrolls. This is the step that exercises scrolling,
 `WidgetList::generate`, keyed reconciliation, and the `enabled = false` path.
 
 ## The data
@@ -44,10 +45,6 @@ work too, right up until the vector reallocates.
 ## The list
 
 ```cpp title="docs/demo/src/ui/screens/level_select.cc"
-/// Level ids are stable strings rather than indices so a keyed element survives
-/// the list changing shape -- which it does the moment a level unlocks.
-constexpr const char* kLevelKeys[] = {"level.0", "level.1", "level.2", "level.3", "level.4"};
-
 WidgetRef levelSelectScreen(App& app, const Theme& theme) {
   const std::span<const LevelDef> table = levels();
   const Progress& progress = app.session().progress();
@@ -55,9 +52,12 @@ WidgetRef levelSelectScreen(App& app, const Theme& theme) {
   WidgetList items = WidgetList::generate(table.size(), [&](std::size_t i) -> WidgetRef {
     const LevelDef& def = table[i];
     const bool unlocked = progress.unlocked(i);
+    // The name is a static literal and unique, which is what a string key needs:
+    // a keyed element then survives the list changing shape, as it does the
+    // moment a level unlocks.
     return listCard(theme,
                     {
-                        .key = Key::of(kLevelKeys[i]),
+                        .key = Key::of(def.name),
                         .label = def.name,
                         .trailing = unlocked ? "READY" : "LOCKED",
                         .onPressed = [&app, i] { app.startLevel(i); },
@@ -106,8 +106,9 @@ Reconciling by position would work too, right up until the list changes length.
 
 ```cpp title="docs/demo/src/ui/screens/level_select.cc"
                   // A scrollable is non-lazy: every card is built and laid out
-                  // whether or not it is on screen. Five is fine; five thousand
-                  // would not be, and that limit is documented rather than hidden.
+                  // whether or not it is on screen. A handful is fine; five
+                  // thousand would not be, and that limit is documented rather
+                  // than hidden.
                   ConstrainedBox::make({
                       .constraints = {.maxHeight = 360.0f},
                       .child = Scrollbar::make({
@@ -180,8 +181,8 @@ indicator that wraps a scrollable is always built first.
 
 ## Not lazy, and it says so
 
-Every card is built and laid out whether or not it is visible. Five is fine; a few
-thousand would not be.
+Every card is built and laid out whether or not it is visible. A handful is fine;
+a few thousand would not be.
 
 That is the same choice Flutter made for `SingleChildScrollView`, and nothing
 about the position, the physics, the wheel or the scrollbar would change if lazy

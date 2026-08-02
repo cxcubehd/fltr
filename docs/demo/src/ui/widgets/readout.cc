@@ -138,7 +138,7 @@ WidgetRef gauge(const Theme& theme, std::string_view name, fltr::ValueListenable
   return Column::make({
       .crossAxisAlignment = CrossAxisAlignment::Stretch,
       .mainAxisSize = MainAxisSize::Min,
-      .spacing = theme.unit * 0.5f,
+      .spacing = theme.unit * 0.75f,
       .children =
           {
               label(theme, name),
@@ -152,7 +152,7 @@ WidgetRef statistic(const Theme& theme, std::string_view name, fltr::ValueListen
   return Column::make({
       .crossAxisAlignment = CrossAxisAlignment::Start,
       .mainAxisSize = MainAxisSize::Min,
-      .spacing = theme.unit * 0.25f,
+      .spacing = theme.unit * 0.75f,
       .children =
           {
               label(theme, name),

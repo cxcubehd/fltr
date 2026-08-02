@@ -103,8 +103,7 @@ Flutter's `SingleActivator` follows.
 ```cpp
 Shortcuts::make({
   .shortcuts = {
-    {.stroke = KeyStroke{.key = LogicalKey::Escape},    .onInvoke = [&] { app.togglePause(); }},
-    {.stroke = KeyStroke{.key = LogicalKey::Backspace}, .onInvoke = [&] { app.goBack(); }},
+    {.stroke = KeyStroke{.key = LogicalKey::Escape}, .onInvoke = [&] { app.back(); }},
   },
   .child = screen,
 })
@@ -113,6 +112,30 @@ Shortcuts::make({
 The braced list is a temporary, so entries are copied into the build arena and
 then copied again into the `State` when the configuration is adopted. A key
 arrives long after that arena was released.
+
+<Aside type="caution" title="A shortcut needs the focus to be inside it">
+Keys walk **up** from the focused node, so a `Shortcuts` below the focus never
+sees them -- and when nothing is focused, the walk starts at the root scope and
+reaches nothing at all. That is the right shape for a key that means something
+on one screen, and the wrong shape for a key that must always work: put that one
+where the platform hands events in, and act on what the UI declined.
+</Aside>
+
+## Autofocus is a claim, not a moment
+
+`autofocus` asks for the focus and keeps asking. Granted at once when nothing
+inside the enclosing scope holds it; remembered by the scope otherwise, and met
+the moment that scope is left with no focused child -- when the page that held
+it unmounts, or excludes itself on its way out. Without that, a screen built
+while the one it replaces is still animating away would ask once, be refused
+once, and leave the whole tree with no focus at all.
+
+```cpp
+FocusNode* pending = scope.pendingAutofocus();  // the claim, if one is outstanding
+```
+
+The first to ask wins, so an incoming page does not fight its own children for
+the focus.
 
 ## Physical versus logical keys
 

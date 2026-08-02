@@ -246,7 +246,7 @@ struct Args {
   bool canRequestFocus = true;
   bool skipTraversal = false;
   bool descendantsAreFocusable = true;
-  bool autofocus = false;              // takes focus on first build, if its scope has none
+  bool autofocus = false;              // claims the focus as soon as its scope has none
   bool ensureVisible = true;           // scroll into view, moving as little as possible
   float ensureVisibleDuration = 0.15f;
   Callback<bool(const KeyEvent&)> onKey;

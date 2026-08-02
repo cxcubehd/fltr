@@ -53,17 +53,9 @@ WidgetRef buildRoot(App& app) {
       // a tree without one holds no focus nodes and no key handlers. It is also
       // the traversal group, so tab and the arrow keys work inside it.
       .child = FocusScope::make({
-          .child = Shortcuts::make({
-              .shortcuts =
-                  {
-                      {.stroke = KeyStroke{.key = LogicalKey::Escape},
-                       .onInvoke = [&app] { app.togglePause(); }},
-                      {.stroke = KeyStroke{.key = LogicalKey::Backspace},
-                       .onInvoke = [&app] { app.goTo(Screen::MainMenu); }},
-                  },
-              // Nothing creates an overlay for you. One here, directly under the
-              // root, is what the pause panel is inserted into.
-              .child = Overlay::make({
+          // Nothing creates an overlay for you. One here, directly under the
+          // root, is what the pause panel is inserted into.
+          .child = Overlay::make({
                   .child = Watch<Screen>::make({
                       .value = &app.screen(),
                       .builder = [&app](BuildContext& context, const Screen& screen) -> WidgetRef {
@@ -101,15 +93,33 @@ WidgetRef buildRoot(App& app) {
 }
 ```
 
-Five wrappers, each doing exactly one thing:
+Four wrappers, each doing exactly one thing:
 
 | Layer | Why it is there |
 |---|---|
 | `ThemeScope` | one ambient value, O(1) read anywhere below |
 | `FocusScope` | brings the focus subsystem into existence; also the traversal group |
-| `Shortcuts` | Escape and Backspace, wherever the focus is |
 | `Overlay` | nothing creates one for you; the pause panel needs it |
 | `Watch<Screen>` | the router |
+
+There is deliberately no `Shortcuts` at the root. A shortcut is a focus node,
+and a key only reaches it on its way up from whatever is focused -- so a
+root-level Escape works right up until the focus is nowhere, which is exactly
+what a HUD looks like. Escape is app-wide, so it lives one layer lower, in the
+platform code that already asks the UI what it declined:
+
+```cpp title="docs/demo/src/platform/input.cc"
+const bool taken = binding.dispatchKey(KeyEvent{...});
+if (!taken && pair.logical == LogicalKey::Escape) backRequested_ = true;
+```
+
+```cpp title="docs/demo/src/app/loop.cc"
+app.input().pump(app.binding());
+if (app.input().backRequested()) app.back();
+```
+
+A shortcut *scoped to a screen* is still the right tool, and the main menu uses
+one for S and Q.
 
 ### The keys
 

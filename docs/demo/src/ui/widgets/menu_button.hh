@@ -19,12 +19,21 @@ struct MenuButtonSpec {
   bool autofocus = false;
 };
 
-/// A slim menu row: behaviour from `RawButton`, appearance from `StyledSurface`.
-/// The two never meet -- the button publishes states and the surface reads them
-/// through the ambient `ComponentScope`, so hovering this rebuilds nothing.
+/// Behaviour from `RawButton`, appearance from `StyledSurface`, and whatever
+/// body the caller wants between them. The two never meet -- the button
+/// publishes states and the surface reads them through the ambient
+/// `ComponentScope`, so hovering one rebuilds nothing.
+fltr::WidgetRef pressable(const Theme& theme, const MenuButtonSpec& spec, fltr::WidgetRef body);
+
+/// A slim menu row: a label, and a shortcut hint pushed to the right.
 fltr::WidgetRef menuButton(const Theme& theme, const MenuButtonSpec& spec);
 
 /// The same behaviour with a taller, two-line body, used by level select.
 fltr::WidgetRef listCard(const Theme& theme, const MenuButtonSpec& spec, std::string_view blurb);
+
+/// The header control every screen below the main menu carries: the same action
+/// Escape performs, so the way back is visible and not only remembered. Quiet
+/// on purpose -- it sits beside a title, not among the choices.
+fltr::WidgetRef backButton(const Theme& theme, fltr::Callback<void()> onPressed);
 
 }  // namespace demo

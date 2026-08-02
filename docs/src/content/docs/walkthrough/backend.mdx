@@ -252,21 +252,23 @@ full of invisible ones, and your backend never sees a degenerate group.
 
       case PaintOp::DrawRRect: {
         const Rect bounds = cmd.drawRRect.rect;
-        const Rectangle rec = toRectangle(bounds);
-        const float roundness = roundnessFor(cmd.drawRRect.radius, bounds);
+        if (bounds.isEmpty()) break;
+        const bool rounded = !cmd.drawRRect.radius.isZero();
+
         if (cmd.drawRRect.fill.a > 0) {
-          if (roundness <= 0.0f) {
-            DrawRectangleRec(rec, tinted(cmd.drawRRect.fill));
+          if (rounded) {
+            fillRounded(bounds, cmd.drawRRect.radius, tinted(cmd.drawRRect.fill));
           } else {
-            DrawRectangleRounded(rec, roundness, 8, tinted(cmd.drawRRect.fill));
+            DrawRectangleRec(toRectangle(bounds), tinted(cmd.drawRRect.fill));
           }
         }
         if (cmd.drawRRect.borderWidth > 0.0f && cmd.drawRRect.border.a > 0) {
-          if (roundness <= 0.0f) {
-            DrawRectangleLinesEx(rec, cmd.drawRRect.borderWidth, tinted(cmd.drawRRect.border));
+          if (rounded) {
+            strokeRounded(bounds, cmd.drawRRect.radius, cmd.drawRRect.borderWidth,
+                          tinted(cmd.drawRRect.border));
           } else {
-            DrawRectangleRoundedLinesEx(rec, roundness, 8, cmd.drawRRect.borderWidth,
-                                        tinted(cmd.drawRRect.border));
+            DrawRectangleLinesEx(toRectangle(bounds), cmd.drawRRect.borderWidth,
+                                 tinted(cmd.drawRRect.border));
           }
         }
         break;
@@ -274,20 +276,59 @@ full of invisible ones, and your backend never sees a degenerate group.
 ```
 
 `DrawRRect` is one command carrying fill and border, so both come out of one case.
-The zero-roundness branch is not an optimisation: raylib's rounded routines
-misbehave at roundness zero.
+
+raylib's own `DrawRectangleRounded` takes a single roundness as a fraction of the
+shorter side, which cannot express four independent radii, and its rounded line
+routine leaves a visible seam where the ring meets itself. So the geometry is
+built here instead: one outline, four radii, scaled down together when
+neighbours would overlap.
 
 ```cpp title="docs/demo/src/platform/backend.cc"
-/// raylib takes one roundness for the whole rectangle, as a fraction of half its
-/// shorter side, while fltr carries four corners with independent x and y radii.
-/// The top-left x radius is used for all four; the demo never asks for more, and
-/// the mismatch is recorded rather than hidden.
-float roundnessFor(const BorderRadius& radius, Rect bounds) noexcept {
-  const float half = std::min(bounds.width(), bounds.height()) * 0.5f;
-  if (half <= 0.0f) return 0.0f;
-  return std::clamp(radius.topLeft.x / half, 0.0f, 1.0f);
+Corners cornersFor(const BorderRadius& radius, Rect bounds) noexcept {
+  Corners corners{radius.topLeft.x, radius.topRight.x, radius.bottomRight.x, radius.bottomLeft.x};
+
+  float scale = 1.0f;
+  const auto fit = [&scale](float sum, float extent) {
+    if (sum > extent) scale = std::min(scale, extent / sum);
+  };
+  fit(corners.topLeft + corners.topRight, bounds.width());
+  fit(corners.bottomLeft + corners.bottomRight, bounds.width());
+  fit(corners.topLeft + corners.bottomLeft, bounds.height());
+  fit(corners.topRight + corners.bottomRight, bounds.height());
+  // ... scaled corners ...
 }
 ```
+
+The fill is a triangle fan over that outline. The border is one closed triangle
+strip between the outline and the same outline inset by the border width -- a
+ring with no seam to leave a gap or a double-blended overlap at:
+
+```cpp title="docs/demo/src/platform/backend.cc"
+void Backend::strokeRounded(Rect bounds, const BorderRadius& radius, float width, ::Color color) {
+  const Corners corners = cornersFor(radius, bounds);
+  const float thickness = std::min(width, std::min(bounds.width(), bounds.height()) * 0.5f);
+  const int steps = arcSteps(largest(corners));
+
+  buildOutline(outline_, bounds, corners, steps);
+  buildOutline(innerOutline_, /* bounds inset by thickness */, inset(corners, thickness), steps);
+
+  ring_.clear();
+  for (std::size_t i = 0; i < outline_.size(); ++i) {
+    ring_.push_back(innerOutline_[i]);
+    ring_.push_back(outline_[i]);
+  }
+  ring_.push_back(innerOutline_.front());
+  ring_.push_back(outline_.front());
+  DrawTriangleStrip(ring_.data(), static_cast<int>(ring_.size()), color);
+}
+```
+
+<Aside type="caution" title="Winding is not decoration">
+raylib enables backface culling and treats counter-clockwise as front-facing, so
+an outline wound the other way draws nothing at all. Both outlines here are wound
+the way raylib winds its own shapes, and the strip pairs them inner-first for the
+same reason.
+</Aside>
 
 ### Images
 

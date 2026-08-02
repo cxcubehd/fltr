@@ -225,7 +225,7 @@ Correct when only the painting changes with the state, which is nearly always.
 Behaviour and appearance, wired together and still not aware of each other:
 
 ```cpp title="docs/demo/src/ui/widgets/menu_button.cc"
-WidgetRef shell(const Theme& theme, const MenuButtonSpec& spec, WidgetRef body) {
+WidgetRef pressable(const Theme& theme, const MenuButtonSpec& spec, WidgetRef body) {
   SurfaceStyle style = spec.selected ? listItemStyle(theme) : buttonStyle(theme);
   style.pressScale = 0.985f;
 
@@ -245,7 +245,7 @@ WidgetRef menuButton(const Theme& theme, const MenuButtonSpec& spec) {
   TextStyle trailing = labelStyle(theme);
   if (!spec.enabled) trailing.color = theme.textFaint;
 
-  return shell(theme, spec,
+  return pressable(theme, spec,
                Padding::make({
                    .padding = EdgeInsets::symmetric(theme.unit * 1.75f, theme.unit * 1.25f),
                    .child = Row::make({

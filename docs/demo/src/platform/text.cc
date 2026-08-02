@@ -29,6 +29,13 @@ struct Token {
 
 bool isSpace(char c) noexcept { return c == ' ' || c == '\t'; }
 
+/// Rasterisation sizes are clamped so that a nonsense style cannot ask for a
+/// gigabyte of atlas, and the baseline ratio is read from a size in the middle
+/// of that range where the hinting is representative.
+constexpr int kMinSize = 6;
+constexpr int kMaxSize = 128;
+constexpr float kReferenceSize = 32.0f;
+
 /// A run under construction: which span it came from and how much of it is on
 /// the current line so far.
 struct PendingRun {
@@ -40,43 +47,85 @@ struct PendingRun {
 
 }  // namespace
 
-RaylibTextService::RaylibTextService(std::span<const char* const> fontPaths, int atlasSize) {
+RaylibTextService::RaylibTextService(std::span<const char* const> fontPaths) {
   for (const char* path : fontPaths) {
-    if (path == nullptr || !FileExists(path)) continue;
-    font_ = LoadFontEx(path, atlasSize, nullptr, 0);
-    ownsFont_ = font_.glyphCount > 0;
-    if (ownsFont_) break;
+    if (path != nullptr && FileExists(path)) {
+      fontFile_ = path;
+      break;
+    }
   }
-  if (!ownsFont_) font_ = GetFontDefault();
 
   // The baseline is derived from the font rather than guessed: raylib places a
   // glyph at `offsetY` below the line top, so the bottom of a capital letter is
   // where the baseline sits. fltr's placeholder service hardcodes this ratio and
   // says so; a real one should not.
-  const int index = GetGlyphIndex(font_, 'H');
-  if (index >= 0 && index < font_.glyphCount && font_.baseSize > 0) {
-    const float top = static_cast<float>(font_.glyphs[index].offsetY);
-    const float height = font_.recs[index].height;
-    ascentRatio_ = (top + height) / static_cast<float>(font_.baseSize);
+  const Font reference = fontFor(kReferenceSize);
+  const int index = GetGlyphIndex(reference, 'H');
+  if (index >= 0 && index < reference.glyphCount && reference.baseSize > 0) {
+    const float top = static_cast<float>(reference.glyphs[index].offsetY);
+    const float height = reference.recs[index].height;
+    const float em = static_cast<float>(reference.baseSize);
+    ascentRatio_ = (top + height) / em;
+    capRatio_ = height / em;
   }
 
   slots_.reserve(64);
 }
 
 RaylibTextService::~RaylibTextService() {
-  if (ownsFont_) UnloadFont(font_);
+  for (const Atlas& atlas : atlases_) {
+    if (atlas.owned) UnloadFont(atlas.font);
+  }
+}
+
+Font RaylibTextService::fontFor(float size) const {
+  const int pixels = std::clamp(static_cast<int>(std::lround(size)), kMinSize, kMaxSize);
+  for (const Atlas& atlas : atlases_) {
+    if (atlas.pixels == pixels) return atlas.font;
+  }
+
+  Atlas atlas{.pixels = pixels, .font = {}, .owned = !fontFile_.empty()};
+  if (atlas.owned) atlas.font = LoadFontEx(fontFile_.c_str(), pixels, nullptr, 0);
+  if (atlas.font.glyphCount <= 0) {
+    atlas.font = GetFontDefault();
+    atlas.owned = false;
+  }
+  // Glyphs are drawn at the size they were rasterised at, so this only matters
+  // for the built-in fallback and for a style that lands between two sizes --
+  // but when resampling does happen, smooth beats blocky.
+  SetTextureFilter(atlas.font.texture, TEXTURE_FILTER_BILINEAR);
+  return atlases_.emplace_back(atlas).font;
 }
 
 float RaylibTextService::ascent(const TextStyle& style) const noexcept {
   return style.size * ascentRatio_;
 }
 
+float RaylibTextService::baselineIn(const TextStyle& style) const noexcept {
+  // The line box holds its text centred on the capitals rather than on the
+  // font's own box, so the space above a capital equals the space below the
+  // baseline. Hanging the glyphs from the top of the box instead -- which is
+  // what leaving the leading under the baseline amounts to -- is what makes
+  // every padded panel in a UI look bottom-heavy.
+  return (style.size * style.lineHeight + style.size * capRatio_) * 0.5f;
+}
+
 float RaylibTextService::measure(const TextStyle& style, const char* text,
                                  std::size_t length) const {
   if (length == 0) return 0.0f;
   scratch_.assign(text, length);
-  const Vector2 size = MeasureTextEx(font_, scratch_.c_str(), style.size, style.letterSpacing);
+  const Vector2 size =
+      MeasureTextEx(fontFor(style.size), scratch_.c_str(), style.size, style.letterSpacing);
   return size.x;
+}
+
+float RaylibTextService::capHeightOf(const Slot& slot, const LineMetrics& line) const noexcept {
+  float cap = 0.0f;
+  for (std::uint32_t r = line.runBegin; r < line.runBegin + line.runCount; ++r) {
+    cap = std::max(cap, slot.styles[slot.runs[r].spanIndex].size * capRatio_);
+  }
+  if (cap == 0.0f && !slot.styles.empty()) cap = slot.styles.front().size * capRatio_;
+  return cap;
 }
 
 RaylibTextService::Slot& RaylibTextService::slotFor(ParagraphHandle handle) {
@@ -143,10 +192,11 @@ ParagraphHandle RaylibTextService::acquire(const ParagraphSpec& spec, float maxW
   auto flushLine = [&]() {
     if (lineRuns.empty()) {
       // An empty line still occupies one line box, sized by the first style.
-      const float size = slot.styles.empty() ? 14.0f : slot.styles.front().size;
-      const float height = size * (slot.styles.empty() ? 1.2f : slot.styles.front().lineHeight);
+      const TextStyle style = slot.styles.empty() ? TextStyle{.size = 14.0f, .lineHeight = 1.2f}
+                                                  : slot.styles.front();
+      const float height = style.size * style.lineHeight;
       slot.lines.push_back(LineMetrics{.bounds = Rect::fromLTWH(0.0f, top, 0.0f, height),
-                                       .baseline = size * ascentRatio_,
+                                       .baseline = baselineIn(style),
                                        .runBegin = static_cast<std::uint32_t>(slot.runs.size()),
                                        .runCount = 0});
       top += height;
@@ -157,8 +207,8 @@ ParagraphHandle RaylibTextService::acquire(const ParagraphSpec& spec, float maxW
     float depth = 0.0f;
     for (const PendingRun& run : lineRuns) {
       const TextStyle& style = slot.styles[run.span];
-      baseline = std::max(baseline, ascent(style));
-      depth = std::max(depth, style.size * style.lineHeight - ascent(style));
+      baseline = std::max(baseline, baselineIn(style));
+      depth = std::max(depth, style.size * style.lineHeight - baselineIn(style));
     }
     const float height = baseline + depth;
 
@@ -249,9 +299,30 @@ ParagraphHandle RaylibTextService::acquire(const ParagraphSpec& spec, float maxW
     }
   }
 
+  // 4. Leading trim. The box a paragraph reports is the text itself -- cap top
+  //    to baseline -- rather than the font's line boxes, so the padding around
+  //    it is the whole of the space that shows and a label above a number is as
+  //    far from its panel's top edge as the number is from the bottom. Between
+  //    lines the full line height still applies.
+  float trimTop = 0.0f;
+  float trimBottom = 0.0f;
+  if (!slot.lines.empty()) {
+    const LineMetrics& first = slot.lines.front();
+    const LineMetrics& last = slot.lines.back();
+    trimTop = std::max(0.0f, first.baseline - capHeightOf(slot, first));
+    trimBottom = std::max(0.0f, last.bounds.height() - last.baseline);
+    for (PositionedRun& run : slot.runs) run.offset.dy -= trimTop;
+    for (LineMetrics& line : slot.lines) {
+      line.bounds.top -= trimTop;
+      line.bounds.bottom -= trimTop;
+    }
+  }
+
   slot.metrics = ParagraphMetrics{
-      .size = Size{bounded ? std::min(widest, maxWidth) : widest, top},
-      .firstBaseline = slot.lines.empty() ? 0.0f : slot.lines.front().baseline,
+      .size = Size{bounded ? std::min(widest, maxWidth) : widest,
+                   std::max(0.0f, top - trimTop - trimBottom)},
+      .firstBaseline =
+          slot.lines.empty() ? 0.0f : slot.lines.front().bounds.top + slot.lines.front().baseline,
       .lastBaseline = slot.lines.empty()
                           ? 0.0f
                           : slot.lines.back().bounds.top + slot.lines.back().baseline,
@@ -330,9 +401,10 @@ void RaylibTextService::draw(ParagraphHandle handle, Offset origin, Color tint) 
 
     // raylib positions text by the top-left of its line box, which is exactly
     // what a `PositionedRun` offset is, so no baseline arithmetic is needed here.
-    DrawTextEx(font_, scratch_.c_str(),
-               Vector2{origin.dx + run.offset.dx, origin.dy + run.offset.dy}, style.size,
-               style.letterSpacing, colour);
+    // Rounding to whole pixels keeps a glyph on the texel grid it was rasterised
+    // on, which is the difference between a crisp stem and a grey one.
+    const Vector2 at{std::round(origin.dx + run.offset.dx), std::round(origin.dy + run.offset.dy)};
+    DrawTextEx(fontFor(style.size), scratch_.c_str(), at, style.size, style.letterSpacing, colour);
   }
 }
 

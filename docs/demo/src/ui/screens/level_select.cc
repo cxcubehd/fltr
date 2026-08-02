@@ -22,14 +22,6 @@ using fltr::Scrollbar;
 using fltr::WidgetList;
 using fltr::WidgetRef;
 
-namespace {
-
-/// Level ids are stable strings rather than indices so a keyed element survives
-/// the list changing shape -- which it does the moment a level unlocks.
-constexpr const char* kLevelKeys[] = {"level.0", "level.1", "level.2", "level.3", "level.4"};
-
-}  // namespace
-
 WidgetRef levelSelectScreen(App& app, const Theme& theme) {
   const std::span<const LevelDef> table = levels();
   const Progress& progress = app.session().progress();
@@ -37,9 +29,12 @@ WidgetRef levelSelectScreen(App& app, const Theme& theme) {
   WidgetList items = WidgetList::generate(table.size(), [&](std::size_t i) -> WidgetRef {
     const LevelDef& def = table[i];
     const bool unlocked = progress.unlocked(i);
+    // The name is a static literal and unique, which is what a string key needs:
+    // a keyed element then survives the list changing shape, as it does the
+    // moment a level unlocks.
     return listCard(theme,
                     {
-                        .key = Key::of(kLevelKeys[i]),
+                        .key = Key::of(def.name),
                         .label = def.name,
                         .trailing = unlocked ? "READY" : "LOCKED",
                         .onPressed = [&app, i] { app.startLevel(i); },
@@ -62,12 +57,13 @@ WidgetRef levelSelectScreen(App& app, const Theme& theme) {
               {
                   Row::make({
                       .children = {title(theme, "Select a field"), spacer(),
-                                   label(theme, "BACKSPACE TO GO BACK")},
+                                   backButton(theme, [&app] { app.back(); })},
                   }),
                   divider(theme),
                   // A scrollable is non-lazy: every card is built and laid out
-                  // whether or not it is on screen. Five is fine; five thousand
-                  // would not be, and that limit is documented rather than hidden.
+                  // whether or not it is on screen. A handful is fine; five
+                  // thousand would not be, and that limit is documented rather
+                  // than hidden.
                   ConstrainedBox::make({
                       .constraints = {.maxHeight = 360.0f},
                       .child = Scrollbar::make({

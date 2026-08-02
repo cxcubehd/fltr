@@ -50,11 +50,10 @@ WidgetRef panelFor(App& app, const Theme& theme, Outcome outcome) {
                           Column::make({
                               .crossAxisAlignment = CrossAxisAlignment::Stretch,
                               .mainAxisSize = MainAxisSize::Min,
-                              .spacing = theme.unit * 0.5f,
+                              .spacing = theme.unit,
                               .children =
                                   {
-                                      bare(EdgeInsets::symmetric(theme.unit * 1.75f,
-                                                                 theme.unit * 1.25f),
+                                      bare(EdgeInsets::all(theme.unit * 1.75f),
                                            Row::make({
                                                .children = {title(theme, headlineFor(outcome)),
                                                             spacer(),
@@ -65,7 +64,7 @@ WidgetRef panelFor(App& app, const Theme& theme, Outcome outcome) {
                                                  {
                                                      .key = Key::of("pause.resume"),
                                                      .label = over ? "Fly again" : "Resume",
-                                                     .trailing = "ESC",
+                                                     .trailing = over ? "ENTER" : "ESC",
                                                      .onPressed =
                                                          [&app] {
                                                            if (app.session().outcome.value() !=

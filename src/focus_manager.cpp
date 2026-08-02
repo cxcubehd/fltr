@@ -83,12 +83,32 @@ bool FocusManager::requestFocus(FocusNode& node) {
   return true;
 }
 
+void FocusManager::autofocus(FocusNode& node) {
+  FocusScopeNode* scope = node.enclosingScope();
+  if (!scope) return;
+  if (scope->focusedChild_ == nullptr && requestFocus(node)) return;
+  // Refused because something else in this scope holds the focus. The claim is
+  // kept rather than dropped, and the first to ask wins -- so a screen built
+  // behind the one it replaces is focused as soon as that one is gone, and does
+  // not steal the focus in the meantime.
+  if (scope->pendingAutofocus_ == nullptr) scope->pendingAutofocus_ = &node;
+}
+
+void FocusManager::grantPendingAutofocus(FocusScopeNode& scope) {
+  FocusNode* pending = scope.pendingAutofocus_;
+  if (pending == nullptr || scope.focusedChild_ != nullptr) return;
+  // The claim survives a refusal: a node that is between parents this instant --
+  // an element reconciled onto another one's slot -- asks again from `attach`.
+  if (requestFocus(*pending)) scope.pendingAutofocus_ = nullptr;
+}
+
 void FocusManager::unfocus(FocusNode& node) {
   if (!primary_ || (primary_ != &node && !primary_->isDescendantOf(node))) return;
   FocusScopeNode* scope = node.enclosingScope();
   // Forgotten as well as left, or the scope would hand the focus straight back.
   if (scope) scope->focusedChild_ = nullptr;
   setPrimary(scope);
+  if (scope) grantPendingAutofocus(*scope);
 }
 
 void FocusManager::setPrimary(FocusNode* node) {
@@ -124,21 +144,41 @@ void FocusManager::setPrimary(FocusNode* node) {
 
 void FocusManager::willDetach(FocusNode& node) {
   std::replace(dispatching_.begin(), dispatching_.end(), &node, static_cast<FocusNode*>(nullptr));
+  const auto leaving = [&node](const FocusNode* other) {
+    return other != nullptr && (other == &node || other->isDescendantOf(node));
+  };
   for (FocusNode* walk = node.parent(); walk; walk = walk->parent()) {
     FocusScopeNode* scope = walk->asScope();
-    if (!scope || !scope->focusedChild_) continue;
-    if (scope->focusedChild_ == &node || scope->focusedChild_->isDescendantOf(node)) {
-      scope->focusedChild_ = nullptr;
-    }
+    if (!scope) continue;
+    if (leaving(scope->focusedChild_)) scope->focusedChild_ = nullptr;
+    if (leaving(scope->pendingAutofocus_)) scope->pendingAutofocus_ = nullptr;
   }
-  if (!primary_ || (primary_ != &node && !primary_->isDescendantOf(node))) return;
-  setPrimary(node.enclosingScope());
+
+  FocusScopeNode* scope = node.enclosingScope();
+  if (primary_ && (primary_ == &node || primary_->isDescendantOf(node))) setPrimary(scope);
+  // The screen that held the focus is going away, which is the moment a screen
+  // built behind it has been waiting for. Checked even when this node was not
+  // the focused one: an excluded subtree hands the focus back to its scope
+  // before it unmounts, and the claim is still outstanding when it does.
+  if (scope) grantPendingAutofocus(*scope);
 }
 
 void FocusManager::didChangePolicy(FocusNode& node) {
   if (!primary_ || (primary_ != &node && !primary_->isDescendantOf(node))) return;
   if (primary_->isFocusable()) return;
-  setPrimary(node.isFocusable() ? &node : node.enclosingScope());
+
+  FocusScopeNode* scope = node.enclosingScope();
+  if (node.isFocusable()) {
+    setPrimary(&node);
+    return;
+  }
+  // A subtree that has just excluded itself -- a page on its way out -- is
+  // forgotten as well as left. Remembering it would keep the scope looking
+  // occupied to anything else that wants the focus, which is what an incoming
+  // page's autofocus is.
+  if (scope) scope->focusedChild_ = nullptr;
+  setPrimary(scope);
+  if (scope) grantPendingAutofocus(*scope);
 }
 
 std::size_t FocusManager::nodeCount() const noexcept {

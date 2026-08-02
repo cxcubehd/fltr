@@ -22,6 +22,12 @@ public:
   /// What the ship should do this frame: whatever the UI did not consume.
   const ShipInput& ship() const noexcept { return ship_; }
 
+  /// Escape was pressed and nothing in the UI took it. A shortcut only fires
+  /// while the focus is inside the subtree that declares it, and a HUD has no
+  /// reason to hold the focus at all -- so the app-wide meaning of Escape lives
+  /// here, on the same "whatever the UI declined" footing as the ship's keys.
+  bool backRequested() const noexcept { return backRequested_; }
+
   /// Set while a menu is up, so held movement keys stop reaching the ship even
   /// though raylib still reports them as down.
   void setGameHasFocus(bool value) noexcept { gameHasFocus_ = value; }
@@ -35,6 +41,7 @@ private:
   fltr::Offset lastPointer_{-1.0f, -1.0f};
   bool pointerDown_ = false;
   bool gameHasFocus_ = false;
+  bool backRequested_ = false;
 };
 
 /// Exposed for the walkthrough and for the headless smoke test, which

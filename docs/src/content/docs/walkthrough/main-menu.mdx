@@ -121,8 +121,8 @@ from two facts:
 | Tab / Shift-Tab | next / previous, wrapping | `FocusManager::nextFocus`, build order |
 | ↑ ↓ ← → | nearest node in that direction | `moveFocusInDirection`, geometric with an overlap band |
 | Enter / Space | activate | `RawButton`'s own key handler |
-| Escape | `togglePause()` | `Shortcuts` at the root |
-| Backspace | back to the menu | `Shortcuts` at the root |
+| Escape | `back()` | the platform layer, when the UI declines it |
+| S / Q | settings / quit | `Shortcuts` around the main menu |
 
 <Aside type="tip" title="A tree with no FocusScope pays nothing">
 Remove the scope and every `RawButton` in the tree becomes pointer-only. No node
@@ -142,21 +142,33 @@ framework says so plainly rather than sorting geometrically.
 ## Escape means different things
 
 ```cpp title="docs/demo/src/app/app.cc"
-void App::togglePause() {
+void App::back() {
   if (screen_.value() != Screen::Playing) {
-    // Escape outside gameplay means "back", not "pause".
-    goTo(screen_.value() == Screen::MainMenu ? Screen::MainMenu : Screen::MainMenu);
+    goTo(Screen::MainMenu);
     return;
   }
-  // A finished run cannot be un-paused: its panel is the result screen.
-  if (session_.outcome.value() != Outcome::Flying) return;
-  setPaused(!paused_.value());
+  // A run that is over has no state left to return to, so its panel leads back
+  // to the level list rather than into a paused field.
+  if (session_.outcome.value() != Outcome::Flying) {
+    abandonRun();
+    goTo(Screen::LevelSelect);
+    return;
+  }
+  togglePause();
 }
 ```
 
-One registration at the root, with the meaning resolved from app state. A
-`Shortcuts` per screen would mean four registrations and four chances for two of
-them to be live at once during a page transition.
+One place decides, with the meaning resolved from app state, and the floor is
+the main menu: Escape navigates, and never leaves the demo. The window agrees --
+`SetExitKey(KEY_NULL)` takes the key back from raylib, which would otherwise
+close the window before the UI ever saw it.
+
+It is not a root `Shortcuts`, because a shortcut only fires while the focus is
+inside the subtree that declares it and a HUD has no reason to hold the focus at
+all. Escape is offered to the UI first and taken by the app when nothing there
+wanted it -- the same bargain the ship's keys already make. Letters that mean
+something on one screen only, like S and Q here, *are* a `Shortcuts`, wrapped
+around that screen.
 
 ## Callbacks and the 32-byte budget
 

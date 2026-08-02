@@ -25,6 +25,13 @@ void FocusNode::attach(FocusNode& parent) {
   parent_ = &parent;
   parent.children_.push_back(this);
   setManager(parent.manager_);
+
+  // An autofocus claim made while this node was somewhere else, or before it had
+  // a manager at all, is met here rather than dropped.
+  if (manager_ == nullptr) return;
+  if (FocusScopeNode* scope = enclosingScope(); scope && scope->pendingAutofocus() == this) {
+    manager_->grantPendingAutofocus(*scope);
+  }
 }
 
 void FocusNode::detach() {
@@ -81,6 +88,10 @@ bool FocusNode::isDescendantOf(const FocusNode& ancestor) const noexcept {
 }
 
 bool FocusNode::requestFocus() { return manager_ != nullptr && manager_->requestFocus(*this); }
+
+void FocusNode::autofocus() {
+  if (manager_) manager_->autofocus(*this);
+}
 
 void FocusNode::unfocus() {
   if (manager_) manager_->unfocus(*this);
