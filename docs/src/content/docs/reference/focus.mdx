@@ -1,0 +1,300 @@
+---
+title: focus
+description: FocusNode, FocusScopeNode, the manager and its one key walk, plus the Focus / FocusScope / Shortcuts widgets.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+`include/fltr/focus/` plus `include/fltr/widgets/focus.hpp`. Architecture:
+[Focus and keyboard](/fltr/architecture/focus-and-keyboard/).
+
+The property the whole subsystem is built around: **a tree with no `FocusScope` in
+it is pointer-only by construction**, holds no manager, registers no key handler
+and pays nothing for the fact that any of this exists.
+
+## `FocusNode`
+
+`fltr/focus/node.hpp`.
+
+```cpp
+enum class TraversalDirection : std::uint8_t { Up, Down, Left, Right };
+
+class FocusNode : public Listenable {
+public:
+  void attach(FocusNode& parent);
+  void detach();
+  bool attached() const noexcept;          // part of a live focus tree
+
+  void setCanRequestFocus(bool);           bool canRequestFocus() const noexcept;
+  void setSkipTraversal(bool);             bool skipTraversal() const noexcept;
+  void setDescendantsAreFocusable(bool);   bool descendantsAreFocusable() const noexcept;
+
+  bool hasPrimaryFocus() const noexcept;
+  bool hasFocus() const noexcept;          // this node or something below it
+  bool isFocusable() const noexcept;
+  bool isTraversable() const noexcept;
+
+  bool requestFocus();
+  void unfocus();                          // hands focus back to the enclosing scope
+
+  FocusNode* parent() const noexcept;
+  FocusManager* manager() const noexcept;
+  std::span<FocusNode* const> children() const noexcept;
+  FocusScopeNode* enclosingScope() const noexcept;
+  bool isDescendantOf(const FocusNode& ancestor) const noexcept;
+  virtual FocusScopeNode* asScope() noexcept;    // null for an ordinary node
+
+  Rect rect() const;                       // root space; empty while detached
+  void setElement(const Element* element) noexcept;
+
+  Callback<bool(const KeyEvent&)> onKey;   // true consumes
+};
+```
+
+Owned by exactly one `State` — the component's own, or the consumer's when it
+supplied one — and referred to non-owningly by everything else.
+
+A node is **inert until attached under a scope**. With no `FocusScope` above it
+there is no parent to attach to, no manager, no key handler and no place in any
+traversal order — so a component holds its node either way and costs nothing for
+it.
+
+It is a `Listenable` and notifies whenever this subtree gains or loses the focus,
+so a component publishes its focused state **without rebuilding**.
+
+The three policy axes are Flutter's own, not invented ones:
+
+| Setting | Meaning |
+|---|---|
+| `canRequestFocus = false` | never focusable at all — a HUD element with no business in a menu's tab order |
+| `skipTraversal = true` | focusable by click or programmatically, never reached by Tab or a D-pad |
+| `descendantsAreFocusable = false` | excludes the whole subtree — Flutter's `ExcludeFocus` |
+
+`asScope()` exists for the reason `asPointerRegion` does: a scope is told apart
+from an ordinary node without RTTI.
+
+`rect()` is what directional traversal and scroll-into-view both read.
+
+`attach` re-parents, which a `Focus` widget does from its build — the one phase in
+which the ambient scope is known. Re-attaching to the same parent does nothing, so
+an ordinary rebuild costs nothing here.
+
+## `FocusScopeNode`
+
+```cpp
+class FocusScopeNode final : public FocusNode {
+public:
+  FocusScopeNode();                            // sets skipTraversal(true)
+  FocusScopeNode* asScope() noexcept override;
+
+  FocusNode* focusedChild() const noexcept;    // most recent within this scope
+
+  void setTabTraversal(bool) noexcept;         bool tabTraversal() const noexcept;
+  void setDirectionalTraversal(bool) noexcept; bool directionalTraversal() const noexcept;
+};
+```
+
+Remembers which of its descendants last held the focus, so a scope regaining it
+lands where it left off rather than at the top.
+
+Both traversal flags off makes the scope a **pure container**: keys still reach the
+focused node and the shortcuts above it, and nothing moves on its own.
+
+<Aside type="note" title="Divergence: a scope is also the traversal group">
+Flutter separates `FocusScope` from `FocusTraversalGroup`, so one scope may
+contain several independent tab orders. Here Tab wraps within the innermost
+enclosing scope and the arrows search inside it. The cost is that two independent
+orders need two nested scopes rather than two groups in one — which is how it
+would be written anyway.
+</Aside>
+
+## `FocusManager`
+
+`fltr/focus/manager.hpp`.
+
+```cpp
+class FocusManager final : public KeyHandler {
+public:
+  FocusManager(KeyboardBinding& keyboard, FocusScopeNode& root);
+
+  FocusScopeNode* rootScope() const noexcept;    // null once that node died
+  FocusNode* primaryFocus() const noexcept;
+
+  bool requestFocus(FocusNode& node);
+  void unfocus(FocusNode& node);
+
+  bool nextFocus();
+  bool previousFocus();
+  bool moveFocusInDirection(TraversalDirection direction);
+
+  bool handleKey(const KeyEvent& event) override;
+
+  std::size_t nodeCount() const noexcept;
+};
+```
+
+Owned by the **outermost `FocusScope` in a tree, not by the binding** — which is
+exactly what makes a tree without one cost nothing.
+
+`rootScope()` goes null once the scope node the manager was built around has been
+destroyed, which a consumer's own node may well be before the tree that named it.
+The two clear each other's pointer, as `ScrollController` and `ScrollPosition` do.
+
+`requestFocus` focuses `node`, or the node a scope remembers when `node` is one.
+It is refused, and **reported** as refused, when the node is not focusable.
+
+<Aside type="note" title="Divergence: one walk, not four layers">
+Flutter routes a key through `HardwareKeyboard`, then the focus chain, then
+`Shortcuts` and `Actions` as separate layers, with `Intent` in between so an
+ancestor can re-target what a descendant means. Here there is **one walk**: every
+node on the chain from the focused node to the root is offered the event, and
+traversal is what is left when none of them took it.
+
+The cost: a shortcut is bound to its callback where it is declared, rather than to
+an intent something else can re-bind.
+</Aside>
+
+<Aside type="note" title="Divergence: build-order tab traversal">
+Flutter's default policy sorts geometrically into reading order. This is Flutter's
+*other* policy, `WidgetOrderTraversalPolicy`, chosen because source order is what
+the author of a menu already controls and because it needs no rects, so it works
+before the first layout.
+
+The cost: a two-column form tabs down the columns only if it was built that way.
+</Aside>
+
+Directional traversal takes the nearest traversable node beyond this one's centre
+in that direction, **preferring one whose extent overlaps** the current node's on
+the other axis — the overlap band that makes a D-pad feel right in a column of
+buttons.
+
+`nodeCount()` is the "focus costs nothing where it is not used" claim as a number.
+
+The manager's walk vectors are members, so neither a key nor a focus move
+allocates once the high-water mark is reached — and a node destroyed from its own
+callback can blank itself out of the walk. A `notifyGeneration_` counter ends the
+outer walk when a listener moves the focus again from its own callback.
+
+---
+
+## `OwnedFocusNode<Node>`
+
+`fltr/widgets/focus.hpp`.
+
+```cpp
+template <class Node>
+class OwnedFocusNode {
+public:
+  template <class T, void (T::*M)()> void bind(Node* supplied, T* observer);
+  Node* get() const noexcept;   // null once a consumer-supplied node has been destroyed
+  void release();
+};
+```
+
+The subscription is both how focus changes arrive **and** how this knows a
+consumer's node is still alive — a `Subscription` unhooks itself when its
+`Listenable` is destroyed, so no second pointer has to be kept in step.
+
+`release()` detaches explicitly rather than leaving it to the destructor, and the
+subscription first: a subtree unmounts entirely before any of it is destroyed, and
+a node detaching moves the focus, which must not come back as a callback on a
+`State` whose element is already gone.
+
+## `FocusMarker`
+
+```cpp
+class FocusMarker final : public Configure<FocusMarker, InheritedWidget> {
+public:
+  struct Args { Key key; FocusNode* node = nullptr; WidgetRef child; };
+  static FocusNode* of(BuildContext& context);   // null when there is no focus tree
+};
+```
+
+The nearest enclosing focus node, which is what a `Focus` below attaches to.
+Published **only where there is a focus tree at all**.
+
+<Aside type="caution" title="The accepted mirror image">
+Introducing a scope *above* an already-mounted subtree changes its shape, so that
+subtree is inflated afresh. That is the price of the marker being absent when
+there is no focus tree.
+</Aside>
+
+## `FocusScope`
+
+```cpp
+struct Args {
+  Key key;
+  FocusScopeNode* node = nullptr;      // consumer-owned; the only way in from outside
+  bool tabTraversal = true;
+  bool directionalTraversal = true;    // off when the arrows belong to the game
+  WidgetRef child;
+};
+```
+
+Introduces a focus tree, and with it the one key handler the whole subsystem
+registers.
+
+A dialog that should keep the keyboard to itself is therefore just a scope, and
+needs nothing else to trap traversal.
+
+## `Focus`
+
+```cpp
+struct Args {
+  Key key;
+  FocusNode* node = nullptr;           // null means the State owns one
+  bool canRequestFocus = true;
+  bool skipTraversal = false;
+  bool descendantsAreFocusable = true;
+  bool autofocus = false;              // takes focus on first build, if its scope has none
+  bool ensureVisible = true;           // scroll into view, moving as little as possible
+  float ensureVisibleDuration = 0.15f;
+  Callback<bool(const KeyEvent&)> onKey;
+  Callback<void(bool)> onFocusChange;
+  WidgetRef child;
+};
+```
+
+One focusable place, and the keys that reach it. With no focus tree above, none of
+it exists: no node is attached, no key arrives, and the subtree behaves exactly as
+it would have without the widget.
+
+`ensureVisible` is what makes a menu taller than its viewport navigable at all.
+
+## `Shortcuts`
+
+```cpp
+struct KeyStroke {
+  LogicalKey key = LogicalKey::None;
+  KeyModifiers modifiers;
+  friend constexpr bool operator==(KeyStroke, KeyStroke) noexcept = default;
+};
+
+struct Shortcut { KeyStroke stroke; Callback<void()> onInvoke; };
+
+class ShortcutList {
+public:
+  ShortcutList(std::initializer_list<Shortcut> shortcuts);
+  std::size_t size() const noexcept;
+  const Shortcut* begin() const noexcept;
+  const Shortcut* end() const noexcept;
+};
+
+class Shortcuts final : public Configure<Shortcuts, StatefulWidget> {
+  struct Args { Key key; ShortcutList shortcuts; WidgetRef child; };
+};
+```
+
+Key combinations that fire while the focus is anywhere inside this subtree. It is
+a focus node that never takes the focus, so keys reach it on their way up the
+chain from whatever is focused below.
+
+Modifiers are matched **exactly** — Ctrl-S is not Ctrl-Shift-S, which is what
+Flutter's `SingleActivator` does too.
+
+The braced list at the call site is a temporary, so entries are copied into the
+build arena, the same bargain `WidgetList` makes. The `State` then copies them out
+of the arena **when the configuration arrives**, not when the widget builds: the
+entries belong to the build that made them, and a key arrives long after that arena
+was released. Assignment reuses the capacity, so a rebuild with the same number of
+shortcuts allocates nothing.

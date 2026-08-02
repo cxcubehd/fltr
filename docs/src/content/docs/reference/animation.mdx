@@ -1,0 +1,275 @@
+---
+title: animation
+description: The ticker registry and its delta clock, curves as function pointers, AnimationDriver, Tween / AnimatedValue, and the four simulations.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Everything in `include/fltr/animation/`. Architecture:
+[Animation](/fltr/architecture/animation/).
+
+## `TickerRegistry` and `Ticker`
+
+`fltr/animation/ticker.hpp`.
+
+```cpp
+class TickerRegistry {
+public:
+  void tick(float seconds);                          // one frame's elapsed time
+  float delta() const noexcept;
+  bool hasActiveTickers() const noexcept;
+  std::size_t activeTickerCount() const noexcept;
+};
+```
+
+The frame clock. Time comes from the consumer's game loop, so this holds the
+current frame's elapsed seconds and every active ticker reads it from here. The
+elapsed time is variable by nature — the consumer's loop is not vsync-driven and
+may run at any rate. Negative deltas are a contract violation.
+
+It is a `Listenable` rather than a list of tickers, which buys two things: starting
+or stopping a ticker from inside a tick is safe, and **a ticker that is not running
+holds no subscription** — so "an animation in a hidden panel costs nothing" is a
+count anyone can check rather than a claim.
+
+```cpp
+class Ticker {
+public:
+  using Fn = void (*)(void* ctx, float seconds);
+  Ticker(Fn fn, void* ctx) noexcept;
+
+  void attach(TickerRegistry& registry);
+  void detach();
+  void start();
+  void stop();
+  void setMuted(bool muted);
+
+  bool started() const noexcept;
+  bool muted()   const noexcept;
+  bool ticking() const noexcept;   // subscribed and receiving time
+};
+```
+
+A ticker is owned by the object that created it — a `State`, through the driver it
+holds — and receives time only while it is **started, unmuted, and attached**.
+Anything else and it is not subscribed at all.
+
+Until it has a registry it behaves as muted, so a driver started before its element
+reached the tree simply begins when it gets there.
+
+<Aside type="note" title="Divergence: a per-frame delta, not an absolute clock">
+That is what makes muting exact. A muted ticker is simply not subscribed, so it
+resumes where it stopped with no elapsed time to reconcile and no start offset to
+carry.
+</Aside>
+
+## `Curve`
+
+`fltr/animation/curves.hpp`.
+
+```cpp
+class Curve {
+public:
+  using Fn = float (*)(float t);
+  constexpr Curve() = default;
+  constexpr Curve(Fn fn) noexcept;
+  constexpr float operator()(float t) const noexcept;    // identity when null
+  constexpr explicit operator bool() const noexcept;
+};
+
+namespace Curves {
+  inline constexpr Curve linear{};
+  inline constexpr Curve easeIn, easeOut, easeInOut;
+  inline constexpr Curve easeInCubic, easeOutCubic, easeInOutCubic;
+}
+```
+
+A plain function pointer: a curve costs one pointer to copy into a widget
+configuration, stays trivially destructible like everything else that goes into the
+build arena, and calls without an object in the way.
+
+The set a HUD needs: ease-out for something arriving, ease-in for something
+leaving, ease-in-out for something moving between two settled states. The cubics
+are the same shapes with more of their travel at the ends.
+
+## `AnimationDriver`
+
+`fltr/animation/driver.hpp`.
+
+```cpp
+enum class AnimationStatus : std::uint8_t { Dismissed, Forward, Reverse, Completed };
+
+class AnimationDriver final : public Listenable {
+public:
+  struct Config {
+    float duration = 0.2f;
+    Curve curve;
+    Curve reverseCurve;      // unset means `curve` in both directions
+  };
+
+  explicit AnimationDriver(Config config) noexcept;
+
+  void attach(TickerRegistry& tickers);   // from initState
+  void detach();                          // from dispose
+
+  void setConfig(Config) noexcept;        const Config& config() const noexcept;
+  void setMuted(bool);                    bool muted() const noexcept;
+
+  float progress() const noexcept;        // before easing
+  float value() const noexcept;           // after easing — what an interpolation samples
+  AnimationStatus status() const noexcept;
+  bool isAnimating() const noexcept;
+  bool ticking() const noexcept;
+
+  Listenable& statusChanges() noexcept;
+
+  void forward();                         // animateTo(1)
+  void reverse();                         // animateTo(0)
+  void animateTo(float target);           // retargets from wherever it is
+  void repeat(bool pingPong = false);
+  void jumpTo(float progress);
+  void stop();
+};
+```
+
+Value and status are notified **independently** — a value listener runs every tick, a
+status listener only at the transitions — so logic that waits for an animation to
+settle or turn around is not woken by every frame of it. `statusChanges()` is that
+separate channel.
+
+<Aside type="tip" title="duration is the time for the full range">
+A shorter journey takes proportionally less time. Reversing from 0.3 takes 30% of
+the duration rather than all of it, so a pointer entering and leaving repeatedly
+never drifts.
+</Aside>
+
+`Dismissed` and `Completed` mean settled at the bottom and the top of the range;
+settling anywhere in between reports the end it was travelling toward.
+
+Leaving `reverseCurve` unset is the continuous choice: a distinct reverse curve
+changes the value at the instant of the reversal.
+
+Muting stops time reaching the driver without disturbing where it is.
+
+## `Tween` and `AnimatedValue`
+
+`fltr/animation/tween.hpp`.
+
+```cpp
+template <class T>
+concept Interpolatable = requires(const T& a, const T& b, float t) {
+  { lerp(a, b, t) } -> std::convertible_to<T>;
+};
+
+template <class T> requires Interpolatable<T>
+struct Tween {
+  T from{}, to{};
+  T at(float t) const;
+};
+```
+
+`lerp` is found by **ordinary overload resolution**, so every geometry and paint type
+already satisfies the concept and a consumer's own type joins by defining one next
+to itself.
+
+Composing interpolation with easing is `tween.at(driver.value())`: the driver
+applies the curve, so nothing sits between the two.
+
+```cpp
+template <class T> requires Interpolatable<T> && std::equality_comparable<T>
+class AnimatedValue final : public ValueListenable<T> {
+public:
+  AnimatedValue(AnimationDriver& driver, Tween<T> tween);
+  const T& value() const noexcept override;
+  void setTween(Tween<T> tween);
+  void retarget(T to);
+};
+```
+
+Same interface as `Observable<T>`, different reason for changing — which is the
+whole point of sharing `ValueListenable`. A render object observing this repaints
+itself and nothing else; a `Watch` over it rebuilds a subtree. No
+animation-specific machinery on either path.
+
+<Aside type="tip" title="retarget re-bases the interval, it does not retarget the driver">
+The new interval begins **where the last one had actually reached**, so the value
+never jumps and repeated interruption accumulates no error. Retargeting to the
+current value stops the driver instead of running a zero-length interval.
+
+The driver is restarted, so one shared by several values retargets all of them.
+</Aside>
+
+## Simulations
+
+`fltr/animation/simulation.hpp`.
+
+```cpp
+struct Tolerance { float distance = 0.01f; float velocity = 0.01f; };
+
+class Simulation {
+public:
+  explicit Simulation(Tolerance settling = {}) noexcept;
+  virtual float x(float time) const = 0;
+  virtual float dx(float time) const = 0;
+  virtual bool isDone(float time) const = 0;
+};
+```
+
+`AnimationDriver` is normalized 0..1 over a duration; a `Simulation` is **unbounded
+in value and ends by tolerance**, so it stands alongside the driver rather than
+replacing it. Nothing here knows what the number means — scrolling reads it as
+pixels.
+
+Every simulation settles asymptotically, so "done" is a tolerance rather than an
+equality.
+
+### `FrictionSimulation`
+
+```cpp
+FrictionSimulation(float drag, float position, float velocity, Tolerance settling = {});
+float finalX() const noexcept;              // reachable only in the limit
+float timeAtX(float value) const noexcept;  // infinity if it never passes it
+```
+
+Velocity decaying exponentially, by a factor of `drag` per second. The iOS fling,
+and the first half of the bouncing one.
+
+### `SpringDescription` and `SpringSimulation`
+
+```cpp
+struct SpringDescription {
+  float mass = 1.0f, stiffness = 100.0f, damping = 20.0f;
+  static SpringDescription withDampingRatio(float mass, float stiffness,
+                                            float ratio = 1.0f) noexcept;
+};
+
+SpringSimulation(SpringDescription spring, float start, float end, float velocity,
+                 Tolerance settling = {});
+```
+
+A ratio of one is critically damped — the fastest approach that does not overshoot.
+Below one overshoots and rings; above one crawls in.
+
+Solved in **closed form rather than integrated**, so a frame of it is a handful of
+transcendentals and no accumulated error.
+
+### `ClampingScrollSimulation`
+
+```cpp
+ClampingScrollSimulation(float position, float velocity, float friction = 0.015f,
+                         Tolerance settling = {});
+```
+
+Android's fling: a power-law deceleration over a fixed duration, so it arrives and
+stops instead of approaching forever.
+
+### `BouncingScrollSimulation`
+
+```cpp
+BouncingScrollSimulation(float position, float velocity, float leadingExtent,
+                         float trailingExtent, SpringDescription spring,
+                         Tolerance settling = {});
+```
+
+iOS's fling: friction until it leaves the range, then a spring that carries it past
+the edge and pulls it back. The spring's clock starts when the friction handed over.

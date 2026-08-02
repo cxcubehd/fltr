@@ -1,0 +1,649 @@
+---
+title: render
+description: RenderObject, RenderBox, the pipeline owner, and the shipped render boxes — the layer that owns geometry and pixels.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Everything in `include/fltr/render/`. This layer knows about sizes, positions and
+display lists, and nothing about widgets. Architecture:
+[Layout](/fltr/architecture/layout/) and [Painting](/fltr/architecture/painting/).
+
+## `RenderObject`
+
+`fltr/render/object.hpp`. Protocol-agnostic base: tree structure, ownership,
+invalidation, painting. The layout protocol itself lives in `RenderBox`.
+
+```cpp
+enum class PipelinePhase : std::uint8_t { Idle, Layout, Paint };
+```
+
+Painting may not dirty layout and layout may not paint. Both are **enforced**
+against this, not merely documented.
+
+### Tree
+
+```cpp
+RenderObject* parent() const noexcept;
+PipelineOwner* owner() const noexcept;
+int  depth() const noexcept;
+bool attached() const noexcept;
+
+virtual void visitChildren(FunctionRef<void(RenderObject&)>) const = 0;
+virtual void visitChildrenWithOffsets(FunctionRef<void(RenderObject&, Offset)>) const;
+
+virtual const char* typeName() const = 0;
+virtual std::string describe() const;      // headless dump only
+
+void attach(PipelineOwner* owner);
+void detach();   // also purges this subtree from the owner's dirty lists
+```
+
+`visitChildrenWithOffsets` yields where each child is painted; anything that
+shifts its children overrides it.
+
+### Coordinate spaces
+
+```cpp
+virtual void applyPaintTransform(const RenderObject& child, Transform2D&) const;
+
+Transform2D getTransformTo(const RenderObject* ancestor = nullptr) const;
+Offset localToGlobal(Offset, const RenderObject* ancestor = nullptr) const;
+Rect   localToGlobalRect(Rect, const RenderObject* ancestor = nullptr) const;
+Offset globalToLocal(Offset, const RenderObject* ancestor = nullptr) const;
+```
+
+A null ancestor means the root of this tree — which is what "global" means to a
+consumer pushing pointer events in view coordinates.
+
+<Aside type="caution" title="globalToLocal on a degenerate transform">
+A subtree scaled to nothing has no inverse and therefore no answer.
+`globalToLocal` reports the **origin** rather than a wrong point. If you are
+mapping through an animated scale, check for it.
+</Aside>
+
+The default `applyPaintTransform` covers everything that merely shifts its
+children, reading the offset from `visitChildrenWithOffsets`. Anything that scales
+or rotates overrides it — `RenderTransform` does.
+
+### Invalidation
+
+```cpp
+void markNeedsLayout();          // registers the nearest enclosing relayout boundary
+void markParentNeedsLayout();
+void markNeedsPaint();           // walks up to the nearest repaint boundary
+void markNeedsLayoutForSizedByParentChange();
+
+bool needsLayout() const noexcept;
+bool needsPaint()  const noexcept;
+bool isRelayoutBoundary() const noexcept;
+
+virtual bool sizedByParent()     const;   // size depends only on constraints
+virtual bool isRepaintBoundary() const;   // owns its own DisplayList
+```
+
+`markNeedsLayout` stops at the nearest relayout boundary rather than at the root,
+which keeps update cost proportional to the dirty set. `markNeedsPaint` touches no
+layout state at all.
+
+`relayoutBoundary_` is a **tri-state**: `-1` unknown (never laid out, or freshly
+reparented), `0` no, `1` yes. Unknown behaves as "no" for propagation, which is
+the safe direction.
+
+### Painting
+
+```cpp
+virtual void paint(PaintingContext&, Offset offset) = 0;
+void paintWithContext(PaintingContext&, Offset offset);   // callers use this
+
+DisplayList& boundaryList();                       // repaint boundaries only, lazy
+const DisplayList* boundaryListIfAny() const noexcept;
+virtual Rect paintBounds() const;
+
+std::uint32_t layoutCount() const noexcept;
+std::uint32_t paintCount()  const noexcept;
+```
+
+### The two observation sinks
+
+```cpp
+protected:
+  void observeForPaint (Subscription& slot, Listenable* source);   // → markNeedsPaint
+  void observeForLayout(Subscription& slot, Listenable* source);   // → markNeedsLayout
+```
+
+`slot` is a **member of the concrete render object**, so the subscription's
+lifetime is exactly the render object's with no shared ownership.
+
+`observeForPaint` is the render-attached animation path: a change invalidates only
+painting, so no element rebuild and no per-frame widget allocation.
+`observeForLayout` is the same for a property that genuinely moves boxes —
+correctly invalidated, and visibly the expensive path, since every frame of it
+runs layout for the subtree. In the shipped catalogue only `RenderPositionedBox`
+uses it.
+
+## `PaintingContext`
+
+```cpp
+class PaintingContext {
+public:
+  explicit PaintingContext(DisplayList& list);
+  DisplayList& list() noexcept;
+
+  void paintChild(RenderObject& child, Offset offset);
+  void pushOpacity(float alpha, FunctionRef<void(PaintingContext&)> painter);
+  void pushTransform(const Transform2D&, Offset pivot,
+                     FunctionRef<void(PaintingContext&)> painter);
+  void pushClipRect(Rect clip, BorderRadius, FunctionRef<void(PaintingContext&)> painter);
+};
+```
+
+The push helpers short-circuit: `alpha >= 1` records no group at all, `alpha <= 0`
+records **nothing whatsoever**, and an identity transform records no group. So a
+fully-faded subtree costs zero commands, not a group full of invisible ones.
+
+`transform` is applied about `pivot` in the current painting space — exactly the
+point hit testing inverts about.
+
+A repaint-boundary child is recorded into its *own* list at its own origin and
+positioned by a `DrawList` command in the parent. Moving a boundary therefore
+changes only that `DrawList`'s offset and never re-records it.
+
+## `PipelineOwner`
+
+```cpp
+class PipelineOwner {
+public:
+  void setRootNode(RenderObject* root);    // root must outlive the owner
+  RenderObject* rootNode() const noexcept;
+  void purgeDetachedDirtyNodes();
+
+  PipelinePhase phase() const noexcept;
+  bool needsFrame() const noexcept;        // any dirty layout or paint
+
+  void flushLayout();                      // dirty boundaries, shallowest first
+  void flushPaint();                       // dirty boundaries, deepest first
+
+  Scene scene() const;
+  Scene drawFrame();
+
+  struct FrameStats {
+    int layouts = 0;                 // performLayout / performResize invocations
+    int paints = 0;                  // paintWithContext invocations
+    int boundariesRelaidOut = 0;
+    int boundariesRepainted = 0;
+    int layoutPasses = 0;            // healthy is 0 or 1
+  };
+  const FrameStats& stats() const noexcept;
+  void resetStats() noexcept;
+
+  std::size_t dirtyLayoutCount() const noexcept;
+  std::size_t dirtyPaintCount()  const noexcept;
+  RenderObject* activeLayoutNode() const noexcept;
+};
+```
+
+Layout drains **shallowest first**, so a parent's layout subsumes any of its
+descendants that were also dirty. Paint drains **deepest first**, so a boundary
+that repaints on its own is already clean by the time an ancestor embeds it.
+
+`layoutPasses` above 1 means laying a node out dirtied an unvisited ancestor.
+Legal, rarely intended — assert on it. See
+[Performance](/fltr/guides/performance/).
+
+`activeLayoutNode()` is the node whose `performLayout` is currently running.
+`RenderBox::size()` reads it to enforce that a parent only measures a child it
+asked to measure.
+
+<Aside type="note" title="Scratch vectors are members">
+Each flush drains its dirty list into a member scratch vector, so nodes dirtied
+mid-flush land in a fresh list and a frame that does work still allocates nothing
+once the high-water mark is reached.
+</Aside>
+
+---
+
+## `RenderBox`
+
+`fltr/render/box.hpp`. The box protocol: constraints down, size up, one pass.
+
+```cpp
+class RenderBox : public RenderObject {
+public:
+  void layout(BoxConstraints constraints, bool parentUsesSize = false);
+  void layoutWithoutResize() override;
+
+  Size size() const;
+  bool hasSize() const noexcept;
+  BoxConstraints constraints() const noexcept;
+
+  virtual bool hitTest(HitTestResult& result, Offset position);
+  virtual bool hitTestSelf(Offset) const;                       // default false
+  virtual bool hitTestChildren(HitTestResult&, Offset);          // default false
+  virtual RenderPointerRegion* asPointerRegion() noexcept;       // default nullptr
+
+protected:
+  virtual void performResize();      // only when sizedByParent(); no child layout here
+  virtual void performLayout() = 0;
+  void setSize(Size s);
+
+  static void layoutChild(RenderBox& child, BoxConstraints c);          // parentUsesSize = false
+  static Size layoutChildForSize(RenderBox& child, BoxConstraints c);   // parentUsesSize = true
+};
+```
+
+`layout()` is the single entry point — never call `performLayout` directly.
+
+`parentUsesSize` is what keeps a relayout boundary sound: a parent that never
+reads the size cannot observe the child re-laying itself out. `layoutChild`
+therefore makes the child a boundary; `layoutChildForSize` does not.
+
+`setSize` asserts twice: that you are inside your own layout, and that the size
+satisfies the incoming constraints.
+
+`asPointerRegion()` is the render tree's **only** mention of the gesture layer —
+how routing and hover pick their targets out of a hit-test path without RTTI.
+
+### Bases
+
+| Class | Shape |
+|---|---|
+| `RenderProxyBox` | one optional child, laid out under this box's own constraints, painted at the same origin |
+| `RenderShiftedBox` | a proxy that positions its child elsewhere; exposes `childOffset()`. Padding and alignment are both this shape |
+| `RenderBoxContainer<Data>` | ordered child list plus statically-typed per-child data |
+
+```cpp
+template <class Data>
+class RenderBoxContainer : public RenderBox {
+public:
+  using ChildData = Data;
+  struct Slot { std::unique_ptr<RenderBox> child; ChildData data{}; Offset offset{}; };
+
+  std::size_t childCount() const noexcept;
+  RenderBox& childAt(std::size_t) const;
+  ChildData& dataAt(std::size_t);
+  Offset childOffsetAt(std::size_t) const;
+  std::size_t indexOfChild(const RenderBox&) const;
+
+  void insertChild(std::size_t index, std::unique_ptr<RenderBox>, ChildData data = {});
+  void addChild(std::unique_ptr<RenderBox>, ChildData data = {});
+  std::unique_ptr<RenderBox> removeChildAt(std::size_t index);
+  void reorderChildren(std::span<RenderBox* const> order);
+  void setChildData(std::size_t index, ChildData data);
+
+  void defaultPaint(PaintingContext&, Offset);   // in order, so later children are on top
+  bool hitTestChildren(HitTestResult&, Offset) override;   // reverse order, topmost wins
+};
+```
+
+<Aside type="note" title="Divergence: parent data lives in the parent">
+Flutter attaches a heap-allocated `ParentData` object to each child. fltr stores
+that data in the parent's own child list instead — statically typed, no
+allocation, and a child cannot be asked for parent data belonging to a different
+parent. The cost is that a child cannot read its own parent data without going
+through the parent, which nothing here needs.
+</Aside>
+
+`reorderChildren` permutes slots. Nothing is adopted or dropped, so a child that
+moves keeps its layout state, its paint state, and its per-child data — the data
+travels in the slot with it.
+
+## `HitTestResult`
+
+`fltr/render/hit_test.hpp`.
+
+```cpp
+struct HitTestEntry { RenderBox* target = nullptr; Offset localPosition; };
+
+class HitTestResult {
+public:
+  void add(RenderBox* target, Offset localPosition);
+  bool addWithPaintOffset(Offset offset, Offset position,
+                          FunctionRef<bool(HitTestResult&, Offset)> hitTest);
+  bool addWithPaintTransform(const Transform2D&, Offset position,
+                             FunctionRef<bool(HitTestResult&, Offset)> hitTest);
+  std::span<const HitTestEntry> path() const noexcept;   // deepest (topmost) first
+  bool empty() const noexcept;
+  void clear() noexcept;
+};
+```
+
+`addWithPaintTransform` returns `false` **without recursing** if the transform is
+not invertible.
+
+<Aside type="note" title="Divergence: resolved positions, not transforms">
+Flutter records a full global→local transform per entry so a consumer can
+re-derive any space later. fltr records the already-resolved local position — all
+routing, tap and hover need, and it keeps the result trivially copyable. The cost
+is that an entry cannot be re-projected into a different space after the fact.
+</Aside>
+
+---
+
+## The shipped boxes
+
+`fltr/render/boxes.hpp`.
+
+### `BoxDecoration`
+
+```cpp
+struct BoxDecoration {
+  Color color = Color::transparent();
+  BorderRadius radius = BorderRadius::zero();
+  Color borderColor = Color::transparent();
+  float borderWidth = 0.0f;
+
+  constexpr bool isVisible() const noexcept;   // any fill alpha, or a real border
+  friend constexpr bool operator==(const BoxDecoration&, const BoxDecoration&) noexcept = default;
+};
+
+inline BoxDecoration lerp(const BoxDecoration&, const BoxDecoration&, float t) noexcept;
+```
+
+Fill, corner radius, border colour, border width. That is the whole vocabulary —
+no gradients, no shadows, no blur. See
+[gaps and rework](/fltr/project/gaps-and-rework/).
+
+### `RenderView`
+
+```cpp
+class RenderView final : public RenderProxyBox {
+public:
+  explicit RenderView(Size surface);
+  void setSurface(Size s);
+  Size surface() const noexcept;
+  bool isRepaintBoundary() const override;   // true
+};
+```
+
+The pipeline root, always a repaint boundary so it owns the display list the
+consumer submits. It lays its child out with `BoxConstraints::tight(surface)`,
+making the child a relayout boundary so its invalidations never reach the view.
+
+### `RenderPadding`
+
+```cpp
+explicit RenderPadding(EdgeInsets padding = {});
+EdgeInsets padding() const noexcept;
+void setPadding(EdgeInsets);
+```
+
+### `RenderPositionedBox`
+
+```cpp
+explicit RenderPositionedBox(Alignment alignment = Alignment::center(),
+                             float widthFactor = -1.0f, float heightFactor = -1.0f);
+Alignment alignment() const noexcept;
+void setAlignment(Alignment);
+void setAnimation(ValueListenable<Alignment>* source);   // observeForLayout
+void setSizeFactors(float w, float h);
+```
+
+With no size factor it expands to fill bounded constraints; with a factor it sizes
+to a multiple of its child. A negative factor means "no factor".
+
+<Aside type="caution" title="The one layout-affecting animation">
+`setAnimation` here is the only `observeForLayout` in the shipped catalogue. Every
+frame of it lays out this subtree. Everything else animates on the paint path.
+</Aside>
+
+### `RenderConstrainedBox`
+
+```cpp
+explicit RenderConstrainedBox(BoxConstraints additional = {});
+BoxConstraints additionalConstraints() const noexcept;
+void setAdditionalConstraints(BoxConstraints);   // asserts isNormalized()
+```
+
+Lays the child out under `additional.enforce(constraints)`.
+
+### `RenderDecoratedBox`
+
+```cpp
+explicit RenderDecoratedBox(BoxDecoration decoration = {});
+const BoxDecoration& decoration() const noexcept;
+void setDecoration(const BoxDecoration&);                 // markNeedsPaint, never layout
+void setAnimation(ValueListenable<BoxDecoration>* source); // observeForPaint
+```
+
+Paints a `drawRRect` behind its child when the decoration is visible.
+
+### `RenderOpacity`
+
+```cpp
+explicit RenderOpacity(float opacity = 1.0f);
+float opacity() const noexcept;
+void setOpacity(float);
+void setAnimation(ValueListenable<float>* source);   // observeForPaint
+```
+
+The cheap path, and the one animation is meant to take: a tick repaints this
+object and touches no element and no layout.
+
+### `RenderTransform`
+
+```cpp
+explicit RenderTransform(Transform2D transform = Transform2D::identity(),
+                         Alignment origin = Alignment::center());
+const Transform2D& transform() const noexcept;
+void setTransform(const Transform2D&);
+void setAnimation(ValueListenable<Transform2D>* source);   // observeForPaint
+void setOrigin(Alignment);
+```
+
+Never layout — a transform does not change the box, only where it lands.
+`childTransform()` is the one matrix this object means; painting, hit testing and
+the ancestor walk all read it, so they cannot disagree about where the pivot is.
+
+### `RenderRepaintBoundary`
+
+```cpp
+class RenderRepaintBoundary final : public RenderProxyBox {
+  bool isRepaintBoundary() const override;   // true
+};
+```
+
+### `RenderIgnorePointer` / `RenderAbsorbPointer`
+
+```cpp
+explicit RenderIgnorePointer(bool ignoring = true);   void setIgnoring(bool) noexcept;
+explicit RenderAbsorbPointer(bool absorbing = true);  void setAbsorbing(bool) noexcept;
+```
+
+Ignoring is invisible to the pointer, and so is everything below it — whatever is
+drawn behind is reached instead. Absorbing takes the pointer and gives it to
+nothing below. Both exist because a **disabled control drawn over something live
+should still swallow the click** rather than let it through.
+
+Neither invalidates on change: a hit test is resolved afresh from the tree every
+time one is run, so there is nothing recorded to throw away.
+
+### `RenderClipRect`
+
+```cpp
+explicit RenderClipRect(BorderRadius radius = BorderRadius::zero());
+void setRadius(BorderRadius);
+```
+
+### `RenderParagraph`
+
+```cpp
+RenderParagraph(TextService* service, std::string_view text, TextStyle style,
+                TextAlign align = TextAlign::Left, int maxLines = 0,
+                TextOverflow overflow = TextOverflow::Clip);
+
+std::string_view text() const noexcept;
+const TextStyle& style() const noexcept;
+ParagraphHandle paragraph() const noexcept;
+
+void setText(std::string_view);
+void setStyle(const TextStyle&);
+void setAlign(TextAlign);
+void setMaxLines(int);
+void setOverflow(TextOverflow);
+
+std::uint32_t byteOffsetAt(Offset local) const;
+```
+
+Resolves a size from constraints like any other box, by asking the `TextService`
+to measure into the available width — so a real implementation drops in behind
+`TextService` without touching layout.
+
+It owns its text as a `std::string`: render objects are long-lived and may own
+heap memory, while widget configs are arena scratch and carry only a view.
+
+`setStyle` is the one place where the paint/layout split is decided at runtime:
+**colour alone repaints, everything else relayouts.**
+
+`performLayout` releases the old handle before acquiring a new one; the destructor
+releases too. That is the whole paragraph lifetime.
+
+### `RenderSprite`
+
+```cpp
+RenderSprite(ImageHandle image, Size preferredSize,
+             Rect source = Rect::zero(), Color tint = {255,255,255,255});
+void setImage(ImageHandle);        // repaint
+void setPreferredSize(Size);       // relayout
+void setSource(Rect);              // repaint
+void setTint(Color);               // repaint
+```
+
+---
+
+## `RenderFlex`
+
+`fltr/render/flex.hpp`.
+
+```cpp
+enum class MainAxisAlignment  : std::uint8_t { Start, End, Center,
+                                               SpaceBetween, SpaceAround, SpaceEvenly };
+enum class CrossAxisAlignment : std::uint8_t { Start, End, Center, Stretch };
+enum class MainAxisSize       : std::uint8_t { Min, Max };
+enum class FlexFit            : std::uint8_t { Tight, Loose };
+
+struct FlexChildData {
+  int flex = 0;                    // 0 means inflexible
+  FlexFit fit = FlexFit::Tight;
+};
+
+class RenderFlex final : public RenderBoxContainer<FlexChildData> {
+public:
+  explicit RenderFlex(Axis direction = Axis::Horizontal,
+                      MainAxisAlignment = MainAxisAlignment::Start,
+                      CrossAxisAlignment = CrossAxisAlignment::Center,
+                      MainAxisSize = MainAxisSize::Max, float spacing = 0.0f);
+  Axis direction() const noexcept;
+  void setDirection(Axis);
+  void setMainAxisAlignment(MainAxisAlignment);
+  void setCrossAxisAlignment(CrossAxisAlignment);
+  void setMainAxisSize(MainAxisSize);
+  void setSpacing(float);
+};
+```
+
+Two passes over the children, both linear: inflexible children are measured first
+so the remaining free space is known, then flexible children divide that space in
+proportion to their flex factors. `MainAxisSize::Min` takes only as much main-axis
+room as the children need; `Max` takes everything offered.
+
+`typeName()` reports `"Row"` or `"Column"` depending on the axis, which is what
+you see in a tree dump.
+
+## `RenderStack`
+
+`fltr/render/stack.hpp`.
+
+```cpp
+enum class StackFit : std::uint8_t { Loose, Expand, Passthrough };
+
+struct StackChildData {
+  bool positioned = false;
+  std::optional<float> left, top, right, bottom, width, height;
+};
+
+Offset layoutPositionedChild(RenderBox& child, const StackChildData& data,
+                             Size size, Alignment alignment);
+
+class RenderStack final : public RenderBoxContainer<StackChildData> {
+public:
+  explicit RenderStack(Alignment = Alignment::topLeft(), StackFit = StackFit::Loose);
+  bool sizedByParent() const override;   // true under Expand
+  void setAlignment(Alignment);
+  void setFit(StackFit);                 // uses markNeedsLayoutForSizedByParentChange
+};
+```
+
+| Fit | Children get | Stack sizes to |
+|---|---|---|
+| `Loose` | loosened constraints | the largest child |
+| `Expand` | forced to the stack's own size | its constraints alone → relayout boundary |
+| `Passthrough` | the stack's constraints unchanged | the largest child |
+
+`layoutPositionedChild` is shared by the stack and the overlay, which agree about
+what `Positioned` means and differ only in what decides their own size.
+
+## Overlay and anchoring
+
+`fltr/render/overlay.hpp`. Architecture:
+[Overlay](/fltr/architecture/overlay/).
+
+```cpp
+class RenderOverlay final : public RenderBoxContainer<StackChildData> { ... };
+```
+
+The **first child is the base and alone decides the size** — an overlay must never
+change the layout of what it overlays, however large an entry is. Every other
+child is an entry, laid out inside that size, painted after the base and, because
+hit testing walks children in reverse, tested before it.
+
+### `AnchorLink`
+
+```cpp
+class AnchorLink final : public Listenable {
+public:
+  Rect rect() const;                    // in root space; empty until an anchor lays out
+  bool attached() const noexcept;
+  void markMoved();                     // re-places everything anchored here
+};
+```
+
+Consumer-owned and referred to by pointer, like a scroll controller or a focus
+node: the anchor marking the target and the entry following it are in different
+subtrees, and this is the only thing they share.
+
+`markMoved()` costs one repaint. The anchor calls it whenever it lays out; a
+consumer whose anchor moved *without* laying out — scrolling moves by painting —
+calls it too.
+
+### `RenderAnchor` and `RenderAnchored`
+
+```cpp
+class RenderAnchor final : public RenderProxyBox {
+  explicit RenderAnchor(AnchorLink* link);
+  void setLink(AnchorLink*);
+};
+
+class RenderAnchored final : public RenderShiftedBox {
+public:
+  struct Placement {
+    Alignment anchorSide = Alignment::bottomLeft();
+    Alignment childSide  = Alignment::topLeft();
+    Offset offset;
+    bool keepOnScreen = true;
+  };
+  RenderAnchored(AnchorLink* link, Placement placement);
+  bool sizedByParent() const override;   // true — it fills the overlay
+  void setLink(AnchorLink*);
+  void setPlacement(Placement);
+};
+```
+
+The child's **size** is resolved during layout and its **position** during paint —
+the one phase in which every ancestor offset between here and the root is final.
+That is also what lets an entry follow an anchor that moved without either of them
+laying out, for the price of a notification.
+
+A dropdown is `anchorSide = bottomLeft`, `childSide = topLeft`. `keepOnScreen`
+keeps the child inside the overlay, which is what stops a menu opened near an edge
+from hanging off it.

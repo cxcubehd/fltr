@@ -1,0 +1,319 @@
+---
+title: components
+description: WidgetStates, ComponentScope, and the four raw components — behaviour without any opinion about how it looks.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Everything in `include/fltr/components/`. A component owns its value, its hit
+regions, its recognizers, its focus node and its keyboard handling — and owns
+**nothing** about how any of it looks. Guide:
+[Styling components](/fltr/guides/styling-components/).
+
+## `WidgetState`
+
+```cpp
+enum class WidgetState : std::uint8_t {
+  Hovered  = 1 << 0,
+  Pressed  = 1 << 1,
+  Focused  = 1 << 2,
+  Disabled = 1 << 3,
+  Selected = 1 << 4,
+  Dragged  = 1 << 5,
+};
+template <> inline constexpr bool kIsFlags<WidgetState> = true;
+using WidgetStates = Flags<WidgetState>;
+```
+
+The whole vocabulary a component has for describing itself. This is Flutter's
+`WidgetState`, promoted from an implementation detail of `material/` to this
+layer's **public contract**.
+
+## `WidgetStatesController`
+
+```cpp
+class WidgetStatesController final : public ValueListenable<WidgetStates> {
+public:
+  WidgetStatesController() = default;
+  explicit WidgetStatesController(WidgetStates initial) noexcept;
+
+  const WidgetStates& value() const noexcept override;
+  bool has(WidgetState state) const noexcept;
+  void update(WidgetState state, bool present);   // notifies only on change
+};
+```
+
+The observable a component publishes — and which a consumer may own instead, so
+that several visuals, or the game, can read one component's state.
+
+## `OwnedStates`
+
+```cpp
+class OwnedStates {
+public:
+  void bind(WidgetStatesController* supplied);   // null → use the internal one
+  WidgetStatesController* get() const noexcept;  // null once a supplied one died
+  void release();
+  void update(WidgetState state, bool present);
+};
+```
+
+A states controller a `State` owns, or one the consumer supplied. The subscription
+carries no payload; it is the **liveness token**, exactly as `OwnedFocusNode`'s is.
+A `Subscription` unhooks itself when its `Listenable` dies, so a consumer's
+controller destroyed while the component is still mounted reads as gone rather
+than being written into.
+
+<Aside type="caution" title="Naming a destroyed controller is diagnosed">
+`bind` asserts when a widget still names a controller that has been destroyed. It
+returns rather than re-subscribing, which is what keeps a consumer who went on
+naming it out of freed memory.
+</Aside>
+
+## `ComponentScope`
+
+```cpp
+class ComponentScope final : public Configure<ComponentScope, InheritedWidget> {
+public:
+  struct Args {
+    Key key;
+    WidgetStatesController* states = nullptr;
+    ValueListenable<float>* fraction = nullptr;
+    WidgetRef child;
+  };
+
+  static WidgetStatesController* statesOf(BuildContext& context);
+  static ValueListenable<float>* fractionOf(BuildContext& context);
+};
+```
+
+The two things a visual subtree may want from the component around it: the state
+it is in, and — for the components that have one — the 0..1 position its shape is
+drawn from. One lookup carries both, and both are pointers to objects the
+component's `State` owns.
+
+`fraction` is a toggle's on-ness, a slider's value as a fraction of its range, a
+progress bar's fill. **Null for a button**, which has no such quantity.
+
+Both are null outside a component, which is what lets the same subtree be used
+inside a button and on its own.
+
+<Aside type="tip" title="statesOf subscribes to the scope, not the controller">
+Reading it makes your element depend on the *scope*, which changes only when a
+different component wraps you — almost never. The subscription to the controller
+itself is one you make explicitly, and that is what lets you route it to a render
+object instead of to a rebuild.
+</Aside>
+
+## `StatesBuilder`
+
+```cpp
+class StatesBuilder final : public Configure<StatesBuilder, StatefulWidget> {
+public:
+  using Builder = Callback<WidgetRef(BuildContext&, WidgetStates)>;
+  struct Args { Key key; Builder builder; };
+};
+```
+
+Rebuilds its subtree whenever the enclosing component's state changes.
+Deliberately thin: a component publishes an observable, and this turns it into a
+builder for a consumer who would rather write one.
+
+Outside a component it builds once, with no states set, and subscribes to nothing.
+
+A visual whose **painting** is all that changes with the state should skip this and
+hand `ComponentScope::statesOf(context)` to a render object instead — that path
+costs no rebuild at all.
+
+## `ComponentShell`
+
+```cpp
+struct ComponentShell {
+  OwnedStates* states = nullptr;
+  ValueListenable<float>* fraction = nullptr;
+  bool enabled = true;
+
+  FocusNode* focusNode = nullptr;
+  bool canRequestFocus = true;
+  bool skipTraversal = false;
+  bool autofocus = false;
+  Callback<bool(const KeyEvent&)> onKey;
+  Callback<void(bool)> onFocusChange;
+
+  Pointer::Args pointer;      // gestures, cursor, child; hover is filled in here
+};
+
+WidgetRef buildComponentShell(const ComponentShell& shell);
+```
+
+The envelope every interactive component wraps its visuals in: one focus node, one
+pointer region, one publication of what the component is doing, and the guard that
+makes `enabled = false` mean something. Only the gestures in the middle differ
+between components.
+
+<Aside type="note" title="The guard is always present">
+Inserting it only when disabled would change the shape of the tree at the moment
+a control is greyed out, and everything below — the consumer's visuals, and any
+`State` they hold — would be inflated afresh for a reason that has nothing to do
+with them.
+</Aside>
+
+---
+
+## `RawButton`
+
+```cpp
+struct Args {
+  Key key;
+  Callback<void()> onPressed;
+  Callback<void()> onLongPress;      // adding this creates a long-press recognizer
+  bool enabled = true;
+  bool selected = false;             // published as Selected
+
+  WidgetStatesController* statesController = nullptr;   // consumer-owned; null = own one
+  FocusNode* focusNode = nullptr;
+  bool canRequestFocus = true;
+  bool skipTraversal = false;
+  bool autofocus = false;
+
+  MouseCursor cursor = MouseCursor::Click;
+  HitTestBehavior behavior = HitTestBehavior::Opaque;
+  PointerButtons buttons{PointerButton::Primary};
+  WidgetRef child;
+};
+```
+
+A press, and everything that has to be true around one. Also the **list item a menu
+needs**: `selected` is the only thing a current entry has that an ordinary button
+does not, and it is published rather than drawn.
+
+Leaving `onLongPress` unset creates no long-press recognizer, so a plain button
+costs one tap recognizer and nothing else.
+
+Disabled means: no gesture reaches it, it cannot take the focus, and it publishes
+`Disabled`. **It still swallows the pointer**, so a disabled control never leaks a
+click through to what it is drawn over — wrap it in `IgnorePointer` to want the
+other thing.
+
+A keyboard press is held between the key going down and its coming up, so losing
+focus in between lets go of it: the key-up will be delivered somewhere else.
+
+## `RawToggle`
+
+```cpp
+enum class ToggleValue : std::uint8_t { Off, On, Mixed };
+
+struct Args {
+  Key key;
+  ToggleValue value = ToggleValue::Off;
+  Callback<void(ToggleValue)> onChanged;      // reports; assumes nothing about the answer
+  bool tristate = false;                      // cycles Off, On, Mixed
+  bool canToggleOff = true;                   // false is the radio shape
+  float dragExtent = 0.0f;                    // > 0 makes it a switch
+  float positionDuration = 0.15f;
+
+  bool enabled = true;
+  WidgetStatesController* statesController = nullptr;
+  FocusNode* focusNode = nullptr;
+  bool canRequestFocus = true;
+  bool skipTraversal = false;
+  bool autofocus = false;
+
+  MouseCursor cursor = MouseCursor::Click;
+  HitTestBehavior behavior = HitTestBehavior::Opaque;
+  PointerButtons buttons{PointerButton::Primary};
+  WidgetRef child;
+};
+```
+
+The one machine behind a checkbox, a switch and a radio. This is Flutter's
+`ToggleableStateMixin` — private to `material/` and entangled with a painter —
+promoted to a component, with the visual left to the consumer: the 0..1 position a
+checkbox draws a tick from and a switch draws a thumb from is published through
+`ComponentScope`.
+
+| Shape | Configuration |
+|---|---|
+| Checkbox | `dragExtent = 0` — no drag recognizer is created at all |
+| Switch | `dragExtent = travel` — a drag of that distance moves the position end to end; letting go past halfway reports the toggle |
+| Radio | `canToggleOff = false` — a member of a group only its siblings can clear |
+| Tristate | `tristate = true`; `Mixed` is Flutter's null third state |
+
+`canToggleOff` describes the two-value cycle only: a tristate toggle always
+completes its own, since a group of them is not a thing radios form.
+
+`onChanged` reports the value this toggle *would* move to. The consumer holds the
+value and decides.
+
+While dragging, the position is **pinned** rather than animated — the thumb is
+following a finger, not a clock.
+
+## `RawSlider`
+
+```cpp
+struct Args {
+  Key key;
+  float value = 0.0f, min = 0.0f, max = 1.0f;
+  int divisions = 0;                  // 4 gives five stops; 0 is continuous
+  Callback<void(float)> onChanged, onChangeStart, onChangeEnd;
+
+  Axis axis = Axis::Horizontal;
+  float thumbExtent = 0.0f;           // the value maps across the box less this
+  float keyStep = 0.1f;               // fraction of the range per arrow key
+  float pageStep = 0.2f;
+
+  bool enabled = true;
+  WidgetStatesController* statesController = nullptr;
+  FocusNode* focusNode = nullptr;
+  bool canRequestFocus = true;
+  bool skipTraversal = false;
+  bool autofocus = false;
+
+  MouseCursor cursor = MouseCursor::Click;
+  HitTestBehavior behavior = HitTestBehavior::Opaque;
+  PointerButtons buttons{PointerButton::Primary};
+  WidgetRef child;
+};
+```
+
+The value belongs to the consumer. This reports where a gesture or a key would put
+it and assumes nothing about the answer, which is what lets the same slider be
+clamped, snapped or ignored by the code that owns the value.
+
+`keyStep` is ignored when there are divisions, which move by exactly one.
+
+<Aside type="note" title="Divergence: absolute mapping, not accumulated deltas">
+Flutter's `Slider` tracks a thumb by accumulating drag deltas. Here the value is
+mapped **absolutely** from where the pointer is, so the thumb goes to the finger on
+the first frame and cannot drift away from it over a long drag.
+
+Stated plainly: there is no separate thumb hit region, because pressing anywhere
+on the track is already a press on the thumb.
+</Aside>
+
+<Aside type="caution" title="A vertical slider's minimum is at the top">
+The value runs the way the coordinate space does. Pressing lower sets a higher
+value, and `ArrowUp` lowers it. A consumer wanting a volume column inverts in
+their own value mapping — one subtraction, and it keeps the component from growing
+a flag whose whole job is to negate a number.
+</Aside>
+
+## `RawProgress`
+
+```cpp
+struct Args {
+  Key key;
+  float value = 0.0f, min = 0.0f, max = 1.0f;
+  bool indeterminate = false;   // sweeps 0→1 and wraps; `value` is ignored
+  float period = 1.5f;          // seconds per sweep; only the indeterminate case has a clock
+  WidgetRef child;
+};
+```
+
+The only component with **no interaction at all**: no focus node, no gestures, no
+states. What it has is the one thing its visual cannot work out for itself — a
+0..1 fraction, either the value the consumer pushed or a sweep that runs on its
+own when there is no value to report.
+
+Read it with `ComponentScope::fractionOf(context)` and hand it to a `Transform`
+scaling about `centerLeft`. That makes a fill bar a **paint** operation.
