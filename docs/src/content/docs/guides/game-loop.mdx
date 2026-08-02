@@ -1,0 +1,180 @@
+---
+title: Driving from a game loop
+description: Where each call goes, why input is not part of the frame, and how a menu takes the keyboard away from the game without either side knowing.
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+fltr is a library your loop calls, not a framework that calls your loop. This is
+the shape that works, and each step is separated because the ordering between
+them is load-bearing.
+
+```cpp title="loop.cc"
+fltr::Scene runFrame(App& app) {
+  const float dt = advanceClock(app);
+  pumpWindowEvents(app);      // resize → binding.setSurface
+  pumpInput(app);             // → dispatchPointer / dispatchSignal / dispatchKey
+  stepSimulation(app, dt);    // your game, then publish() into observables
+  const fltr::Scene scene = buildAndLayout(app, dt);   // binding.drawFrame(dt)
+  applyCursor(app);           // window.setCursor(binding.cursor())
+  present(app, scene);        // your renderer, then backend.submit(scene)
+  return scene;
+}
+```
+
+## Setup
+
+```cpp
+MyTextService text;                                // must outlive the binding
+fltr::WidgetBinding binding(window.surface(), text);
+binding.attachRoot([&] { return buildRoot(app); });   // runs inside a build scope, exactly once
+```
+
+`attachRoot` wraps whatever you return in a `View`, mounts the element tree, and
+installs the resulting `RenderView` as the pipeline root. It runs **once** —
+everything that changes afterwards changes through an observable, not by
+re-running the builder.
+
+<Aside type="caution" title="Construction order">
+If your `TextService` needs a graphics context — most do, to rasterise a glyph
+atlas — then it cannot be a constructor member alongside the binding. Open the
+window, then build the text service, then build the binding. And tear them down
+in the reverse order: the tree has to release its paragraphs before the service
+that owns them goes away.
+</Aside>
+
+## Input is not part of the frame
+
+An event goes in when it arrives, at whatever rate your platform produces them.
+There is no queue inside fltr and no "process events" phase.
+
+```cpp
+binding.dispatchPointer(event);                        // void
+const bool consumed = binding.dispatchSignal(wheel);   // did the UI take it?
+const bool taken    = binding.dispatchKey(key);        // did the UI take it?
+```
+
+The two `bool`s are how the UI and the game share an input device. `false` means
+no widget wanted it, so the game may have it — scroll the world, zoom the camera,
+move the ship.
+
+<Aside type="tip" title="Held keys are state, not history">
+Read held keys straight from your platform rather than accumulating them from the
+events you dispatched. A game wants the current position of the stick, not the
+log of how it got there. Dispatch the discrete events to fltr for focus and
+shortcuts; poll for movement.
+</Aside>
+
+### Taking the controls away
+
+A menu should stop the ship, but neither the menu nor the ship should know about
+the other. One boolean, computed from your own app state, is enough:
+
+```cpp
+void Input::pump(fltr::WidgetBinding& binding) {
+  pumpPointer(binding);
+  pumpSignals(binding);
+  pumpKeys(binding);
+
+  ship_ = ShipInput{};
+  if (!gameHasFocus_) return;             // a menu is up: hands off the controls
+  ship_.thrust = IsKeyDown(KEY_W) || IsKeyDown(KEY_UP);
+  ship_.left   = IsKeyDown(KEY_A) || IsKeyDown(KEY_LEFT);
+  ship_.right  = IsKeyDown(KEY_D) || IsKeyDown(KEY_RIGHT);
+  ship_.fire   = IsKeyDown(KEY_SPACE);
+}
+```
+
+## Pushing state
+
+```cpp
+void Session::publish() {
+  hullFraction.set(ship_.hull() / Ship::kHullMax);
+  remaining.set(static_cast<int>(field_.asteroids().size()));
+  speed.set(static_cast<int>(std::lround(ship_.speed())));
+}
+```
+
+Unconditional, every frame. Setting an `Observable<T>` to an equal value is a
+no-op and notifies nobody, so pushing everything costs a handful of comparisons.
+
+**Quantise before you push.** The ship's speed changes every frame; the displayed
+speed does not. Rounding to a whole number turns sixty rebuilds a second into one
+rebuild whenever the digits actually change. fltr cannot make that decision for
+you — it does not know how you are going to render the number.
+
+## Resizing
+
+```cpp
+binding.setSurface(window.surface());   // pushing the same size is a no-op
+```
+
+Unconditional too. A changed surface relayouts the root; an unchanged one does
+nothing.
+
+## The cursor
+
+```cpp
+window.applyCursor(binding.cursor());
+```
+
+Read once per frame, after `drawFrame`. `MouseCursor` is resolved by walking the
+hover path deepest-first and taking the innermost non-`Defer` opinion, so a
+button asking for `Click` inside a panel asking for `Basic` wins.
+
+## Presenting
+
+```cpp
+void present(App& app, const fltr::Scene& scene) {
+  BeginDrawing();
+  ClearBackground(background);
+  if (playing) drawTheGame();          // your renderer
+  app.backend().submit(scene);         // the UI on top
+  EndDrawing();
+}
+```
+
+The game and the UI are drawn by different code into the same framebuffer. That
+is the whole integration: fltr contributes an ordered list of commands and has no
+opinion about what else is on screen.
+
+## Skipping work
+
+<Steps>
+
+1. **Call `drawFrame` unconditionally.** A frame with nothing dirty already does
+   no work in any phase. Guarding it with `needsFrame()` buys nothing and risks
+   getting the condition wrong.
+
+2. **Check `scene.revision` if submission is expensive.** Unchanged means nothing
+   anywhere was re-recorded and you may reissue whatever you built last frame.
+
+3. **Use `needsFrame()` only to skip the whole frame** — for an editor or a tool
+   that idles rather than a game that is animating continuously anyway.
+
+</Steps>
+
+## What to assert in your own smoke test
+
+The walkthrough's demo does all four, and they are the ones worth copying:
+
+```cpp
+// 1. Layout converges in one pass.
+assert(binding.pipeline().stats().layoutPasses <= 1);
+
+// 2. An idle frame re-records nothing.
+const auto a = binding.drawFrame(0.0f);
+const auto b = binding.drawFrame(0.0f);
+assert(a.revision == b.revision);
+
+// 3. Nothing still wants a frame once everything has settled.
+assert(!binding.needsFrame());
+
+// 4. The tree released every paragraph it acquired.
+binding.reset();
+assert(text.liveParagraphs() == 0);
+```
+
+If the first one fails, something in your tree dirties an ancestor during layout.
+If the second fails, something is dirtying itself every frame — usually a
+`Watch` on a value that is being pushed unquantised.

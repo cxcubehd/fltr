@@ -1,0 +1,384 @@
+---
+title: scroll
+description: ScrollMetrics and physics, ScrollPosition and its five activities, the viewport, and the Scrollable / Scrollbar / Overscroll widgets.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+`include/fltr/scroll/` plus `include/fltr/widgets/scroll.hpp`. Architecture:
+[Scrolling](/fltr/architecture/scrolling/).
+
+The claim this layer is built on: **scrolling is a paint operation.** The child is
+laid out once, unbounded along the axis, and painted at a negative offset inside a
+clip.
+
+## `ScrollMetrics`
+
+`fltr/scroll/physics.hpp`.
+
+```cpp
+struct ScrollMetrics {
+  float pixels = 0.0f;
+  float minScrollExtent = 0.0f;
+  float maxScrollExtent = 0.0f;
+  float viewportDimension = 0.0f;
+
+  bool outOfRange() const noexcept;
+  bool canScroll() const noexcept;
+  float clampToRange(float value) const noexcept;
+  float beyondRange(float value) const noexcept;   // signed: + past end, − before start
+};
+```
+
+Everything the physics is allowed to know about a scroll offset — separated from
+`ScrollPosition` so physics stays a **pure policy object**: it holds no state,
+answers only from what it is handed, and can therefore be a shared constant rather
+than something owned per scrollable.
+
+## `ScrollPhysics`
+
+```cpp
+class ScrollPhysics {
+public:
+  virtual float applyPhysicsToUserOffset(const ScrollMetrics&, float offset) const;
+  virtual float applyBoundaryConditions(const ScrollMetrics&, float value) const;
+  virtual std::unique_ptr<Simulation> createBallisticSimulation(const ScrollMetrics&,
+                                                                float velocity) const = 0;
+  virtual bool allowsUserScrolling(const ScrollMetrics&) const;
+
+  Tolerance tolerance{0.1f, 5.0f};
+  float minFlingVelocity = kMinFlingVelocity;
+  float maxFlingVelocity = kMaxFlingVelocity;
+  SpringDescription spring = SpringDescription::withDampingRatio(0.5f, 100.0f, 1.1f);
+};
+
+const ScrollPhysics& defaultScrollPhysics() noexcept;
+```
+
+Instances are **stateless and const**, so the framework ships them as shared
+constants and a consumer that wants its own writes one and hands out a pointer.
+Nothing allocates a physics object per scrollable.
+
+`createBallisticSimulation` returns null when there is nothing to animate: too slow
+to fling, or already at rest inside the range.
+
+| Physics | Behaviour |
+|---|---|
+| `ClampingScrollPhysics` | Android. The offset stops dead at the edge; what the user pushed past it is refused, and `ScrollPosition::overscroll` is what shows it |
+| `BouncingScrollPhysics` | iOS. The offset may leave its range, resisting more the further it goes, and springs back on release |
+| `NeverScrollPhysics` | refuses to move at all — how a scroll view is disabled without removing it or losing where it was |
+
+<Aside type="note" title="The two treatments cannot appear at once">
+`overscroll()` stays zero under physics that let the offset leave its range, which
+is why the bounce and the stretch never appear together.
+</Aside>
+
+## `ScrollPosition`
+
+`fltr/scroll/position.hpp`.
+
+```cpp
+enum class ScrollActivityKind : std::uint8_t {
+  Idle,
+  Drag,        // a pointer is holding the offset; nothing else may move it
+  Ballistic,   // coasting under a simulation — a fling, or a spring-back
+  Wheel,       // easing toward an offset the wheel keeps adding to
+  Driven,      // a fixed-duration curve — animateTo, ensureVisible
+};
+```
+
+<Aside type="note" title="Divergence: a closed set, not a class hierarchy">
+Flutter models activities as a hierarchy a consumer can extend. This is a closed
+set of five, so it is one value with a tag and the state each mode needs. A drag or
+a wheel notch therefore starts **without allocating**, which a hierarchy could not
+offer. The cost: adding a sixth mode edits a switch, and a consumer cannot supply
+an activity of its own.
+</Aside>
+
+```cpp
+class ScrollPosition final : public Listenable {
+public:
+  void attach(TickerRegistry& tickers);   // a position ticks only once it has one
+  void detach();
+
+  const ScrollMetrics& metrics() const noexcept;
+  float pixels() const noexcept;
+  float viewportDimension() const noexcept;
+  float maxScrollExtent() const noexcept;
+  float overscroll() const noexcept;
+
+  Axis axis() const noexcept;             void setAxis(Axis) noexcept;
+  ScrollController* controller() const noexcept;
+  ScrollActivityKind activity() const noexcept;
+  bool isScrolling() const noexcept;
+
+  void setPhysics(const ScrollPhysics*);  const ScrollPhysics& physics() const noexcept;
+
+  // reported by the viewport during its layout
+  void applyViewportDimension(float value);
+  void applyContentDimensions(float minExtent, float maxExtent);
+  void correctPixels(float value);
+
+  // asked for by a controller or a consumer
+  void jumpTo(float value);
+  void animateTo(float value, float duration, Curve curve = Curves::easeInOut);
+  void ensureVisible(const RenderObject& target, float alignment = 0.0f, float duration = 0.0f);
+  void revealMinimally(const RenderObject& target, float duration = 0.0f);
+
+  // driven by the Scrollable's gestures
+  void beginDrag();
+  void applyDragDelta(float delta);       // the pointer's movement; the offset goes the other way
+  void endDrag(float velocity);
+  bool applyWheelDelta(float delta);      // eased toward
+  bool applyPanDelta(float delta);        // already a displacement; applied as one
+  void goBallistic(float velocity);
+  void goIdle();
+};
+```
+
+One dimension only: the axis lives on it for the benefit of whoever draws or
+hit-tests it, but nothing here does anything two-dimensional.
+
+It is a `Listenable` that fires whenever the offset, the extents, or the overscroll
+changes — so a viewport observing it **for paint** scrolls without laying out.
+
+A wheel notch is **eased toward** rather than applied, so repeated notches
+accumulate into one target instead of jumping once each. A trackpad pan is applied
+directly.
+
+`correctPixels` sets the offset without consulting the boundary, for the one case
+that has none yet: restoring where a scrollable was before its first layout has
+told the position how far its content reaches.
+
+`revealMinimally` moves as little as possible and not at all when the target is
+already visible. That is what focus traversal wants — arrowing down a list should
+creep by one row rather than jump the row to an edge.
+
+## `ScrollController`
+
+```cpp
+class ScrollController final : public Listenable {
+public:
+  explicit ScrollController(float initialOffset = 0.0f) noexcept;
+
+  bool hasClient() const noexcept;          // false before the scrollable's first build
+  ScrollPosition& position() const;
+  ScrollPosition* positionOrNull() const noexcept;
+
+  float offset() const noexcept;            // falls back to initialOffset
+  float initialOffset() const noexcept;
+
+  void jumpTo(float value);
+  void animateTo(float value, float duration, Curve curve = Curves::easeInOut);
+};
+```
+
+Consumer-owned and referred to by pointer, never owned by a widget. It holds **no
+offset of its own**: the `Scrollable` owns the position and lends it here.
+
+The two know each other and each clears the link on the way out, so either one
+outliving the other is inert rather than dangling — which matters, because a
+consumer's controller and the tree that uses it are destroyed in whatever order
+their scopes end.
+
+Attaching notifies, which is why this is a `Listenable`: anything drawing from a
+controller has to tolerate `hasClient() == false` before the first build.
+
+<Aside type="note" title="Divergence: at most one position">
+Flutter's controller drives any number of attached positions. This one drives at
+most one, because the case that needs more — one bar controlling several lists — is
+not one this framework has, and one position makes `offset()` an answer rather than
+a choice.
+</Aside>
+
+## `RenderViewport`
+
+`fltr/scroll/viewport.hpp`.
+
+```cpp
+class RenderViewport final : public RenderProxyBox {
+public:
+  RenderViewport(ScrollPosition* position, Axis axis);
+  bool isRepaintBoundary() const override;   // true
+
+  void setPosition(ScrollPosition*);
+  void setAxis(Axis);
+
+  float offsetToReveal(const RenderObject& target, float alignment) const;
+  float offsetToRevealMinimally(const RenderObject& target) const;
+};
+```
+
+One child, laid out unbounded along the scroll axis and painted at a negative
+offset inside a clip. **Scrolling never runs layout**: the offset feeds paint and
+hit testing only, and the position is observed through the render-attached path,
+so a frame of scrolling invalidates this object's painting and nothing else.
+
+It owns its own display list, so a frame of scrolling re-records a clip and one
+reference to the content rather than the content itself.
+
+Like `RenderPointerRegion`, it lives outside `render/` so the render tree keeps its
+property of depending on no subsystem above it.
+
+## Scrollbar geometry
+
+```cpp
+struct ScrollbarGeometry {
+  float start = 0.0f;
+  float extent = 0.0f;
+
+  static ScrollbarGeometry resolve(const ScrollMetrics&, float trackExtent,
+                                   float minExtent) noexcept;
+  float scrollForThumbDelta(const ScrollMetrics&, float trackExtent,
+                            float delta) const noexcept;
+};
+```
+
+The thumb and the content travel different distances, which is the whole point of a
+scrollbar — `scrollForThumbDelta` is that conversion.
+
+```cpp
+class RenderScrollbarThumb final : public RenderBox {
+public:
+  RenderScrollbarThumb(ScrollPosition* position, Axis axis);
+  void setPosition(ScrollPosition*);   void setAxis(Axis);
+  void setMinExtent(float);            void setColor(Color);
+  void setRadius(BorderRadius);        void setOpacity(ValueListenable<float>* source);
+  Rect thumbRect() const noexcept;     float opacity() const noexcept;
+};
+```
+
+The thumb and only the thumb: it fills the track it is placed in and paints one
+rounded rectangle inside it. It observes the position **for paint**, so dragging the
+content moves the thumb with no rebuild at all.
+
+---
+
+## The widgets
+
+`fltr/widgets/scroll.hpp`.
+
+### `ScrollScope`
+
+```cpp
+class ScrollScope final : public Configure<ScrollScope, InheritedWidget> {
+public:
+  struct Args { Key key; ScrollPosition* position = nullptr; WidgetRef child; };
+  static ScrollPosition* of(BuildContext& context);   // null outside a scrollable
+};
+```
+
+Publishes the enclosing scroll position to its subtree. This is the whole of the
+"no new dispatch mechanisms" principle in practice: a sticky header, a focus
+traversal wanting `ensureVisible`, or a consumer's own code reads the position from
+here in O(1) rather than a notification bubbling up a second tree.
+
+<Aside type="note" title="The recorded cost">
+An *ancestor* cannot passively observe a descendant scrolling, so anything drawn
+outside the scrollable — the scrollbar and the overscroll stretch — is handed a
+**controller** instead.
+</Aside>
+
+### `Viewport`
+
+```cpp
+struct Args { Key key; Axis axis = Axis::Vertical;
+              ScrollPosition* position = nullptr; WidgetRef child; };
+```
+
+The render object without the gestures, for a consumer driving the offset
+themselves.
+
+### `Scrollable`
+
+```cpp
+struct Args {
+  Key key;
+  Axis axis = Axis::Vertical;
+  ScrollController* controller = nullptr;     // consumer-owned; the only way in from outside
+  const ScrollPhysics* physics = nullptr;     // consumer-owned and stateless; null = default
+  WidgetRef child;
+};
+```
+
+A scroll view over a single child.
+
+<Aside type="caution" title="Not lazy, and it says so">
+Every child is built and laid out whether or not it is visible — the same choice
+Flutter made for `SingleChildScrollView`. A few hundred are fine; a few thousand
+are not. Nothing about the position, the physics, the wheel or the scrollbar would
+change if lazy children arrived later.
+</Aside>
+
+### `ScrollObserverState<W>`
+
+The half every indicator drawn outside a `Scrollable` shares: the position its
+controller currently drives, and a subscription to each.
+
+The **controller is watched as well as the position** because it has none until the
+scrollable below has built — an indicator wrapping a scrollable is always built
+first, and has to tolerate that rather than assume it away.
+
+### `ScrollbarThumb`
+
+```cpp
+struct Args {
+  Key key;
+  ScrollPosition* position = nullptr;
+  Axis axis = Axis::Vertical;
+  float minExtent = 24.0f;
+  Color color{255, 255, 255, 120};
+  BorderRadius radius = BorderRadius::zero();
+  ValueListenable<float>* opacity = nullptr;
+};
+```
+
+### `Scrollbar`
+
+```cpp
+struct Args {
+  Key key;
+  ScrollController* controller = nullptr;
+  float thickness = 6.0f;
+  float hoveredThickness = 10.0f;
+  float minThumbExtent = 24.0f;
+  Color color{255, 255, 255, 120};
+  BorderRadius radius = BorderRadius::all(3.0f);
+  float fadeDelay = 0.7f;
+  WidgetRef child;
+};
+```
+
+A thumb over a scroll view: draggable, fading out when nothing has happened,
+widening while the pointer is on it. Behaviour and geometry only — the colour,
+thickness and corner radius are the consumer's.
+
+It **wraps** the `Scrollable` rather than living inside it, and is told which scroll
+view it belongs to by the controller they share. Wrapping is what makes its track
+exactly the viewport's own extent, which is the assumption the thumb geometry is
+built on.
+
+A press on the track outside the thumb is not a grab, so the offset does not leap
+to wherever the pointer happened to land.
+
+### `Overscroll`
+
+```cpp
+struct Args {
+  Key key;
+  ScrollController* controller = nullptr;
+  float maxStretch = 0.15f;
+  WidgetRef child;
+};
+```
+
+Shows what the boundary refused, by scaling the scroll view away from the edge
+being pushed.
+
+It is the render-attached path and nothing else: the scale is an observable the
+`Transform` render object subscribes to, so a frame of stretching repaints one
+object and rebuilds nothing. Only the **pivot** lives in the widget, so a rebuild
+happens once per overscroll episode rather than once per frame.
+
+This is the visual for physics that clamp. Physics that let the offset leave its
+range bounce instead.

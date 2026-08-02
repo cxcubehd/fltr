@@ -1,0 +1,192 @@
+---
+title: Implementing TextService
+description: The four-method boundary through which the framework asks for text, what a PositionedRun really means, and where a real implementation keeps going.
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+Text is consumed exactly the way a rendering backend is: the framework calls out,
+you implement. Nothing above this interface shapes, breaks lines, or rasterises,
+and nothing above it assumes single-line, fixed-width, ASCII, or one glyph per
+character.
+
+```cpp title="paint/text.hpp"
+class TextService {
+public:
+  virtual ~TextService() = default;
+
+  /// Measure and lay out `spec` into at most `maxWidth` logical pixels.
+  /// `maxWidth` may be infinite for an unbounded measurement.
+  virtual ParagraphHandle acquire(const ParagraphSpec& spec, float maxWidth) = 0;
+
+  /// Valid until the handle is released.
+  virtual const ParagraphMetrics& metrics(ParagraphHandle h) const = 0;
+
+  virtual void release(ParagraphHandle h) = 0;
+
+  /// Byte offset in the source text nearest `local` (paragraph-relative).
+  virtual std::uint32_t byteOffsetAt(ParagraphHandle h, Offset local) const = 0;
+};
+```
+
+That is the whole interface. `MonospaceTextService` ships with fltr and its own
+header calls it a development stand-in — fixed advance, greedy wrap, no
+correctness beyond ASCII. It exists so that layout, painting and hit testing meet
+the *shape* of data a real shaper returns, not to render.
+
+## What you are asked for
+
+```cpp
+struct TextSpan     { std::string_view text; TextStyle style; };
+struct ParagraphSpec { std::span<const TextSpan> spans; TextAlign align;
+                       int maxLines; TextOverflow overflow; };
+```
+
+A paragraph is a sequence of styled spans. You are free to reorder, split and
+merge them when you shape.
+
+## What you hand back
+
+```cpp
+struct PositionedRun {
+  Offset offset;          // top-left, paragraph-relative
+  Size size;
+  float baseline;         // from the run's top edge
+  std::uint32_t spanIndex;
+  std::uint32_t byteBegin, byteEnd;
+};
+
+struct LineMetrics {
+  Rect bounds;            // paragraph-relative
+  float baseline;
+  std::uint32_t runBegin, runCount;
+};
+
+struct ParagraphMetrics {
+  Size size;
+  float firstBaseline, lastBaseline;
+  bool didExceedMaxLines, didEllipsize;
+  std::span<const LineMetrics> lines;
+  std::span<const PositionedRun> runs;
+};
+```
+
+<Aside type="note" title="A run is not a span and not a glyph">
+A `PositionedRun` is *a contiguous piece of one span placed on one line*.
+Explicitly **not** one glyph per character, and **not** one run per span: a real
+shaper splits a span across lines and may merge or reorder within one.
+
+Getting this right in your implementation is the difference between a stand-in
+and something a real shaper can drop into.
+</Aside>
+
+The spans in `ParagraphMetrics` must stay valid until the handle is released, so
+they point at storage you own.
+
+## Handle ownership
+
+`acquire` returns a handle the caller owns and must `release`. In practice that
+caller is always `RenderParagraph`:
+
+- it acquires during `performLayout`, with `constraints.maxWidth`;
+- it releases the old handle before acquiring a new one;
+- it releases in its destructor.
+
+<Aside type="tip" title="Count your live handles">
+Expose the outstanding count. It is the only way to see a paragraph leak without
+a profiler, and it turns "the tree released everything" into an assertion:
+
+```cpp
+binding.reset();                       // tear the tree down
+assert(text.liveParagraphs() == 0);
+```
+
+`MonospaceTextService::liveParagraphs()` exists for exactly this, and the
+walkthrough's smoke test checks it.
+</Aside>
+
+A slot vector plus a free list is enough. Return `index + 1` so that zero stays
+available as `kNullParagraph`.
+
+## A working implementation, in outline
+
+<Steps>
+
+1. **Copy the spans.** The `string_view`s you are handed belong to the caller. If
+   you want `byteOffsetAt` and drawing to work after the caller's storage has
+   moved, take a copy per span.
+
+2. **Tokenise.** Split each span into words and hard breaks, keeping trailing
+   spaces attached to the word before them — so a break swallows the space
+   instead of starting the next line with it.
+
+3. **Wrap greedily.** Measure each token; if it would exceed `maxWidth` and the
+   line is not empty, break. Extend the run in progress when the next token
+   continues the same span contiguously; otherwise start a new run.
+
+4. **Place the runs on a shared baseline.** Line baseline is the maximum ascent
+   of its runs; line height is that plus the maximum descent. Each run's top is
+   `lineTop + lineBaseline - runAscent`. That is what makes text of two different
+   sizes sit on a common line.
+
+5. **Apply alignment.** Against a bounded `maxWidth`, shift each line by the
+   slack. Against an infinite one there is nothing to align to yet — compute the
+   widest line first, then shift.
+
+6. **Fill in the metrics.** `size` is the widest line by the total height;
+   `firstBaseline` and `lastBaseline` are what a future baseline-aligned flex
+   will want.
+
+</Steps>
+
+## Where to get the numbers
+
+Ascent should come from the font, not from a constant. Most rasterisers expose
+enough to derive it — with raylib, the bottom of a capital `H` is where the
+baseline sits:
+
+```cpp
+const int index = GetGlyphIndex(font, 'H');
+const float top = static_cast<float>(font.glyphs[index].offsetY);
+const float height = font.recs[index].height;
+ascentRatio_ = (top + height) / static_cast<float>(font.baseSize);
+```
+
+`MonospaceTextService` hardcodes this ratio and says so in a comment. Yours
+should not.
+
+## Drawing
+
+Nothing in the interface draws. The framework records
+`DrawParagraph{handle, offset, tint}`, and it is up to you to connect that back:
+
+```cpp
+case fltr::PaintOp::DrawParagraph:
+  text_.draw(cmd.drawParagraph.paragraph, cmd.drawParagraph.offset, tint);
+  break;
+```
+
+Adding a `draw` method to your own service — outside the interface — keeps every
+notion of glyphs and runs inside it, and the backend never learns what a run is.
+Multiply the command's tint with your per-run colours so that an `Opacity` above a
+`Text` reaches the glyphs.
+
+## Where the interface is incomplete
+
+The boundary is one-directional today. It answers "which byte is at this point"
+but not:
+
+- **byte → caret rectangle**, for drawing a cursor;
+- **range → rectangles**, for drawing a selection across line breaks;
+- **cluster boundaries**, for moving a cursor a grapheme at a time.
+
+None of these can be faked convincingly, and text editing is impossible without
+them. Adding them to the interface is cheap now and a breaking change later, so
+they are owed whenever the interface is next touched.
+
+<Aside type="caution" title="Ellipsis is expressible and easy to skip">
+`TextOverflow::Ellipsis` and `ParagraphMetrics::didEllipsize` exist in the
+interface. Implementing them means trimming the last run to fit an ellipsis
+glyph and reporting that you did — the walkthrough's service does not, and says
+so. Decide deliberately rather than by omission.
+</Aside>

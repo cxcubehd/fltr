@@ -1,0 +1,540 @@
+---
+title: gestures
+description: Pointer and key events, the arena, the four recognizers, hover tracking, and the one render object that consumes input.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Everything in `include/fltr/gestures/`. Architecture:
+[Input](/fltr/architecture/input/).
+
+## Events
+
+`fltr/gestures/events.hpp`.
+
+```cpp
+using PointerId = std::uint32_t;
+
+enum class PointerPhase : std::uint8_t {
+  Hover,    // moved with nothing pressed
+  Down, Move, Up,
+  Cancel,   // withdrawn by the consumer: window focus lost, device removed
+};
+
+enum class PointerDeviceKind : std::uint8_t { Mouse, Touch };
+
+enum class PointerButton : std::uint8_t { Primary = 1, Secondary = 2, Tertiary = 4 };
+using PointerButtons = Flags<PointerButton>;
+
+enum class KeyModifier : std::uint8_t { Shift = 1, Control = 2, Alt = 4, Meta = 8 };
+using KeyModifiers = Flags<KeyModifier>;
+
+struct PointerEvent {
+  PointerPhase phase = PointerPhase::Hover;
+  PointerId pointer = 0;
+  PointerDeviceKind kind = PointerDeviceKind::Mouse;
+  Offset position;                                     // view space
+  PointerButtons buttons{PointerButton::Primary};      // held *after* this event
+  KeyModifiers modifiers;
+};
+```
+
+<Aside type="note" title="There is no timestamp">
+Time enters this layer through the frame, exactly as it enters the ticker, so a
+recognizer measuring a duration reads the gesture clock the binding advances
+rather than one of its own. That is what makes a long press fire while the pointer
+is perfectly still, and what lets a test land a timeout without waiting for one.
+</Aside>
+
+Only a mouse hovers. A touch pointer is not tracked between its down and its up,
+so it never produces enter or exit.
+
+`buttons` reports which are held once the event has happened, not which changed.
+The default is the primary button, so the common case reports nothing and a touch
+pointer needs no button model at all.
+
+### Signals
+
+```cpp
+enum class PointerSignalKind : std::uint8_t { Scroll, Pan };
+
+struct PointerSignalEvent {
+  PointerSignalKind kind = PointerSignalKind::Scroll;
+  PointerId pointer = 0;
+  Offset position;        // view space
+  Offset localPosition;   // filled in by the binding on the way down
+  Offset delta;           // logical pixels the content should move
+  KeyModifiers modifiers;
+};
+```
+
+A wheel notch is already converted by the consumer, which is the only place that
+knows the platform's notch size. A trackpad pan arrives in physical pixels.
+
+### Cursors and hit-test behaviour
+
+```cpp
+enum class MouseCursor : std::uint8_t {
+  Defer, None, Basic, Click, Text, Forbidden,
+  Grab, Grabbing, Move, Progress, ResizeLeftRight, ResizeUpDown,
+};
+
+enum class HitTestBehavior : std::uint8_t {
+  DeferToChild,  // hit only where a child was hit
+  Opaque,        // hit anywhere within bounds; nothing behind is reached
+  Translucent,   // hit anywhere within bounds; what is behind is reached too
+};
+```
+
+`MouseCursor::Defer` is the absence of an opinion, so whatever is painted behind
+decides.
+
+## Keys
+
+`fltr/gestures/keys.hpp`.
+
+```cpp
+enum class KeyEventType : std::uint8_t { Down, Up, Repeat };
+enum class PhysicalKey  : std::uint16_t { None, KeyA … Numpad9 };
+enum class LogicalKey   : std::uint16_t { None, KeyA … CapsLock };
+
+struct KeyEvent {
+  KeyEventType type = KeyEventType::Down;
+  PhysicalKey physical = PhysicalKey::None;
+  LogicalKey  logical  = LogicalKey::None;
+  KeyModifiers modifiers;
+  char32_t character = 0;
+};
+```
+
+**Physical** is where the key sits on the keyboard, independent of layout — what
+movement binds to, so WASD stays under the same fingers on AZERTY. **Logical** is
+what the key means under the active layout — what a shortcut binds to. They are
+separate enums for the reason Flutter keeps them separate: the same position
+produces different meanings, and the same meaning comes from different positions.
+
+`character` is the code point this keystroke produces, or zero. Which one that is
+depends on the layout and the IME, both of which live on the consumer's side, so
+it is **reported rather than derived**.
+
+## `KeyboardBinding`
+
+`fltr/gestures/keyboard.hpp`.
+
+```cpp
+class KeyHandler {
+public:
+  virtual bool handleKey(const KeyEvent& event) = 0;   // true consumes
+};
+
+class KeyboardBinding {
+public:
+  bool dispatch(const KeyEvent& event);
+
+  void addHandler(KeyHandler& handler);
+  void removeHandler(KeyHandler& handler);
+  std::size_t handlerCount() const noexcept;
+
+  bool isPressed(PhysicalKey key) const noexcept;
+  KeyModifiers modifiers() const noexcept;
+  std::size_t pressedCount() const noexcept;
+  void clearPressed() noexcept;
+};
+```
+
+Handlers are offered events in **registration order**; there is no notion here of
+what is focused. The focus system registers itself as one more handler, so a game
+that never builds a focus scope holds no handler here and pays nothing for the
+fact that one exists — `handlerCount() == 0` is that claim, measured.
+
+The held-key set is worth having on its own: a game reads it directly for movement,
+where an event stream is the wrong shape. `clearPressed()` is what you call when
+the window loses focus and the ups will never arrive.
+
+## `GestureArena`
+
+`fltr/gestures/arena.hpp`.
+
+```cpp
+enum class GestureDisposition : std::uint8_t { Accepted, Rejected };
+
+class GestureArenaMember {
+public:
+  virtual void acceptGesture(PointerId pointer) = 0;
+  virtual void rejectGesture(PointerId pointer) = 0;
+};
+
+class GestureArena {
+public:
+  void add(PointerId pointer, GestureArenaMember& member);
+  void close(PointerId pointer);     // no more members; resolves at once if only one
+  void sweep(PointerId pointer);     // on up: the first member still standing wins
+  void hold(PointerId pointer);      // defer the sweep
+  void release(PointerId pointer);   // end a hold, performing any deferred sweep
+  void cancel(PointerId pointer);    // drop without awarding
+  void resolve(PointerId, GestureArenaMember&, GestureDisposition);
+  void remove(GestureArenaMember& member);
+
+  std::size_t memberCount(PointerId pointer) const;
+  bool isOpen(PointerId pointer) const;
+};
+```
+
+Exactly one member wins; every other is told it lost, so it can undo whatever
+provisional feedback it gave.
+
+Members join while the down event travels the hit-test path, so they are ordered
+**deepest-first** — the sweep therefore awards the innermost region under the
+point.
+
+`hold` is for a recognizer whose gesture is not over when the pointer comes up — a
+double tap waiting for the second one — so the sweep cannot award the arena to a
+contender in the meantime.
+
+`remove` deliberately awards nothing: it is what a recognizer being destroyed
+calls, and firing a game callback out of a destructor is worse than leaving the
+remaining contender to be resolved by the sweep it was already waiting for.
+
+Memberships live in a flat list shared by every arena rather than a vector per
+pointer, so resolving a gesture returns storage to the arena instead of to the
+allocator.
+
+## `PointerBinding`
+
+`fltr/gestures/binding.hpp`. Where the consumer pushes pointer events, and the one
+place that decides what each of them implies.
+
+```cpp
+class PointerBinding {
+public:
+  void dispatch(const PointerEvent& event, RenderBox& root);
+  bool dispatchSignal(const PointerSignalEvent& event, RenderBox& root);
+  void settleHover(RenderBox& root);
+
+  void advanceTime(float seconds);        // the gesture clock
+  float now() const noexcept;
+  bool hasPendingTimeouts() const noexcept;
+  void scheduleTimeout(GestureRecognizer&, PointerId, float delay);
+  void cancelTimeouts(GestureRecognizer&);
+
+  GestureArena& arena() noexcept;
+  MouseTracker& mouseTracker() noexcept;
+  MouseCursor cursor() const noexcept;
+
+  void addRoute(PointerId, GestureRecognizer&);
+  void removeRoute(PointerId, GestureRecognizer&);
+  void removeRoutes(GestureRecognizer&);
+
+  int hitTestCount() const noexcept;
+};
+```
+
+<Aside type="note" title="Divergence: routes by pointer id, not a cached path">
+Flutter caches the hit-test path per pointer at down and dispatches every later
+event along it. fltr hit tests **only for the down event** and routes everything
+after it by pointer id, to the recognizers that claimed it. Two reasons:
+
+- a cached path is a list of raw render-object pointers held across frames, and a
+  rebuild can destroy one mid-gesture; a route is owned by the recognizer that
+  registered it and is withdrawn when the recognizer dies;
+- a recognizer must keep receiving events after the pointer leaves the region it
+  started in, which is what routing by pointer gives directly.
+
+The cost: a render object cannot receive raw move or up events without going
+through a recognizer.
+</Aside>
+
+<Aside type="note" title="A signal never enters the arena">
+There is nothing to contest — the pointer is not pressed and no gesture is
+forming — so the innermost scrollable that can still move takes it, and the rest
+see it only if that one declines. This is what a browser does when a
+scrolled-to-the-end list lets the page scroll instead.
+</Aside>
+
+`settleHover` runs once per frame and does nothing at all when nothing moved.
+`hitTestCount()` is the measurement behind "a frame that changes nothing runs no
+hit tests".
+
+Dispatch is **non-re-entrant** and says so: a pointer callback that dispatches
+another event trips a contract violation rather than reallocating the path the
+outer walk is holding.
+
+## `GestureRecognizer`
+
+`fltr/gestures/recognizer.hpp`.
+
+```cpp
+class GestureRecognizer : public GestureArenaMember {
+public:
+  explicit GestureRecognizer(PointerBinding& binding) noexcept;
+
+  PointerButtons allowedButtons{PointerButton::Primary};
+  void setCoordinateSpace(RenderBox* box) noexcept;
+
+  void addPointer(const PointerEvent& down);
+  virtual void handleEvent(const PointerEvent& event) = 0;
+  virtual void handleTimeout(PointerId pointer) {}
+
+protected:
+  void stopTracking(PointerId pointer);
+  void resolve(PointerId pointer, GestureDisposition disposition);
+  void scheduleTimeout(PointerId pointer, float delay);
+  void cancelTimeouts();
+  float now() const noexcept;
+  Offset toLocal(Offset global) const;
+};
+```
+
+A recognizer is owned by the render object that offered it the pointer, so its
+lifetime is unambiguous and its routes, arena entries and timeouts are withdrawn
+when it dies.
+
+`allowedButtons` is how a secondary-button menu coexists with a primary-button tap
+on the same region: a down holding none of them is not offered to the recognizer
+at all.
+
+Deadlines are measured on the gesture clock, so they land on a frame boundary
+rather than at an arbitrary instant — the same bargain the ticker makes.
+
+### Constants
+
+```cpp
+inline constexpr float kTouchSlop        = 18.0f;
+inline constexpr float kPanSlop          = kTouchSlop * 2.0f;
+inline constexpr float kLongPressTimeout = 0.5f;
+inline constexpr float kDoubleTapTimeout = 0.3f;
+inline constexpr float kDoubleTapSlop    = 100.0f;
+inline constexpr float kMinFlingVelocity = 50.0f;
+inline constexpr float kMaxFlingVelocity = 8000.0f;
+```
+
+A drag with no axis clears a wider threshold, since travel in any direction counts
+towards it. The double-tap slop is wider than the touch slop because the hand
+lifts and returns between the two taps rather than staying on the surface.
+
+### `TapGestureRecognizer`
+
+```cpp
+Callback<void()> onTapDown, onTap, onTapCancel;
+bool isWanted() const noexcept;   // a recognizer nobody listens to stays out of the arena
+bool tracking() const noexcept;
+```
+
+`onTapDown` fires when the recognizer **wins** the pointer, not when the pointer
+goes down, so press feedback is never shown by a region that turns out to have
+lost the gesture. With a single contender that is the same instant.
+
+<Aside type="note" title="Divergence: a contested tap shows its feedback on release">
+Flutter also fires tap-down after a press timeout, so a region still competing
+with a drag recognizer can show feedback before the contest ends. The gesture
+clock could carry that, but it would mean a tap next to a scrollable lights up
+before the finger has committed to either.
+</Aside>
+
+### `LongPressGestureRecognizer`
+
+```cpp
+float timeout = kLongPressTimeout;
+float slop = kTouchSlop;
+Callback<void(const LongPressStartDetails&)>      onStart;
+Callback<void(const LongPressMoveUpdateDetails&)> onMoveUpdate;
+Callback<void(const LongPressEndDetails&)>        onEnd;
+Callback<void()>                                   onCancel;
+bool pressing() const noexcept;
+```
+
+```cpp
+struct LongPressStartDetails      { Offset globalPosition, localPosition; };
+struct LongPressMoveUpdateDetails { Offset globalPosition, localPosition, offsetFromOrigin; };
+struct LongPressEndDetails        { Offset globalPosition, localPosition, velocity; };
+```
+
+It claims the pointer when the deadline passes, which is what rejects the tap
+competing for it. Until then it contends without having committed, so lifting
+early leaves the tap to win normally. Travel **after** recognition is reported
+rather than cancelling the press.
+
+### `DoubleTapGestureRecognizer`
+
+```cpp
+float timeout = kDoubleTapTimeout;
+float slop = kDoubleTapSlop;
+Callback<void()> onDoubleTap;
+bool awaitingSecondTap() const noexcept;
+```
+
+The awkward part is not the second tap, it is the first: when it comes up, the
+arena would sweep and award the pointer to whoever else is contending — a plain
+tap, usually — before this recognizer knows whether a second tap is coming. So it
+**holds** the arena across that gap.
+
+That is why a region with both a tap and a double tap fires its single tap one
+timeout late. Flutter has exactly this behaviour, for exactly this reason.
+
+Winning is not what completes a double tap; the second tap is. `acceptGesture` is
+therefore empty.
+
+### `DragGestureRecognizer`
+
+```cpp
+enum class DragAxis : std::uint8_t { Pan, Horizontal, Vertical };
+enum class DragStartBehavior : std::uint8_t { Start, Down };
+
+DragAxis axis = DragAxis::Pan;
+DragStartBehavior startBehavior = DragStartBehavior::Start;
+float minFlingVelocity = kMinFlingVelocity;
+float maxFlingVelocity = kMaxFlingVelocity;
+
+Callback<void(const DragDownDetails&)>   onDown;
+Callback<void(const DragStartDetails&)>  onStart;
+Callback<void(const DragUpdateDetails&)> onUpdate;
+Callback<void(const DragEndDetails&)>    onEnd;
+Callback<void()>                          onCancel;
+bool dragging() const noexcept;
+```
+
+```cpp
+struct DragUpdateDetails { Offset delta; float primaryDelta = 0.0f;
+                           Offset globalPosition, localPosition; };
+struct DragEndDetails    { Offset velocity; float primaryVelocity = 0.0f; };
+```
+
+It does not enter the arena as a winner: it competes until the pointer has moved
+past the slop on its axis, which is what lets a tap inside a scrollable still be a
+tap.
+
+| `startBehavior` | Measured from | Wanted by |
+|---|---|---|
+| `Start` | where the slop was cleared — content does not jump | a scroll view |
+| `Down` | where the pointer went down — content keeps up with the finger exactly | dragging an object |
+
+`primaryDelta` is the component along a constrained axis; zero for a pan, which
+has no primary axis to report.
+
+<Aside type="note" title="Divergence: one recognizer with an axis">
+Flutter has three recognizer classes — vertical, horizontal and pan. The arena
+behaviour is identical; what differs is only which distance is compared against
+which slop, and one class is a great deal less to instantiate from a widget that
+has to pick at runtime.
+</Aside>
+
+### `VelocityTracker`
+
+`fltr/gestures/velocity.hpp`.
+
+```cpp
+struct Velocity { Offset pixelsPerSecond;
+                  Velocity clampMagnitude(float min, float max) const noexcept; };
+
+struct VelocityEstimate {
+  Offset pixelsPerSecond;
+  float confidence = 0.0f;   // 0..1; low means the gesture changed direction mid-flight
+  float duration = 0.0f;
+  Offset offset;
+};
+
+class VelocityTracker {
+public:
+  void addSample(float time, Offset position);
+  VelocityEstimate estimate() const;
+  Velocity velocity() const;
+  void reset() noexcept;
+  std::size_t sampleCount() const noexcept;
+};
+```
+
+A least-squares quadratic fit over a bounded window (20 samples, 0.1 s horizon),
+as Flutter does — rather than the difference between the last two samples, which a
+finger decelerating into a release turns into a fling that does not match what the
+hand did.
+
+`time` is the gesture clock, so several samples may share one value — a game pumps
+its input queue at a frame boundary. **A repeated time replaces the sample** rather
+than adding a second one at the same instant, which would weight that instant
+twice in the fit.
+
+Storage is a ring, so a long drag neither grows nor shifts anything.
+
+## `MouseTracker`
+
+`fltr/gestures/mouse_tracker.hpp`.
+
+```cpp
+class MouseTracker {
+public:
+  void update(Offset position, const HitTestResult& path);
+  void invalidate() noexcept;
+  bool needsResolve() const noexcept;
+  void clear();                                  // the cursor left the surface
+  void forget(RenderPointerRegion& region);      // a region being destroyed
+
+  bool hasCursor() const noexcept;
+  Offset position() const noexcept;
+  std::size_t hoveredCount() const noexcept;
+  MouseCursor cursor() const noexcept;
+};
+```
+
+Enter and exit, synthesized by **diffing hit-test results**, and the cursor that
+follows from what lies under the pointer. Deliberately not gesture recognition, and
+it never touches the arena: nothing competes for a hover, and there is nothing to
+win.
+
+`cursor()` is the innermost region under the pointer that has an opinion, falling
+back to `Basic` so the consumer always has something to apply.
+
+`forget` drops a region **without** an exit callback: the state that callback would
+have updated is going away with it.
+
+It follows one cursor. A game has one mouse, and a touch pointer never hovers.
+
+## `RenderPointerRegion`
+
+`fltr/gestures/pointer_region.hpp`. The one render object that consumes pointer
+events.
+
+```cpp
+struct PointerCallbacks {
+  Callback<void()> onEnter, onExit;
+  Callback<void()> onTapDown, onTap, onTapCancel, onDoubleTap;
+  Callback<void(const LongPressStartDetails&)> onLongPress;
+  Callback<void(const LongPressMoveUpdateDetails&)> onLongPressMoveUpdate;
+  Callback<void(const LongPressEndDetails&)> onLongPressEnd;
+  Callback<void()> onLongPressCancel;
+  DragAxis dragAxis = DragAxis::Pan;
+  DragStartBehavior dragStartBehavior = DragStartBehavior::Start;
+  Callback<void(const DragDownDetails&)> onDragDown;
+  Callback<void(const DragStartDetails&)> onDragStart;
+  Callback<void(const DragUpdateDetails&)> onDragUpdate;
+  Callback<void(const DragEndDetails&)> onDragEnd;
+  Callback<void()> onDragCancel;
+  Callback<bool(const PointerSignalEvent&)> onSignal;
+  PointerButtons buttons{PointerButton::Primary};
+};
+
+class RenderPointerRegion final : public RenderProxyBox {
+public:
+  RenderPointerRegion(PointerBinding& binding, HitTestBehavior behavior);
+  void setBehavior(HitTestBehavior);
+  void setCursor(MouseCursor);
+  void setCallbacks(const PointerCallbacks&);
+
+  RenderPointerRegion* asPointerRegion() noexcept override;
+  bool wantsHover() const noexcept;
+  bool tracksMouse() const noexcept;
+  bool hovered() const noexcept;
+  MouseCursor cursor() const noexcept;
+  std::size_t recognizerCount() const noexcept;
+};
+```
+
+It lives with the gestures rather than in `render/` so the render tree keeps the
+property it was built with: **no dependency on the gesture layer at all**, and
+testable without one.
+
+Recognizers are created only once something wants them, so a region that only
+reports hover or asks for a cursor holds none. `recognizerCount()` is that claim as
+a number rather than a comment.
+
+`PointerCallbacks` arrives as one piece so the render object has a single place to
+notice a change.

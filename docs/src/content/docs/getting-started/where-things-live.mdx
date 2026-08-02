@@ -1,0 +1,123 @@
+---
+title: Where things live
+description: The header map, the single namespace, and the two places the layout deliberately breaks its own rule.
+---
+
+import { Aside, FileTree } from '@astrojs/starlight/components';
+
+Everything public is in one flat namespace, `fltr`. There is no per-subsystem
+nesting: `fltr::Row`, `fltr::RenderFlex` and `fltr::GestureArena` all sit
+together. The directory structure is about *dependency order*, not about naming.
+
+<FileTree>
+
+- include/fltr/
+  - core/ geometry, constraints, colours, and the shared observable machinery
+    - arena.hpp
+    - callback.hpp
+    - config.hpp contracts, feature detection
+    - constraints.hpp
+    - flags.hpp
+    - function_ref.hpp
+    - geometry.hpp
+    - key.hpp
+    - listenable.hpp
+    - observable.hpp
+    - type_tag.hpp
+  - paint/ what the framework hands a renderer
+    - display_list.hpp
+    - text.hpp
+  - render/ the layout and paint tree
+    - object.hpp
+    - box.hpp
+    - boxes.hpp
+    - flex.hpp
+    - stack.hpp
+    - hit_test.hpp
+    - overlay.hpp
+  - animation/
+    - curves.hpp
+    - ticker.hpp
+    - driver.hpp
+    - tween.hpp
+    - simulation.hpp
+  - gestures/ events, routing, recognizers
+    - events.hpp
+    - keys.hpp
+    - keyboard.hpp
+    - arena.hpp
+    - recognizer.hpp
+    - tap.hpp
+    - multitap.hpp
+    - long_press.hpp
+    - drag.hpp
+    - velocity.hpp
+    - mouse_tracker.hpp
+    - pointer_region.hpp
+    - binding.hpp
+    - constants.hpp
+  - widgets/ the declarative layer
+    - framework.hpp
+    - basic.hpp
+    - binding.hpp **the consumer entry point**
+    - inherited.hpp
+    - reactive.hpp
+    - animated.hpp
+    - switcher.hpp
+    - scroll.hpp
+    - focus.hpp
+    - overlay.hpp
+  - scroll/
+    - position.hpp
+    - physics.hpp
+    - viewport.hpp
+  - focus/
+    - node.hpp
+    - manager.hpp
+  - components/ behaviour without style
+    - states.hpp
+    - component.hpp
+    - button.hpp
+    - toggle.hpp
+    - slider.hpp
+    - progress.hpp
+  - debug/
+    - format.hpp
+  - harness.hpp headless tree and command dumps
+
+</FileTree>
+
+## The one header you always need
+
+`fltr/widgets/binding.hpp` is the entry point: it declares `WidgetBinding`, which
+owns the three trees and runs the three phases. It pulls in `widgets/basic.hpp`,
+so the widget catalogue comes with it.
+
+## Two deliberate exceptions
+
+The layout has a rule — a directory only depends on directories below it — and
+breaking it twice was cheaper than the alternative.
+
+<Aside type="note" title="RenderPointerRegion lives in gestures/, not render/">
+It is a render object, but it is the *only* one that knows the gesture layer
+exists. Putting it in `render/` would make the entire render tree depend on
+`gestures/`. Instead, `RenderBox` exposes one virtual hook —
+`asPointerRegion()`, which returns non-null for exactly one class — and the class
+itself lives with the subsystem it serves. The same reasoning puts
+`RenderViewport` and `RenderScrollbarThumb` in `scroll/`.
+</Aside>
+
+<Aside type="note" title="harness.hpp sits at the top level">
+It is not a subsystem; it reaches into all of them. Every function in it takes a
+tree or a list and returns a `std::string`, and nothing in the framework depends
+on it.
+</Aside>
+
+## Other namespaces
+
+| Namespace | What is in it |
+|---|---|
+| `fltr` | Everything public |
+| `fltr::Curves` | The easing constants: `linear`, `easeIn`, `easeOut`, `easeInOut`, and the cubic variants |
+| `fltr::dbg` | `str(...)` overloads for the geometry types, used by the harness dumps |
+| `fltr::detail` | Internal. The contract-violation handler is the only thing here a consumer touches. |

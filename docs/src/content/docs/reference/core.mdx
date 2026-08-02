@@ -1,0 +1,353 @@
+---
+title: core
+description: Geometry, constraints, colour, the arena, callbacks, keys, and the observable machinery everything else is built on.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Everything in `include/fltr/core/`. All of it is in namespace `fltr`.
+
+## Geometry
+
+`fltr/core/geometry.hpp`. Every type here has a defaulted `operator==` and a free
+`lerp(a, b, t)` overload — that overload is the ADL hook the `Interpolatable`
+concept keys on, so every one of these can be animated.
+
+```cpp
+inline constexpr float kInf = std::numeric_limits<float>::infinity();
+enum class Axis : std::uint8_t { Horizontal, Vertical };
+
+inline constexpr float lerpF(float a, float b, float t) noexcept;
+inline constexpr float lerp(float a, float b, float t) noexcept;
+inline bool nearlyEqual(float a, float b, float eps = 1e-4f) noexcept;
+```
+
+### `Offset`
+
+```cpp
+struct Offset {
+  float dx = 0.0f, dy = 0.0f;
+  static constexpr Offset zero() noexcept;
+  constexpr Offset operator+(Offset) const noexcept;
+  constexpr Offset operator-(Offset) const noexcept;
+  constexpr Offset operator*(float) const noexcept;
+  constexpr Offset operator-() const noexcept;
+  constexpr Offset& operator+=(Offset) noexcept;
+  float distance() const noexcept;
+  float distanceSquared() const noexcept;
+};
+```
+
+### `Size`
+
+```cpp
+struct Size {
+  float width = 0.0f, height = 0.0f;
+  static constexpr Size zero() noexcept;
+  static constexpr Size square(float d) noexcept;
+  constexpr bool isEmpty() const noexcept;    // either axis <= 0
+  constexpr bool isFinite() const noexcept;
+  constexpr Offset center(Offset origin) const noexcept;
+  constexpr Offset alongSize(Alignment) const noexcept;
+};
+```
+
+### `Rect`
+
+```cpp
+struct Rect {
+  float left = 0, top = 0, right = 0, bottom = 0;
+  static constexpr Rect fromLTWH(float l, float t, float w, float h) noexcept;
+  static constexpr Rect fromLTRB(float l, float t, float r, float b) noexcept;
+  static constexpr Rect fromOriginSize(Offset, Size) noexcept;
+  static constexpr Rect zero() noexcept;
+
+  constexpr float width() const noexcept;   constexpr float height() const noexcept;
+  constexpr Size size() const noexcept;
+  constexpr Offset topLeft() const noexcept;  constexpr Offset center() const noexcept;
+  constexpr bool isEmpty() const noexcept;
+  constexpr bool contains(Offset) const noexcept;   // half-open: [left, right)
+  constexpr Rect shift(Offset) const noexcept;
+  constexpr Rect intersect(Rect) const noexcept;
+  constexpr Rect expandToInclude(Rect) const noexcept;
+  constexpr bool overlaps(Rect) const noexcept;
+};
+```
+
+### `EdgeInsets`
+
+```cpp
+struct EdgeInsets {
+  float left = 0, top = 0, right = 0, bottom = 0;
+  static constexpr EdgeInsets all(float v) noexcept;
+  static constexpr EdgeInsets symmetric(float horizontal, float vertical) noexcept;
+  static constexpr EdgeInsets only(float l = 0, float t = 0, float r = 0, float b = 0) noexcept;
+  constexpr float horizontal() const noexcept;  constexpr float vertical() const noexcept;
+  constexpr Offset topLeft() const noexcept;
+  constexpr Size deflateSize(Size) const noexcept;
+  constexpr Size inflateSize(Size) const noexcept;
+  constexpr Rect deflateRect(Rect) const noexcept;
+};
+```
+
+### `Alignment`
+
+```cpp
+struct Alignment {
+  float x = 0.0f, y = 0.0f;   // -1 left/top, 0 centre, +1 right/bottom
+  static constexpr Alignment topLeft() / topCenter() / topRight() noexcept;
+  static constexpr Alignment centerLeft() / center() / centerRight() noexcept;
+  static constexpr Alignment bottomLeft() / bottomCenter() / bottomRight() noexcept;
+  constexpr Offset inscribe(Size child, Size container) const noexcept;
+};
+```
+
+### `Color`
+
+```cpp
+struct Color {
+  std::uint8_t r = 0, g = 0, b = 0, a = 255;   // straight, NOT premultiplied
+  static constexpr Color rgba(std::uint8_t r, std::uint8_t g, std::uint8_t b,
+                              std::uint8_t a = 255) noexcept;
+  static constexpr Color argb(std::uint32_t v) noexcept;   // 0xAARRGGBB
+  static constexpr Color transparent() noexcept;
+  constexpr Color withAlpha(std::uint8_t) const noexcept;
+  constexpr Color scaleAlpha(float) const noexcept;
+};
+Color lerp(Color a, Color b, float t) noexcept;
+```
+
+### `Radius`, `BorderRadius`
+
+```cpp
+struct Radius { float x = 0, y = 0;  static constexpr Radius circular(float) noexcept; };
+
+struct BorderRadius {
+  Radius topLeft, topRight, bottomRight, bottomLeft;
+  static constexpr BorderRadius all(float v) noexcept;
+  static constexpr BorderRadius zero() noexcept;
+  constexpr bool isZero() const noexcept;
+};
+```
+
+### `Transform2D`
+
+```cpp
+struct Transform2D {
+  float a = 1, b = 0, c = 0, d = 1, tx = 0, ty = 0;   // row-major 2D affine, 24 bytes
+
+  static constexpr Transform2D identity() noexcept;
+  static constexpr Transform2D translation(Offset) noexcept;
+  static constexpr Transform2D scaling(float sx, float sy) noexcept;
+  static Transform2D rotation(float radians) noexcept;
+  static Transform2D aroundOrigin(const Transform2D&, Offset origin) noexcept;
+
+  constexpr bool isIdentity() const noexcept;
+  constexpr bool isTranslationOnly() const noexcept;
+  constexpr Offset apply(Offset p) const noexcept;   // {a·x + c·y + tx, b·x + d·y + ty}
+  Rect applyToRect(Rect) const noexcept;             // axis-aligned bounds
+  constexpr float determinant() const noexcept;
+  bool invert(Transform2D& out) const noexcept;      // false when degenerate
+  constexpr Transform2D then(const Transform2D& m) const noexcept;   // this, then m
+};
+static_assert(sizeof(Transform2D) == 24);
+```
+
+<Aside type="note" title="Why 2D affine and not 4×4">
+Hit testing must invert the transform *exactly* to map a global point into a
+local one, and a 4×4 with perspective inverts only partially. Rotation, scale,
+skew and translation are expressible; perspective is not.
+</Aside>
+
+## `BoxConstraints`
+
+`fltr/core/constraints.hpp`.
+
+```cpp
+struct BoxConstraints {
+  float minWidth = 0, maxWidth = kInf, minHeight = 0, maxHeight = kInf;
+
+  static constexpr BoxConstraints tight(Size) noexcept;
+  static constexpr BoxConstraints tightFor(float w, float h) noexcept;
+  static constexpr BoxConstraints tightWidth(float) noexcept;
+  static constexpr BoxConstraints tightHeight(float) noexcept;
+  static constexpr BoxConstraints loose(Size) noexcept;
+  static constexpr BoxConstraints expand(float w = kInf, float h = kInf) noexcept;
+  static constexpr BoxConstraints unbounded() noexcept;
+
+  constexpr bool hasTightWidth() const noexcept;   constexpr bool hasTightHeight() const noexcept;
+  constexpr bool isTight() const noexcept;
+  constexpr bool hasBoundedWidth() const noexcept; constexpr bool hasBoundedHeight() const noexcept;
+  constexpr bool isNormalized() const noexcept;
+
+  constexpr float constrainWidth(float w = kInf) const noexcept;
+  constexpr float constrainHeight(float h = kInf) const noexcept;
+  constexpr Size constrain(Size) const noexcept;
+  constexpr Size smallest() const noexcept;   constexpr Size biggest() const noexcept;
+
+  constexpr BoxConstraints loosen() const noexcept;
+  constexpr BoxConstraints tighten(float w, float h) const noexcept;
+  constexpr BoxConstraints widthConstraints() const noexcept;
+  constexpr BoxConstraints heightConstraints() const noexcept;
+  constexpr BoxConstraints deflate(EdgeInsets) const noexcept;
+  constexpr BoxConstraints enforce(BoxConstraints outer) const noexcept;
+  constexpr BoxConstraints copyWith(std::optional<float> minW = {}, maxW = {},
+                                    minH = {}, maxH = {}) const noexcept;
+};
+```
+
+## `Arena`
+
+`fltr/core/arena.hpp`. The build scratch allocator.
+
+```cpp
+class Arena {
+  explicit Arena(std::size_t firstChunkBytes = 64 * 1024);
+  void* allocate(std::size_t bytes, std::size_t align);
+
+  /// Statically rejects non-trivially-destructible T.
+  template <class T, class... Args> T* create(Args&&...);
+  /// The explicit exception: registers a destructor to run at reset.
+  template <class T, class... Args> T* createOwning(Args&&...);
+
+  void reset();                                  // rewind + bump the generation
+  std::uint32_t generation() const noexcept;
+  std::size_t bytesUsed() / chunkCount() / reservedBytes() const noexcept;
+};
+```
+
+## Observables
+
+`fltr/core/listenable.hpp` and `fltr/core/observable.hpp`.
+
+```cpp
+class Subscription {                  // intrusive, allocation-free, move-only
+  void detach() noexcept;
+  bool attached() const noexcept;
+  Listenable* source() const noexcept;
+};
+
+class Listenable {
+  void subscribe(Subscription&, void (*fn)(void* ctx), void* ctx);
+  bool hasListeners() const noexcept;
+  std::size_t listenerCount() const noexcept;
+protected:
+  void notifyListeners();             // re-entrancy safe
+};
+
+class Notifier final : public Listenable { using Listenable::notifyListeners; };
+
+template <class T, void (T::*M)()>
+inline void subscribeMember(Listenable&, Subscription&, T* obj);
+```
+
+```cpp
+template <class T> class ValueListenable : public Listenable {
+  virtual const T& value() const noexcept = 0;
+};
+
+template <class T> requires std::equality_comparable<T>
+class Observable final : public ValueListenable<T> {
+  Observable();  explicit Observable(T value);
+  void set(T next);        // an equal value notifies nobody
+};
+
+template <class T> requires std::equality_comparable<T>
+class Animatable {         // a render property: a constant, or a source that shadows it
+  const T& value() const noexcept;
+  bool set(T next);                          // returns "needs invalidating"
+  bool setSource(ValueListenable<T>* next);
+};
+```
+
+## `Callback` and `FunctionRef`
+
+`fltr/core/callback.hpp`, `fltr/core/function_ref.hpp`.
+
+```cpp
+template <class R, class... Args> class Callback<R(Args...)> {
+  static constexpr std::size_t kCapacity = 4 * sizeof(void*);   // 32 bytes
+  Callback() = default;
+  template <class F> Callback(F&& f) noexcept;    // copies into inline storage
+  explicit operator bool() const noexcept;
+  R operator()(Args...) const;
+};
+
+template <class R, class... Args> class FunctionRef<R(Args...)> {
+  FunctionRef() = delete;
+  template <class F> FunctionRef(F&& f) noexcept;   // non-owning
+  R operator()(Args...) const;
+};
+```
+
+<Aside type="caution" title="Callback captures must be trivially copyable and ≤ 32 bytes">
+Both are `static_assert`s. A `Callback` captured inside another `Callback`
+overflows the budget — pass a function pointer plus a `void*` owner instead.
+</Aside>
+
+## `Key`
+
+`fltr/core/key.hpp`.
+
+```cpp
+struct Key {
+  enum class Kind : std::uint8_t { None, Int, Str };
+  static constexpr Key none() noexcept;
+  template <class T> requires std::is_integral_v<T> static constexpr Key of(T) noexcept;
+  static Key of(const char* s) noexcept;    // FNV-1a hash + strcmp fallback
+  constexpr bool isSet() const noexcept;
+  std::uint64_t hashCode() const noexcept;
+};
+```
+
+A string key stores the **pointer** and a hash, so the storage must outlive the
+element. Literals are the intended case.
+
+## `Flags`
+
+`fltr/core/flags.hpp`.
+
+```cpp
+template <class E> requires std::is_enum_v<E>
+class Flags {
+  constexpr Flags();  constexpr Flags(E) noexcept;
+  static constexpr Flags fromBits(Bits) noexcept;
+  constexpr bool has(E) const noexcept;   constexpr bool hasAny(Flags) const noexcept;
+  constexpr bool any() const noexcept;    constexpr Bits bits() const noexcept;
+  constexpr Flags operator|(Flags) const noexcept;
+  constexpr Flags& operator|=(Flags) noexcept;
+  constexpr bool set(E value, bool present) noexcept;   // returns whether the set moved
+};
+
+template <class E> inline constexpr bool kIsFlags = false;   // opt in by specialising
+```
+
+Specialised for `PointerButton`, `KeyModifier` and `WidgetState`.
+
+## Contracts
+
+`fltr/core/config.hpp`.
+
+```cpp
+class ContractViolation : public std::logic_error { ... };
+
+namespace detail {
+  using ViolationHandler = void (*)(const char* expr, const char* msg,
+                                    const char* file, int line);
+  ViolationHandler setViolationHandler(ViolationHandler);   // returns the previous one
+}
+```
+
+Macros: `FLTR_ASSERT(cond, msg)`, `FLTR_EXPECTS(cond, msg)`,
+`FLTR_ENSURES(cond, msg)` — all compiled out entirely unless `FLTR_CHECKS`.
+Feature-detection macros: `FLTR_HAS_DEDUCING_THIS`, `FLTR_HAS_REFLECTION`,
+`FLTR_HAS_CONTRACTS`.
+
+## `TypeTag`
+
+`fltr/core/type_tag.hpp`. RTTI-free type identity.
+
+```cpp
+using TypeTag = const void*;
+template <class T> constexpr TypeTag typeTagOf() noexcept;
+```

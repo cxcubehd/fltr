@@ -1,0 +1,140 @@
+---
+title: Your first frame
+description: A complete program that builds a widget tree, runs the pipeline, and prints the commands it produced — with no renderer involved.
+---
+
+import { Aside, Steps, LinkCard } from '@astrojs/starlight/components';
+
+You do not need a renderer to run fltr. The pipeline's output is a data
+structure, and there is a headless harness that prints it. This program is the
+whole framework working end to end, and it links nothing but fltr and the
+standard library.
+
+## The program
+
+```cpp title="first_frame.cc"
+#include <cstdio>
+
+#include "fltr/harness.hpp"
+#include "fltr/paint/text.hpp"
+#include "fltr/widgets/basic.hpp"
+#include "fltr/widgets/binding.hpp"
+
+using namespace fltr;
+
+int main() {
+  // A TextService is the one thing you must supply before anything can lay out
+  // text. This is the development stand-in that ships with fltr.
+  MonospaceTextService text;
+
+  WidgetBinding binding(Size{320, 120}, text);
+
+  binding.attachRoot([] {
+    return DecoratedBox::make({
+        .decoration = {.color = Color::argb(0xFF101014),
+                       .radius = BorderRadius::all(6.0f),
+                       .borderColor = Color::argb(0xFF26262D),
+                       .borderWidth = 1.0f},
+        .child = Padding::make({
+            .padding = EdgeInsets::all(12.0f),
+            .child = Row::make({
+                .children =
+                    {
+                        Text::make({.text = "HULL",
+                                    .style = {.size = 12.0f,
+                                              .color = Color::argb(0xFF8B8B99)}}),
+                        Flexible::make({.child = SizedBox::make({})}),
+                        Text::make({.text = "84%",
+                                    .style = {.size = 12.0f,
+                                              .color = Color::argb(0xFFECECEF)}}),
+                    },
+            }),
+        }),
+    });
+  });
+
+  const Scene scene = binding.drawFrame(0.0f);
+
+  std::printf("%s\n", dumpRenderTree(*binding.renderView()).c_str());
+  std::printf("%s\n", dumpDisplayList(*scene.root).c_str());
+}
+```
+
+## What it prints
+
+The render tree, one line per object, indented by depth — sizes are what layout
+actually resolved, not what you asked for:
+
+```text frame="terminal"
+View size=320x120 [repaint-boundary] [relayout-boundary]
+  DecoratedBox size=320x120 fill=#FF101014 [relayout-boundary]
+    Padding size=320x120 pad=all(12) [relayout-boundary]
+      Row size=296x96 at=(12,12) main=start cross=center [relayout-boundary]
+        Paragraph size=24x14.4 at=(0,40.8) "HULL"
+        ConstrainedBox size=254x0 at=(24,48) extra=w[0..0] h[0..0]
+        Paragraph size=18x14.4 at=(278,40.8) "84%"
+```
+
+And the commands, in the order a renderer should execute them:
+
+```text frame="terminal"
+DrawRRect [0,0 320x120] #FF101014 r=6 border=#FF26262D/1
+DrawParagraph #1 at=(12,52.8) #FF8B8B99
+DrawParagraph #2 at=(290,52.8) #FFECECEF
+```
+
+That is the entire contract with a renderer. Three commands, in order, with no
+back-references and no callbacks.
+
+## Reading it
+
+<Steps>
+
+1. **`Row` got 296×96, not 320×120.** `Padding` deflated the constraints by 12 on
+   every side before handing them down. Constraints go down; sizes come back up.
+
+2. **`ConstrainedBox` is 254 wide.** That is the `Flexible` `SizedBox`, which took
+   all the main-axis space the two text runs did not: `296 - 24 - 18`. Flex does
+   one pass to size the inflexible children and a second to divide what is left.
+
+3. **Everything is a relayout boundary here.** Each of those nodes was handed
+   tight constraints by its parent, which means its size cannot change without
+   its parent's changing first — so dirtying one of them stops the walk there
+   rather than continuing to the root.
+
+4. **The paragraphs are at y=40.8 within the row, 52.8 on screen.** The `Row`'s
+   default cross-axis alignment is `Center`, so a 14.4-tall paragraph in a
+   96-tall row starts at `(96 - 14.4) / 2`, plus the 12 of padding.
+
+5. **`DrawParagraph` carries a handle, not text.** `#1` and `#2` are what the
+   `TextService` handed back at layout time. The framework never learns what is
+   in them; your backend asks the same service to draw them.
+
+</Steps>
+
+<Aside type="note" title="Where did the Padding command go?">
+There isn't one. `Padding` is a *layout* object: it moves its child and records
+nothing. Only decoration, text, images, clips, transforms and opacity produce
+commands, which is why a deep tree usually produces a short list.
+</Aside>
+
+## Doing it twice
+
+Call `drawFrame` again and nothing happens:
+
+```cpp
+const Scene again = binding.drawFrame(0.0f);
+std::printf("same recording: %s\n", again.revision == scene.revision ? "yes" : "no");
+// same recording: yes
+```
+
+No build ran, no layout ran, nothing was re-recorded, and `revision` did not
+move. That is the property everything else in fltr is arranged to protect, and
+it is worth checking early in your own integration — if an idle frame is doing
+work, something in your tree is dirtying itself.
+
+<LinkCard
+  title="Next: where things live"
+  description="The header map, so you know which include to reach for."
+  href="/fltr/getting-started/where-things-live/"
+/>

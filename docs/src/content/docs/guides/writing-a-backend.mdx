@@ -1,0 +1,254 @@
+---
+title: Writing a backend
+description: Every PaintOp, the three stacks, the repaint-boundary seam, and the two commands that promise more than a simple renderer can deliver.
+---
+
+import { Aside, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
+
+There is no interface to implement. `drawFrame` hands you a `Scene`, the scene
+points at a `DisplayList`, and a display list is a flat array of trivially
+copyable commands. Write a switch statement.
+
+```cpp
+const fltr::Scene scene = binding.drawFrame(dt);
+if (scene.root != nullptr) submit(*scene.root);
+```
+
+## The shape of it
+
+```cpp
+void Backend::submit(const fltr::Scene& scene) {
+  alpha_.assign(1, 1.0f);
+  clips_.clear();
+  transforms_.clear();
+  groups_.clear();
+  transform_ = fltr::Transform2D::identity();
+  if (scene.root != nullptr) run(*scene.root, fltr::Offset::zero());
+}
+
+void Backend::run(const fltr::DisplayList& list, fltr::Offset origin) {
+  for (const fltr::PaintCmd& cmd : list.commands()) {
+    switch (cmd.op) { /* one case per PaintOp */ }
+  }
+}
+```
+
+## The three stacks
+
+`PushTransform`, `PushClipRect` and `PushOpacity` open a group; `Pop` closes the
+innermost one. They nest, but they do **not** alternate — so you cannot infer
+which stack a `Pop` unwinds from the stack depths. Record the order:
+
+```cpp
+enum class Group : unsigned char { Transform, Clip, Opacity };
+std::vector<Group> groups_;
+
+case fltr::PaintOp::Pop:
+  if (!groups_.empty()) {
+    const Group group = groups_.back();
+    groups_.pop_back();
+    if (group == Group::Opacity)   alpha_.pop_back();
+    else if (group == Group::Clip) popClip();
+    else                            popTransform();
+  }
+  break;
+```
+
+<Aside type="tip" title="You get a balanced list or an assertion">
+`DisplayList::endRecording` asserts that pushes and pops are balanced, so a
+malformed list never reaches you. You do not need to defend against one.
+</Aside>
+
+## Command by command
+
+<Tabs>
+  <TabItem label="Transform">
+
+`Transform2D` is a 2D affine, row-major `{a, b, c, d, tx, ty}`, applied as
+`x' = a·x + c·y + tx`, `y' = b·x + d·y + ty`. In OpenGL column-major order that
+is:
+
+```cpp
+const float matrix[16] = {m.a,  m.b,  0, 0,
+                          m.c,  m.d,  0, 0,
+                          0,    0,    1, 0,
+                          m.tx, m.ty, 0, 1};
+rlPushMatrix();
+rlMultMatrixf(matrix);
+```
+
+Keep a CPU-side copy of the accumulated transform too — you will need it for
+clipping, which is not affected by the matrix.
+
+  </TabItem>
+  <TabItem label="Clip">
+
+The clip rectangle is in the *current* coordinate space, but a scissor test is
+applied to the framebuffer. Map it, intersect with the parent clip, and remember
+the previous one so a `Pop` can restore it:
+
+```cpp
+void Backend::pushClip(fltr::Rect rect) {
+  fltr::Rect mapped = transform_.applyToRect(rect);
+  if (!clips_.empty()) mapped = mapped.intersect(clips_.back());
+  clips_.push_back(mapped);
+  applyClip();
+}
+```
+
+Most renderers have exactly one scissor, so `popClip` has to re-apply the one
+underneath rather than simply disabling the test.
+
+  </TabItem>
+  <TabItem label="Opacity">
+
+There is no global alpha in an immediate-mode renderer, so fold it into every
+colour emitted inside the group:
+
+```cpp
+::Color Backend::tinted(fltr::Color color) const noexcept {
+  const float a = alpha_.back();
+  return {color.r, color.g, color.b,
+          static_cast<unsigned char>(std::lround(color.a * a))};
+}
+```
+
+This is correct for content that does not overlap itself and subtly wrong for
+content that does — two overlapping half-transparent shapes inside a 50% group
+composite differently than the group would. A backend that wants it exact renders
+the group to a texture and composites once.
+
+  </TabItem>
+  <TabItem label="Rects">
+
+```cpp
+case fltr::PaintOp::DrawRect:
+  drawFilled(cmd.drawRect.rect, tinted(cmd.drawRect.color));
+  break;
+
+case fltr::PaintOp::DrawRRect:
+  if (cmd.drawRRect.fill.a > 0) drawRounded(cmd.drawRRect.rect, cmd.drawRRect.radius,
+                                            tinted(cmd.drawRRect.fill));
+  if (cmd.drawRRect.borderWidth > 0.0f && cmd.drawRRect.border.a > 0)
+    strokeRounded(cmd.drawRRect.rect, cmd.drawRRect.radius, cmd.drawRRect.borderWidth,
+                  tinted(cmd.drawRRect.border));
+  break;
+```
+
+`BorderRadius` carries four corners with independent x and y radii. If your
+renderer only takes one number — raylib does — pick one and say so. Colours are
+straight (non-premultiplied) RGBA8; the framework never blends.
+
+  </TabItem>
+  <TabItem label="Images">
+
+```cpp
+case fltr::PaintOp::DrawImage: {
+  const auto handle = cmd.drawImage.image;
+  if (handle == 0 || handle > textures_.size()) break;   // yours, so validate it
+  drawTexture(textures_[handle - 1], cmd.drawImage.src, cmd.drawImage.dst,
+              tinted(cmd.drawImage.tint));
+  break;
+}
+```
+
+`ImageHandle` is a `std::uint64_t` that means whatever you decide. A vector index
+plus one — reserving zero for "none" — is enough. An empty `src` rectangle means
+"the whole texture", which the framework cannot know for itself.
+
+  </TabItem>
+  <TabItem label="Paragraphs">
+
+```cpp
+case fltr::PaintOp::DrawParagraph:
+  text_.draw(cmd.drawParagraph.paragraph, cmd.drawParagraph.offset,
+             tintedColour(cmd.drawParagraph.tint));
+  break;
+```
+
+The command carries a `ParagraphHandle` and an offset — no text, no glyphs, no
+font. Ask the same `TextService` that measured it to draw it. Keeping the
+knowledge of runs and glyphs inside the text service is what stops the backend
+from having to grow a text renderer.
+
+The tint is **multiplied** with the per-run colours the service reported, which is
+how an `Opacity` above a `Text` reaches the glyphs.
+
+  </TabItem>
+  <TabItem label="DrawList">
+
+```cpp
+case fltr::PaintOp::DrawList:
+  if (cmd.drawList.list != nullptr) run(*cmd.drawList.list, cmd.drawList.offset);
+  break;
+```
+
+This is the repaint-boundary seam. The referenced list belongs to a boundary and
+is re-recorded only when that subtree repaints, so it is safe to cache a
+translation of it keyed on `(const DisplayList*, list->revision())`.
+
+The offset is how the boundary is positioned: it painted itself at its own
+origin, and the parent places it. Push a translation, run the sub-list, pop.
+
+  </TabItem>
+</Tabs>
+
+## Caching
+
+```cpp
+struct Scene {
+  const DisplayList* root;
+  Size surface;
+  std::uint64_t revision;   // total re-recordings, pipeline-wide
+};
+```
+
+<Steps>
+
+1. **Whole-frame skip.** `scene.revision` unchanged means nothing anywhere was
+   re-recorded. If your renderer retains its framebuffer, you can skip the frame
+   entirely.
+
+2. **Per-boundary cache.** Key on `(list pointer, list->revision())`. A boundary
+   whose revision has not moved is byte-for-byte the recording you already
+   translated — reissue whatever you built from it.
+
+3. **Immediate-mode renderers get neither for free.** raylib clears and redraws
+   every frame, so the walk happens regardless. The revision is still worth
+   reading: it tells you whether the *UI* did any work, which is the number you
+   want in a debug overlay.
+
+</Steps>
+
+## Two things the commands promise that you may not be able to deliver
+
+<Aside type="caution" title="Rounded clipping">
+`PushClipRect` carries a `BorderRadius`. A scissor rectangle cannot express
+rounded corners; doing it properly needs a stencil pass or a shader that discards
+outside the rounded region.
+
+Dropping the corners is a reasonable first pass, and it is visible only where
+something actually overflows its rounded container. Say so in your backend rather
+than leaving it to be discovered.
+</Aside>
+
+<Aside type="caution" title="Group opacity">
+See the Opacity tab above. Folding alpha into colours is the cheap approximation;
+rendering the group to a texture is the correct one. Pick deliberately.
+</Aside>
+
+## Verifying it without pixels
+
+Before you have anything on screen, `dumpDisplayList` tells you what you *should*
+be drawing:
+
+```cpp
+std::printf("%s\n", fltr::dumpDisplayList(*scene.root).c_str());
+```
+
+It recurses into embedded sub-lists, so a boundary's contents appear in place.
+Output is deterministic — no addresses, no timings, floats via a fixed `%.6g`
+with `-0` normalised — so it diffs cleanly in a test.
+
+The [walkthrough](/fltr/walkthrough/backend/) builds a complete raylib backend,
+covering every command above, in about 180 lines.

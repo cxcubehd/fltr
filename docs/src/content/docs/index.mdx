@@ -1,0 +1,108 @@
+---
+title: fltr
+description: A retained-mode UI framework for game engines — Flutter's architecture in C++23, with no GC and no graphics API.
+template: splash
+hero:
+  tagline: |
+    Flutter's Widget / Element / RenderObject architecture, in C++23.
+    No garbage collector, no graphics API, no window — just a display list
+    your renderer already knows how to draw.
+  actions:
+    - text: Get started
+      link: /fltr/getting-started/
+      icon: right-arrow
+    - text: Build the demo
+      link: /fltr/walkthrough/
+      variant: minimal
+    - text: Architecture
+      link: /fltr/architecture/overview/
+      variant: minimal
+---
+
+import { Card, CardGrid, LinkCard, Aside } from '@astrojs/starlight/components';
+
+## What it is
+
+A UI framework you embed in a game engine. It does not own the window, the input
+system, the GPU, or the clock. You push state in, you call one function per
+frame, and you get back an ordered list of drawing commands to translate.
+
+```cpp
+// Once.
+MyTextService text;
+fltr::WidgetBinding binding({1280, 720}, text);
+binding.attachRoot([&] { return hud(state); });
+
+// Every frame.
+for (const auto& event : platformEvents) binding.dispatchPointer(event);
+const fltr::Scene scene = binding.drawFrame(deltaSeconds);
+submit(*scene.root);
+```
+
+A frame in which nothing changed builds nothing, lays out nothing, paints
+nothing, and hands back a scene whose `revision` has not moved — so you can
+resubmit last frame's translation verbatim.
+
+## The four load-bearing ideas
+
+Everything else in fltr is negotiable. These are not, and the whole design is
+arranged around keeping them true.
+
+<CardGrid>
+  <Card title="Three trees, three lifetimes" icon="seti:cpp">
+    What you write (a **widget**) is not what persists (an **element**) and not
+    what lays out and paints (a **render object**). That split is what makes
+    declarative authoring compatible with incremental update.
+  </Card>
+  <Card title="Constraints down, sizes up" icon="puzzle">
+    A parent hands a child constraints; the child answers with a size. A child
+    never sees its parent's size. Layout is one linear pass, not a solver.
+  </Card>
+  <Card title="Boundaries, not trees" icon="approve-check">
+    Layout invalidation and paint invalidation are **separate** paths with
+    separate dirty lists. Update cost is proportional to what changed, not to
+    how big the tree is.
+  </Card>
+  <Card title="A gesture arena" icon="rocket">
+    Overlapping interactive regions resolve deterministically, and a recognizer
+    keeps receiving events after the pointer has left the region it started in.
+  </Card>
+</CardGrid>
+
+## What it deliberately is not
+
+It has no renderer, no font loader, no window, no navigator, no accessibility
+tree, and no theme system. Each of those is either the consumer's job or a
+recorded decision with a stated cost — and the ones that are gaps rather than
+decisions are written down too.
+
+<CardGrid stagger>
+  <LinkCard
+    title="Start here"
+    description="Install it with CMake, drive one frame, and read the display list it produces — no renderer required."
+    href="/fltr/getting-started/"
+  />
+  <LinkCard
+    title="Build a game with it"
+    description="A fifteen-step walkthrough that ends in a playable asteroid-field shooter with menus, settings, a HUD and a pause overlay, rendered by raylib."
+    href="/fltr/walkthrough/"
+  />
+  <LinkCard
+    title="Understand the machinery"
+    description="The frame, the layout protocol, the display list, the arena, reactivity, animation — each with the divergence from Flutter and what it cost."
+    href="/fltr/architecture/overview/"
+  />
+  <LinkCard
+    title="What is missing"
+    description="An honest list of the gaps the demo hit, what each one forced, and what fixing it would take."
+    href="/fltr/project/gaps-and-rework/"
+  />
+</CardGrid>
+
+<Aside type="note" title="Status">
+  Milestones 1 through 14 are implemented and tested — geometry, the render
+  tree, the pipeline, widgets and elements, gestures, reactivity, animation,
+  implicit animation, input, scrolling, focus, components, overlays and exit
+  animations. The demo in this site is milestone 15, and writing it is how the
+  gaps list was found.
+</Aside>

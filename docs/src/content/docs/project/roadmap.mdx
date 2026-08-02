@@ -1,0 +1,125 @@
+---
+title: Roadmap
+description: Fourteen milestones done and tested, M15 delivered by the walkthrough demo, and what the demo says should come next.
+---
+
+import { Aside, Badge, LinkCard, Steps } from '@astrojs/starlight/components';
+
+fltr was built in two phases, each planned before it started and each verified
+before the next began. This is where it stands.
+
+## Phase one — the architecture
+
+M1–M8. Prove that Flutter's three-tree split ports to C++23 without a GC, and that
+the invalidation model actually pays for itself.
+
+| # | Milestone | What it established |
+|---|---|---|
+| M1 | Geometry, constraints, commands, text boundary | `BoxConstraints`, `DisplayList`, `TextService` |
+| M2 | The render tree | `RenderObject`, `RenderBox`, the box protocol |
+| M3 | The pipeline | `PipelineOwner`, dirty sets, relayout/repaint boundaries |
+| M4 | Widgets and elements | `Widget`, `Element`, `State`, arena allocation, reconciliation |
+| M5 | Pointer routing, the arena, hover | `PointerBinding`, `GestureArena`, `MouseTracker` |
+| M6 | Reactivity and ambient propagation | `Observable`, `Watch`, `Ambient`, the snapshot scope |
+| M7 | Animation | `TickerRegistry`, `AnimationDriver`, `Tween`, `AnimatedValue` |
+| M8 | Implicit animations, render-attached properties | `AnimatedOpacity` and friends; the zero-rebuild path |
+
+## Phase two — usability
+
+M9–M15. Turn "the architecture is proved" into "you can build a game UI with it".
+
+| # | Milestone | What it established | Status |
+|---|---|---|---|
+| M9 | Input foundations | drag, velocity, long press, double tap, signals, cursors, keys | <Badge text="done" variant="success" /> |
+| M10 | Scrolling | position, physics, activities, viewport, wheel, scrollbar, overscroll | <Badge text="done" variant="success" /> |
+| M11 | Focus and keyboard | nodes, scopes, manager, tab and directional traversal, shortcuts | <Badge text="done" variant="success" /> |
+| M12 | Component behaviours | `WidgetStates`, `RawButton`, `RawToggle`, `RawSlider`, `RawProgress` | <Badge text="done" variant="success" /> |
+| M13 | Overlay and portals | `RenderOverlay`, entries, `AnchorLink`, anchored placement | <Badge text="done" variant="success" /> |
+| M14 | Exit animations | `AnimatedSwitcher` retaining a removed subtree | <Badge text="done" variant="success" /> |
+| M15 | Integration screens | a real UI on a real renderer | <Badge text="this walkthrough" variant="note" /> |
+
+<Aside type="note" title="M15 was never built, until now">
+`CMakeLists.txt` globs `examples/*.cpp`, and that directory has never existed in
+git history. So until the walkthrough demo, **nothing had driven this framework
+end-to-end against a real renderer** — 376 tests, all headless, none of them a
+screen.
+
+That is why the demo exists and why its output is the
+[findings page](/fltr/project/gaps-and-rework/) rather than a screenshot.
+</Aside>
+
+## What M15 delivered
+
+The [walkthrough](/fltr/walkthrough/) builds **drift**: a top-down spaceship shooter
+with a main menu, level select, settings, a live HUD, a pause overlay reused as a
+result screen, and page transitions in and out.
+
+| M15 requirement | Where |
+|---|---|
+| A HUD | [step 11](/fltr/walkthrough/gameplay-hud/) |
+| A settings menu that scrolls and has real controls | [step 10](/fltr/walkthrough/settings/), [step 9](/fltr/walkthrough/level-select/) |
+| Fully navigable by keyboard and D-pad | [step 8](/fltr/walkthrough/main-menu/) |
+| Panels that animate in and out | [step 7](/fltr/walkthrough/router/), [step 12](/fltr/walkthrough/pause-menu/) |
+| A real rendering backend | [step 3](/fltr/walkthrough/backend/) |
+| A real text service | [step 4](/fltr/walkthrough/text/) |
+
+Verified: builds clean under `-Wall -Wextra -Wpedantic`, and
+`demo --smoke 300` passes with worst layout passes = 1, no re-recording on idle
+frames, and zero leaked paragraphs.
+
+## What comes next
+
+The [findings page](/fltr/project/gaps-and-rework/) has the full list with
+reasoning. In order:
+
+<Steps>
+
+1. **Packaging and CI.** An `ALIAS` target, `install()`/`export()`, a package
+   config, and options that default off for a subproject. Then a workflow that
+   builds, runs `ctest`, and runs the demo's smoke test. Nothing else on this list
+   matters until a consumer can depend on the project properly.
+
+2. **Ship `MappedValue`.** Seventy header-only lines that make the zero-rebuild
+   animation path reachable for derived values. The demo needed it five times.
+
+3. **Extend `TextService`** with byte→caret, range rectangles and cluster
+   boundaries. Cheap today, a breaking change once anyone has shipped an
+   implementation — and text editing is impossible without it.
+
+4. **A reference `TextService`.** Every consumer currently writes one before they
+   can draw a label.
+
+5. **Workstreams H, I and K** — text spans and an ambient `DefaultTextStyle`, the
+   layout shorthands (`Center`, `Container`, `Spacer`, a grid), and ambient view
+   metrics. All three were previously deferred under "add widgets when a screen
+   needs them". A screen now needs them.
+
+6. **`LayoutBuilder`** (workstream F). The expensive one — it punches a hole in
+   phase separation. The demo wanted it exactly once, for a slider that could fill
+   its row. Worth doing when a second thing wants it.
+
+</Steps>
+
+## Still correctly deferred
+
+- **Lazy children and slivers.** Revisit when a screen genuinely has thousands of
+  rows. Prefer a reduced lazy list over the full sliver protocol.
+- **Drag and drop.** M13 built the overlay it needs; the drop machinery was never
+  built, and nothing has wanted it.
+- **Navigation and routes.** A game engine already has a screen stack. The
+  walkthrough's [router](/fltr/walkthrough/router/) is forty lines and is the
+  reference implementation.
+- **Text editing.** Not until the `TextService` interface grows the three missing
+  queries.
+
+<LinkCard
+  title="Gaps and rework"
+  description="The full findings list: what is missing, what it forced, and what it would take to fix."
+  href="/fltr/project/gaps-and-rework/"
+/>
+
+<LinkCard
+  title="Design notes"
+  description="An index into DESIGN.md by milestone — the reasoning behind each decision."
+  href="/fltr/project/design-notes/"
+/>

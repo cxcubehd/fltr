@@ -1,0 +1,345 @@
+---
+title: Gaps and rework
+description: What building a complete game UI on fltr actually hit — what is missing, what it forced, and what it would take to fix.
+---
+
+import { Aside, Badge, Card, CardGrid, Steps } from '@astrojs/starlight/components';
+
+This is the page the demo was built for. Everything below was hit while writing
+[the walkthrough](/fltr/walkthrough/) — a real game UI on a real renderer — rather
+than reasoned about in the abstract.
+
+Nothing here is a complaint about the architecture. The three-tree split, the
+constraint protocol, the invalidation model and the component layer all held up
+under a live simulation. What follows is the list of things that are missing,
+awkward, or promised-but-not-delivered.
+
+<CardGrid>
+  <Card title="4 that block a consumer" icon="error">
+    Packaging, a shippable text service, CI, and the options an unaware consumer
+    trips over.
+  </Card>
+  <Card title="7 that forced awkward code" icon="warning">
+    Real workarounds are in the demo, and each one is pointed at here.
+  </Card>
+  <Card title="3 backend-facing" icon="setting">
+    Commands that promise more than a simple renderer can deliver.
+  </Card>
+  <Card title="4 deliberately deferred" icon="information">
+    Still correctly deferred — but the demo now says what would have needed them.
+  </Card>
+</CardGrid>
+
+## Blocks a consumer today
+
+### 1. There is no way to depend on fltr properly <Badge text="packaging" variant="danger" />
+
+`CMakeLists.txt` has **no `fltr::fltr` ALIAS**, no `install()`, no `export()`, and
+no package config. So:
+
+- `FetchContent` works only against the bare `fltr` target name;
+- `find_package(fltr)` is not possible at all;
+- there is no installed header set, so a system-wide install is not possible
+  either.
+
+**Hit at:** [walkthrough step 1](/fltr/walkthrough/skeleton/).
+**Workaround in the demo:** `target_link_libraries(demo PRIVATE fltr raylib)`.
+**Fix:** an `ALIAS` target, `install(TARGETS ... EXPORT)`,
+`install(DIRECTORY include/)`, and a generated `fltrConfig.cmake`. Roughly 25
+lines, and it is the single highest-value change on this page.
+
+### 2. Depending on fltr builds its test suite <Badge text="packaging" variant="danger" />
+
+```cmake title="CMakeLists.txt:13-14"
+option(FLTR_BUILD_TESTS "Build the fltr test suite" ON)
+option(FLTR_BUILD_EXAMPLES "Build the fltr example screens" ON)
+```
+
+Both default `ON` and are plain unprefixed `option()`s. A `FetchContent` consumer
+who does not know to turn them off compiles 376 tests as a side effect of adding a
+dependency, and nothing warns them.
+
+**Workaround in the demo:** two `set(... OFF CACHE BOOL "" FORCE)` lines before
+`FetchContent_MakeAvailable`, with a comment explaining why.
+**Fix:** default them to `OFF` when `PROJECT_IS_TOP_LEVEL` is false — the standard
+idiom, and one line each.
+
+<Aside type="note" title="FLTR_BUILD_EXAMPLES points at a directory that has never existed">
+`CMakeLists.txt` globs `examples/*.cpp`. There is no `examples/` directory in git
+history. The option is on by default and does nothing.
+</Aside>
+
+### 3. There is no `TextService` a consumer can ship <Badge text="text" variant="danger" />
+
+`Text` is required by the widget catalogue, and the only implementation is
+`MonospaceTextService` — whose own header calls it a development stand-in: fixed
+advance, greedy wrap, hardcoded ascent ratio, no correctness beyond ASCII.
+
+So **every consumer writes a text service before they can draw a label.**
+
+**Hit at:** [walkthrough step 4](/fltr/walkthrough/text/).
+**Workaround in the demo:** a real ~340-line `RaylibTextService`.
+**Fix:** ship a reference implementation over a common rasteriser (stb_truetype
+would keep it dependency-free), or at minimum promote the walkthrough's one to a
+documented starting point.
+
+### 4. There is no CI <Badge text="process" variant="danger" />
+
+The repository has no `.github/` at all. Nothing verifies the build, runs the 376
+tests, or checks the demo still compiles on push.
+
+**Fix:** this task adds `.github/workflows/docs.yml` for the site. A `ci.yml` that
+builds the library, runs `ctest`, and runs `demo --smoke` under `xvfb` is the
+obvious companion.
+
+---
+
+## Forced awkward code in the demo
+
+### 5. No `LayoutBuilder`, so a slider has a hardcoded width <Badge text="layout" variant="caution" />
+
+`RawSlider` needs to know the thumb's travel to map a value, and the visual needs
+the same number to place the thumb. There is no way to ask "how wide did I end up?"
+from a builder.
+
+```cpp title="docs/demo/src/ui/widgets/slider_row.hh"
+/// A fixed-width slider track. Fixed because the thumb's travel has to be known
+/// when the mapping is set up, and fltr has no `LayoutBuilder` to ask the parent
+/// how wide it ended up -- a real gap, recorded on the gaps page.
+```
+
+**Hit at:** [walkthrough step 10](/fltr/walkthrough/settings/).
+**Cost:** two constants (`SliderTrack::width` and `RawSlider::thumbExtent`) that
+must agree, with nothing enforcing it. A slider cannot fill available space.
+**Fix:** workstream F. This is build-during-layout, which is the expensive one —
+it punches a hole in phase separation and touches arena lifetimes.
+
+### 6. Every consumer will write `MappedValue` <Badge text="animation" variant="caution" />
+
+Render-attached properties take a `ValueListenable<T>` of exactly their own type.
+Components and `AnimatedSwitcher` publish `ValueListenable<float>`. There is
+nothing in the framework that converts between them, so **the zero-rebuild path is
+unreachable for any derived value** until you write the adapter.
+
+```cpp title="docs/demo/src/ui/widgets/mapped_value.hh"
+template <class Out>
+class MappedValue final : public fltr::ValueListenable<Out> {
+public:
+  using Fn = Out (*)(float fraction, float parameter);
+  void bind(fltr::ValueListenable<float>* source, Fn fn, float parameter);
+  ...
+};
+```
+
+**Used in the demo for:** page slide, switch thumb, slider fill, slider thumb, HUD
+meter. Five uses in one small app.
+**Fix:** ship it. It is 70 header-only lines and it is the difference between the
+cheap path being available and being theoretical.
+
+### 7. There is no animated text <Badge text="text" variant="caution" />
+
+A rolling score is a rebuild per frame, because the animated quantity is a string
+and no render object animates one.
+
+**Hit at:** [walkthrough step 13](/fltr/walkthrough/animated-components/).
+**Cost:** `CountUp` calls `setState` per tick — the only rebuild-per-frame
+animation in the demo, and no arrangement of existing pieces avoids it.
+**Related:** there is also no animated text *colour*, so a label cannot follow
+hover without a rebuild.
+**Fix:** a `RenderParagraph` that observes a `ValueListenable<TextStyle>` for paint
+gets the colour case for free (`setStyle` already distinguishes colour-only changes
+as repaint-not-relayout). Animated *content* is harder and probably wants a
+formatter callback rather than a string.
+
+### 8. `Text` takes one span and one full style <Badge text="text" variant="caution" />
+
+No spans, no ambient `DefaultTextStyle`, no baseline cross-axis alignment. Every
+label at every call site carries a complete `TextStyle`.
+
+**Workaround in the demo:** five functions in `theme.cc` that build styles from
+theme tokens.
+**Cost:** it works, and it means the tree carries a full style struct at every text
+leaf. There is also no way to write "**bold** in the middle of a sentence" at all.
+**Fix:** workstream H — `ParagraphSpec` already takes `std::span<const TextSpan>`,
+so the interface is ready; it is `Text` that only ever passes one.
+
+### 9. Every formatted label needs a buffer somebody owns <Badge text="text" variant="caution" />
+
+`Text::Args::text` is a `std::string_view` and is **not copied**. Building a
+`std::string` in a builder is both an allocation and a dangling pointer.
+
+**Workaround in the demo:** four `char[16]`s on `Session`, one on `App`, one per
+`CountUpState`, each reformatted when its value changes.
+**Cost:** correct and allocation-free, and it is a trap a new consumer will hit on
+their first score counter — the failure is silent corruption, not a compile error.
+**Fix:** either document it much more loudly, or add a `TextOwned` variant that
+copies into the render object (which already owns a `std::string`).
+
+### 10. `BoxDecoration` is fill, radius and border <Badge text="paint" variant="caution" />
+
+No gradients, no shadows, no background images, no blur.
+
+**Cost:** a "sleek modern" look has to be built entirely from restraint — hairline
+borders, small radii, contrast carried by the border. That turned out well, and it
+was not a free choice. A drop shadow under the pause panel is simply not
+expressible.
+**Fix:** `DrawRRectCmd` would need a shadow field or a new `PaintOp`, and every
+backend would have to implement it. Worth deciding deliberately rather than by
+omission.
+
+### 11. The layout catalogue is missing shorthands, not capabilities <Badge text="layout" variant="caution" />
+
+No `Center`, no `Container`, no `ColoredBox`, no `Spacer`, no `Wrap`, no grid, no
+`AspectRatio`, no `Visibility`/`Offstage`, no intrinsics.
+
+**Workaround in the demo:** 70 lines of `panel.cc` covering all of it —
+`Align` with default alignment *is* `Center`, `Flexible` around a zero `SizedBox`
+*is* `Spacer`.
+**Cost:** low, but every consumer writes the same file with the same names before
+their first screen. A grid is the one genuine absence — a 5×2 level layout would be
+a `Column` of `Row`s with the arithmetic by hand.
+**Fix:** workstream I. Cheap, and the framework's own rule ("add widgets when a
+screen needs them") has now been satisfied — a screen needed them.
+
+### 12. No ambient view metrics <Badge text="ergonomics" variant="caution" />
+
+Surface size, UI scale and input mode are all threaded by hand.
+
+**Cost:** the demo's screens know the surface size only because `App` happens to
+hold a `Window`. A widget deep in the tree cannot ask.
+**Fix:** workstream K — one `Ambient<ViewMetrics>` installed by `WidgetBinding`,
+which already knows the surface.
+
+---
+
+## Backend-facing
+
+### 13. `PushClipRect` carries a radius a simple backend cannot honour <Badge text="paint" variant="caution" />
+
+```cpp
+struct PushClipRectCmd { Rect rect; BorderRadius radius; };
+```
+
+raylib's `BeginScissorMode` is rectangle-only. Honouring the radius needs stencil
+work or a render target.
+
+**Hit at:** [walkthrough step 3](/fltr/walkthrough/backend/).
+**Workaround in the demo:** the corners are dropped, visible only where something
+actually overflows a rounded container.
+**Fix:** either document it as best-effort, or split it into `PushClipRect` and
+`PushClipRRect` so a backend can decline the second explicitly.
+
+### 14. `PushOpacity` has no analogue in an immediate-mode renderer <Badge text="paint" variant="note" />
+
+The backend must fold alpha into every colour it emits inside the group. That is
+correct and unavoidable — and it is not documented anywhere, so every backend
+author rediscovers it.
+
+**Fix:** documentation. The [backend guide](/fltr/guides/writing-a-backend/) now
+says it.
+
+### 15. `Pop` does not say what it closes <Badge text="paint" variant="caution" />
+
+Three push kinds, one `Pop`. Pushes nest but do **not** alternate, so a backend has
+to record the order groups were opened in.
+
+**Cost:** the demo's first implementation compared stack depths and was wrong. The
+fix is a three-line `groups_` vector — obvious afterwards, and an afternoon to find.
+**Fix:** either give `Pop` a `PaintOp` field naming what it closes (one byte in a
+union that already exists), or say this in the header.
+
+---
+
+## Deliberately deferred — and what the demo would have wanted
+
+### Lazy children
+
+Level select is non-lazy and fine at five entries. A leaderboard would not be.
+Still correctly deferred; the demo confirms nothing about the position, physics,
+wheel or scrollbar would change if lazy arrived.
+
+### Drag and drop
+
+M13 built the overlay it needs; the drop machinery was never built. The demo did
+not want it.
+
+### Navigation and routes
+
+Correctly absent — a game engine already has a screen stack. The demo hand-rolled a
+router in about forty lines, and
+[step 7](/fltr/walkthrough/router/) is now the reference implementation of that
+pattern.
+
+### Text editing
+
+Impossible today: the `TextService` boundary answers "which byte is at this point"
+but has no inverse. It cannot report a caret rectangle, a selection range's
+rectangles, or cluster boundaries.
+
+<Aside type="caution" title="This one is owed now, not later">
+`INSTRUCTIONS2.md` already says it: extending `TextService` with byte→caret, range
+boxes and cluster boundaries is **cheap today and a breaking change later**. Every
+consumer who ships a text service before that lands has to revise it.
+</Aside>
+
+---
+
+## Two things the demo confirmed rather than found
+
+### The `Callback` budget is a real constraint
+
+`Callback<Sig>` stores captures inline in 32 bytes and static-asserts on more.
+Three call sites in the demo had to be restructured around it:
+
+- `ToggleRowSpec::onChanged` passes fltr's own `Callback<void(ToggleValue)>`
+  through rather than wrapping it in a nicer `bool` API — one 32-byte closure
+  inside another does not fit;
+- `statistic()` takes a function pointer plus an owner pointer instead of a
+  closure;
+- `Watch` builders read the theme from the ambient scope inside the builder rather
+  than capturing it.
+
+All three are fine, and none is obvious in advance. The static assert is a good
+error, but the pattern deserves documenting.
+
+### `Overlay::of` is build-only, and entries are inserted from callbacks
+
+Reading the overlay is an ambient read, so it happens during a build. Inserting an
+entry happens from a callback, long afterwards.
+
+```cpp title="docs/demo/src/ui/root.cc"
+// The overlay is found here, on the way down, and kept for the callbacks that
+// will insert into it later.
+app.bindOverlay(Overlay::of(context));
+```
+
+Three lines, correct, and not obvious the first time. Any "open a dialog from a
+button" flow has this shape.
+
+---
+
+## Suggested order
+
+<Steps>
+
+1. **Packaging** (#1, #2) — 25 lines of CMake, and until it lands nobody can
+   depend on this properly.
+
+2. **CI** (#4) — build, `ctest`, and `demo --smoke` under xvfb.
+
+3. **Ship `MappedValue`** (#6) — 70 header-only lines; makes the cheap animation
+   path actually reachable.
+
+4. **Extend the `TextService` interface** (text editing) — cheap now, breaking
+   later.
+
+5. **A reference `TextService`** (#3) — the biggest ergonomic win after packaging.
+
+6. **`DefaultTextStyle` and spans** (#8), **layout shorthands** (#11), **ambient
+   view metrics** (#12) — workstreams H, I and K, all now justified by a real
+   screen.
+
+7. **`LayoutBuilder`** (#5) — the expensive one. Worth doing only when a second
+   screen wants it.
+
+</Steps>

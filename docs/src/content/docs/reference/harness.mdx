@@ -1,0 +1,114 @@
+---
+title: harness
+description: Four functions that turn the three trees into stable, diffable text — how correctness is observed without a renderer.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+`include/fltr/harness.hpp` and `include/fltr/debug/format.hpp`.
+
+There is no renderer during most of this framework's work, so correctness has to
+be observable without pixels. These produce a stable, diffable textual form of
+what the pipeline actually built.
+
+Output is deliberately terse and deterministic: **no addresses, no timings**, floats
+via a fixed `%.6g` with `-0` normalised.
+
+## The four dumps
+
+```cpp title="fltr/harness.hpp"
+std::string dumpRenderTree(const RenderObject& root);
+std::string dumpDisplayList(const DisplayList& list);
+std::string dumpScene(const Scene& scene);
+std::string dumpElementTree(const Element& root);
+```
+
+### `dumpRenderTree`
+
+One line per render object, indented by depth. Each line is
+`typeName size=… [at=…] [describe()] [flags]`.
+
+```text frame="terminal"
+View size=320x120 [repaint-boundary] [relayout-boundary]
+  DecoratedBox size=320x120 fill=#FF101014 [relayout-boundary]
+    Padding size=320x120 pad=all(12) [relayout-boundary]
+      Row size=296x96 at=(12,12) main=start cross=center [relayout-boundary]
+        Paragraph size=24x14.4 at=(0,40.8) "HULL"
+        ConstrainedBox size=254x0 at=(24,48) extra=w[0..0] h[0..0]
+        Paragraph size=18x14.4 at=(278,40.8) "84%"
+```
+
+The detail after the size comes from each object's `describe()` override — that is
+the only thing that method is for.
+
+The `[relayout-boundary]` and `[repaint-boundary]` annotations are the fastest way
+to check that a subtree is isolated the way you meant it to be.
+
+### `dumpDisplayList`
+
+One line per command, indented between push and pop, **recursing into embedded
+sub-lists** so a repaint boundary's contents are visible in place rather than as an
+opaque `DrawList`.
+
+```text frame="terminal"
+DrawRRect [0,0 320x120] #FF101014 r=6 border=#FF26262D/1
+DrawParagraph #1 at=(12,52.8) #FF8B8B99
+DrawParagraph #2 at=(290,52.8) #FFECECEF
+```
+
+Paragraphs appear as handles, not text — `#1` is what the `TextService` returned,
+and resolving it back to glyphs is the backend's job.
+
+### `dumpScene`
+
+The scene as the consumer would receive it, including the root list.
+
+### `dumpElementTree`
+
+One line per element, indented by depth, with the key where one is set.
+
+```text frame="terminal"
+View
+  Column
+    Text key="hp"
+```
+
+This is the one to reach for when something rebuilds that should not: the key
+column tells you immediately whether reconciliation is matching what you expected.
+
+<Aside type="tip" title="Golden tests are the intended use">
+Because the output is deterministic, the whole of a screen's layout can be an
+expected string in a test. That is how the framework's own 376 tests assert layout
+without a window — and it works just as well for a consumer's screens.
+</Aside>
+
+## `fltr::dbg`
+
+`fltr/debug/format.hpp`. Stable, diffable textual forms for the primitives, used by
+the harness and by the test framework's failure messages.
+
+```cpp
+namespace fltr::dbg {
+  std::string str(float);          // "inf", "-inf", "nan", "0" for -0, else %.6g
+  std::string str(int);
+  std::string str(bool);           // "true" / "false"
+  std::string str(Offset);         // (x,y)
+  std::string str(Size);           // WxH
+  std::string str(Rect);           // [l,t WxH]
+  std::string str(EdgeInsets);     // all(n) or (l,t,r,b)
+  std::string str(Alignment);      // <x,y>
+  std::string str(Color);          // #AARRGGBB
+  std::string str(BoxConstraints); // w[min..max] h[min..max]
+  std::string str(const BorderRadius&);  // 0, one number, or tl/tr/br/bl
+  std::string str(const Transform2D&);   // identity, translate(x,y), or [a c tx; b d ty]
+}
+```
+
+<Aside type="note" title="Why snprintf">
+Formatting is snprintf-based rather than iostream- or `std::format`-based so output
+does not vary with locale or standard-library version. A golden test that passes on
+one machine passes on every machine.
+</Aside>
+
+These are also what a render object's `describe()` should use, so a consumer's own
+render objects dump in the same style as the shipped ones.

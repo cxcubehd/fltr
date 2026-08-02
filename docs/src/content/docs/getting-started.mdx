@@ -1,0 +1,95 @@
+---
+title: Getting started
+description: What fltr is, what it refuses to do, and how the pieces fit together before you write any code.
+---
+
+import { Aside, Card, CardGrid, LinkCard, Steps } from '@astrojs/starlight/components';
+
+fltr is a **retained-mode** UI framework for embedding in a game engine. It is a
+deliberate port of Flutter's architecture to C++23 — the same three-tree split,
+the same layout protocol, the same gesture arena — with no Dart, no garbage
+collector, and no dependency on any graphics API.
+
+## The bargain
+
+fltr owns three things: a widget tree, a render tree, and the pipeline that
+turns one into the other. **You** own everything else.
+
+| You own | fltr sees |
+|---|---|
+| The window, and whether it is fullscreen | A `Size` you push in |
+| The clock, and how long the last frame took | A `float` you pass to `drawFrame` |
+| The input system | `PointerEvent`, `KeyEvent`, `PointerSignalEvent` you dispatch |
+| Fonts, shaping, and measurement | A `TextService` you implement |
+| Textures | An opaque `ImageHandle` |
+| The renderer | A `DisplayList` you translate |
+| Game state | An `Observable<T>` you push into |
+
+Nothing in that right-hand column is a plugin point that fltr calls back into on
+its own schedule. Everything happens because your loop asked for it.
+
+## What one frame looks like
+
+<Steps>
+
+1. **Dispatch whatever input arrived.** This is not part of the frame — an event
+   goes in when it arrives, at whatever rate your platform produces them.
+
+   ```cpp
+   binding.dispatchPointer(event);
+   const bool taken = binding.dispatchKey(key);  // false means it is the game's
+   ```
+
+2. **Push this frame's game state.** Pushing an unchanged value is a no-op, so
+   this can be unconditional.
+
+   ```cpp
+   hull.set(ship.hull() / kHullMax);   // notifies nobody if it did not move
+   ```
+
+3. **Ask for a frame.** Animations advance, what is dirty is rebuilt, what that
+   made dirty is laid out and painted.
+
+   ```cpp
+   const fltr::Scene scene = binding.drawFrame(deltaSeconds);
+   ```
+
+4. **Submit what came out.** A flat array of commands, in order.
+
+   ```cpp
+   submit(*scene.root);
+   ```
+
+</Steps>
+
+<Aside type="tip" title="A frame that costs nothing">
+`drawFrame` is meant to be called unconditionally rather than guarded, because a
+frame with nothing dirty already does no work in any phase. If you want to skip
+the *submission* too, compare `scene.revision` with last frame's: unchanged means
+nothing anywhere was re-recorded.
+</Aside>
+
+## Where to go next
+
+<CardGrid>
+  <LinkCard
+    title="Install"
+    description="CMake FetchContent, the compiler baseline, and the one build option that changes ABI."
+    href="/fltr/getting-started/install/"
+  />
+  <LinkCard
+    title="Your first frame"
+    description="A complete program that builds a tree, runs the pipeline and prints the display list — with no renderer at all."
+    href="/fltr/getting-started/first-frame/"
+  />
+  <LinkCard
+    title="Where things live"
+    description="The header map, and the two places the directory layout deliberately breaks its own rule."
+    href="/fltr/getting-started/where-things-live/"
+  />
+  <LinkCard
+    title="Architecture"
+    description="Start with the three trees, then the frame. Everything else hangs off those two pages."
+    href="/fltr/architecture/overview/"
+  />
+</CardGrid>

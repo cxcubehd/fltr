@@ -1,0 +1,274 @@
+---
+title: 14 — Verify
+description: A scripted headless run, four assertions, and the debug overlay that makes a frame's cost visible.
+---
+
+import { Aside, LinkCard, Steps } from '@astrojs/starlight/components';
+
+The demo has a mode where it drives itself through every screen, asserts four
+things, and exits non-zero if any of them fail. That is what turns everything the
+previous thirteen pages claimed into something a build can check.
+
+## The script
+
+```cpp title="docs/demo/src/app/app.cc"
+void App::runScript(int frame) {
+  // A fixed sequence through every screen, so the smoke run exercises the same
+  // code a player would and does it the same way every time.
+  scripted_ = ShipInput{};
+  switch (frame) {
+    case 10: goTo(Screen::Settings); break;
+    case 30: applyGraphics({.fullscreen = false, .vsync = false, .maxFps = 60}); break;
+    case 45: goTo(Screen::LevelSelect); break;
+    case 70: startLevel(0); break;
+    case 200: togglePause(); break;
+    case 240: togglePause(); break;
+    case 270: abandonRun(); goTo(Screen::MainMenu); break;
+    default: break;
+  }
+
+  if (frame > 70 && frame < 200) {
+    scripted_.thrust = (frame / 20) % 2 == 0;
+    scripted_.left = (frame / 30) % 3 == 0;
+    scripted_.fire = frame % 7 == 0;
+  }
+}
+```
+
+Every screen, both page-transition directions, a settings change that reaches the
+window, a real flight with thrust and shooting, a pause and an un-pause.
+
+It is deterministic because of one line from [step 1](/fltr/walkthrough/skeleton/):
+
+```cpp title="docs/demo/src/app/app.cc"
+clock_(options.smoke ? 1.0f / 60.0f : 0.0f),
+```
+
+A fixed step means every animation lands on the same frame every run.
+
+```cpp title="docs/demo/src/app/app.cc"
+ShipInput App::shipInput() const noexcept {
+  if (options_.smoke) return gameHasFocus() ? scripted_ : ShipInput{};
+  return input_.ship();
+}
+```
+
+The script substitutes for the keyboard at exactly one point — and still goes
+through `gameHasFocus()`, so it is subject to the same menu gating a player is.
+
+## The four assertions
+
+### 1. Layout converges in one pass
+
+```cpp title="docs/demo/src/app/app.cc"
+  while (!quitting_ && !window_.shouldClose()) {
+    if (options_.smoke) runScript(frame);
+
+    const fltr::Scene scene = runFrame(*this);
+    worstPasses = std::max(worstPasses, binding_->pipeline().stats().layoutPasses);
+    ...
+  }
+
+  if (worstPasses > 1) {
+    std::printf("FAIL: layout did not converge in one pass (worst = %d)\n", worstPasses);
+    ok = false;
+  }
+```
+
+`layoutPasses` counts how many times the layout dirty list had to be drained. More
+than one means laying a node out dirtied an ancestor that had already been
+visited — legal, and rarely intended.
+
+<Aside type="caution" title="Why this needs asserting rather than trusting">
+The drain is capped at 32 passes rather than looping forever. In a checked build
+the cap is reported; in a release build it degrades to **one stale frame with no
+diagnostic**.
+
+A frozen game is worse than a late one — that is the right trade — and it is
+exactly why you should watch the number yourself.
+</Aside>
+
+### 2, 3. An idle frame re-records nothing, and nothing still wants one
+
+```cpp title="docs/demo/src/app/app.cc"
+bool App::verifyIdleCostsNothing() {
+  // Let everything settle: no input, no time, so no animation can be running.
+  for (int i = 0; i < 30; ++i) runFrame(*this);
+  for (int i = 0; i < 4; ++i) binding_->drawFrame(0.0f);
+
+  const fltr::Scene before = binding_->drawFrame(0.0f);
+  const std::uint64_t revision = before.revision;
+  const fltr::Scene after = binding_->drawFrame(0.0f);
+
+  if (after.revision != revision) {
+    std::printf("FAIL: an idle frame re-recorded a display list (%llu -> %llu)\n",
+                static_cast<unsigned long long>(revision),
+                static_cast<unsigned long long>(after.revision));
+    return false;
+  }
+  if (binding_->needsFrame()) {
+    std::printf("FAIL: the binding still wants a frame after settling\n");
+    return false;
+  }
+  return true;
+}
+```
+
+`Scene::revision` counts every display list the pipeline has re-recorded, ever.
+Unchanged across two frames means **nothing anywhere** was re-recorded.
+
+This is the assertion that catches a `Watch` on an unquantised value. Without the
+`std::lround` on the ship's speed, this test fails.
+
+`needsFrame()` covers what revision cannot: a dirty element that has not been built
+yet, a hover that has not been resolved, an active ticker, a pending gesture
+timeout.
+
+### 4. Every paragraph was released
+
+```cpp title="docs/demo/src/app/app.cc"
+  // Tearing the tree down releases every paragraph it acquired. Anything left
+  // is a leak, and the count is the only way to see one without a profiler.
+  binding_.reset();
+  if (const std::size_t leaked = text_->liveParagraphs(); leaked != 0) {
+    std::printf("FAIL: %zu paragraphs outlived the widget tree\n", leaked);
+    ok = false;
+  }
+```
+
+`RenderParagraph` acquires during `performLayout`, releases the old handle before
+acquiring a new one, and releases in its destructor. If the count is not zero after
+teardown, one of those did not happen.
+
+Note the ordering: `binding_.reset()` **before** reading the count. That is the same
+teardown ordering from [step 5](/fltr/walkthrough/first-pixels/) — the tree has to
+come down before the service it measured with.
+
+## Running it
+
+```bash
+./build-demo/demo --smoke 300
+```
+
+```text frame="terminal"
+PASS: 300 frames, worst layout passes = 1
+```
+
+Non-zero exit on any failure, so it drops straight into CI.
+
+```bash
+# The last frame's display list, for eyeballing what was actually recorded.
+./build-demo/demo --smoke 300 --dump
+
+# A PNG of the last frame.
+./build-demo/demo --smoke 205 --shot pause.png
+```
+
+### Headless
+
+The demo runs the **real raylib backend** under a virtual framebuffer, so the smoke
+test exercises the actual GL path rather than a stub:
+
+```bash
+xvfb-run -a ./build-demo/demo --smoke 300
+```
+
+That is what makes the screenshots reachable from CI too — `--shot` at frame 45
+gives you the settings screen, 190 the HUD, 205 the pause overlay over live
+gameplay.
+
+## The debug overlay
+
+```cpp title="docs/demo/src/app/app.cc"
+void App::refreshDebugText() {
+  const fltr::PipelineOwner::FrameStats& stats = binding_->pipeline().stats();
+  std::snprintf(debugText_, sizeof(debugText_),
+                "builds=%d layouts=%d paints=%d passes=%d tickers=%zu cmds=%zu",
+                binding_->buildOwner().buildCount(), stats.layouts, stats.paints,
+                stats.layoutPasses, binding_->tickers().activeTickerCount(),
+                backend_->lastCommandCount());
+}
+```
+
+Six numbers, one `snprintf`, called once a frame from the loop. It is the cheapest
+diagnostic in the project and the one you will reach for first.
+
+| Number | Healthy | What a bad value means |
+|---|---|---|
+| `builds` | 0 at rest | something is dirtying itself — usually an unquantised `Watch` |
+| `layouts` | 0 at rest, small on change | an `observeForLayout` where a paint path exists |
+| `paints` | small | a repaint boundary is missing |
+| `passes` | 0 or 1 | layout dirtied an ancestor — a real bug |
+| `tickers` | matches what is visibly moving | an animation in a hidden subtree; wrap it in `TickerMode` |
+| `cmds` | stable for a stable screen | something is recording per-frame that should not |
+
+## The whole run loop
+
+```cpp title="docs/demo/src/app/app.cc"
+int App::run() {
+  openWindow();
+  attachUi();
+
+  int frame = 0;
+  int worstPasses = 0;
+  bool ok = true;
+
+  while (!quitting_ && !window_.shouldClose()) {
+    if (options_.smoke) runScript(frame);
+
+    const fltr::Scene scene = runFrame(*this);
+    worstPasses = std::max(worstPasses, binding_->pipeline().stats().layoutPasses);
+
+    if (options_.smoke && frame + 1 >= options_.smokeFrames) {
+      if (options_.dump && scene.root != nullptr) {
+        std::printf("%s\n", fltr::dumpDisplayList(*scene.root).c_str());
+      }
+      if (options_.shot != nullptr) TakeScreenshot(options_.shot);
+      break;
+    }
+    ++frame;
+  }
+
+  if (!options_.smoke) return 0;
+  ...
+}
+```
+
+## Where to go from here
+
+<Steps>
+
+1. **Copy the four assertions** into your own project. They are twenty lines and
+   they catch the class of bug that is otherwise invisible until a profiler.
+
+2. **Add the debug overlay** before you need it. Wondering why a frame is slow is
+   much worse than reading six numbers.
+
+3. **Read the findings.** Everything this demo hit — what was missing, what was
+   awkward, and what it would take to fix — is on one page.
+
+</Steps>
+
+<Aside type="tip" title="What the whole walkthrough proved">
+fltr drives a real game UI on a real renderer: five screens, page transitions in
+and out, a live HUD over a running simulation, an overlay that animates away, full
+keyboard navigation, and a scrollable list — in about 4,500 lines, a third of which
+is raylib integration written once.
+
+Layout converges in one pass. An idle frame re-records nothing. No paragraph leaks.
+Hovering a button rebuilds nothing at all.
+
+And the demo found real gaps, which was the point of building it.
+</Aside>
+
+<LinkCard
+  title="Gaps and rework"
+  description="Everything the demo hit: what is missing, what it forced, and what it would take to fix."
+  href="/fltr/project/gaps-and-rework/"
+/>
+
+<LinkCard
+  title="Guide: performance"
+  description="The three sinks ranked, boundaries, and diagnosing a frame that will not go quiet."
+  href="/fltr/guides/performance/"
+/>

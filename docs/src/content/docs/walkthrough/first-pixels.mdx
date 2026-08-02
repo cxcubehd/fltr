@@ -1,0 +1,209 @@
+---
+title: 5 — First pixels
+description: Construction order, attachRoot, a theme in an Ambient<T>, and the small compositions fltr does not ship.
+---
+
+import { Aside, LinkCard, Steps } from '@astrojs/starlight/components';
+
+Three objects have to be built in a specific order, and one of them cannot be a
+constructor member. Then everything else is a widget tree.
+
+## Construction order
+
+```cpp title="docs/demo/src/app/app.cc"
+void App::openWindow() {
+  window_.open(options_.width, options_.height, "fltr // drift", graphics_.value());
+  // Whatever the window actually did is what the settings screen shows.
+  graphics_.set(window_.settings());
+}
+
+void App::attachUi() {
+  // The font needs a GL context, so nothing here can be a constructor: the
+  // window opens first, then the text service, then the binding that uses it.
+  text_ = std::make_unique<RaylibTextService>(kFontPaths);
+  backend_ = std::make_unique<Backend>(*text_);
+  binding_ = std::make_unique<fltr::WidgetBinding>(window_.surface(), *text_);
+  binding_->attachRoot([this] { return buildRoot(*this); });
+}
+```
+
+And back down in the reverse order:
+
+```cpp title="docs/demo/src/app/app.cc"
+App::~App() {
+  // Order matters: the widget tree has to come down before the font it measured
+  // with, and the window last. `binding_` owning the tree makes that a matter of
+  // resetting in the right order rather than of hoping.
+  binding_.reset();
+  backend_.reset();
+  text_.reset();
+  window_.close();
+}
+```
+
+<Aside type="caution" title="This is the one lifetime rule you cannot get wrong">
+`WidgetBinding` takes the `TextService` **by reference** and holds render objects
+that own paragraph handles from it. Destroying the service first means every
+`RenderParagraph` destructor calls into freed memory.
+
+Three `unique_ptr` members and an explicit destructor is the whole fix, and it is
+why none of them can be a plain member built in the constructor's initialiser
+list.
+</Aside>
+
+`attachRoot` runs the builder inside a `BuildScope`, exactly once, and wraps what
+it returns in a `View`. Everything that changes afterwards changes through an
+observable — the builder is never re-run.
+
+## A theme
+
+fltr has no theme system, on purpose. `Ambient<T>` is the mechanism; the tokens
+are yours.
+
+```cpp title="docs/demo/src/ui/theme.hh"
+/// The whole visual vocabulary of the demo, in one trivially destructible,
+/// equality-comparable struct.
+struct Theme {
+  fltr::Color background{0x0a, 0x0a, 0x0c};
+  fltr::Color surface{0x11, 0x11, 0x14};
+  fltr::Color surfaceRaised{0x18, 0x18, 0x1d};
+  fltr::Color border{0x26, 0x26, 0x2d};
+  fltr::Color borderStrong{0x39, 0x39, 0x44};
+  fltr::Color text{0xec, 0xec, 0xef};
+  fltr::Color textDim{0x8b, 0x8b, 0x99};
+  fltr::Color textFaint{0x5a, 0x5a, 0x66};
+  fltr::Color accent{0x6e, 0x9b, 0xff};
+  fltr::Color accentSoft{0x24, 0x33, 0x59};
+  fltr::Color danger{0xff, 0x6b, 0x6b};
+  fltr::Color ok{0x57, 0xd9, 0xa3};
+
+  float radius = 6.0f;
+  float hairline = 1.0f;
+  float unit = 8.0f;
+  float fontSize = 14.0f;
+
+  friend constexpr bool operator==(const Theme&, const Theme&) noexcept = default;
+};
+
+using ThemeScope = fltr::Ambient<Theme>;
+```
+
+One struct rather than a dozen ambient values, so a theme change notifies once.
+`Ambient<T>` requires `T` to be trivially destructible (it is copied into the build
+arena) and equality-comparable (an unchanged value must notify nobody) — the
+defaulted `operator==` is what satisfies the second.
+
+### Text styles are derived, not stored
+
+```cpp title="docs/demo/src/ui/theme.hh"
+/// Text styles are derived rather than stored: fltr's `Text` takes a full
+/// `TextStyle` at every call site (there is no ambient default), so the theme
+/// hands out complete ones and nothing repeats a font size by hand.
+fltr::TextStyle bodyStyle(const Theme& theme);
+fltr::TextStyle labelStyle(const Theme& theme);
+fltr::TextStyle titleStyle(const Theme& theme);
+fltr::TextStyle displayStyle(const Theme& theme);
+fltr::TextStyle monoStyle(const Theme& theme, fltr::Color color);
+```
+
+```cpp title="docs/demo/src/ui/theme.cc"
+TextStyle styled(float size, Color color, float tracking) {
+  return TextStyle{
+      .font = 0,
+      .size = size,
+      .color = color,
+      .letterSpacing = tracking,
+      .lineHeight = 1.35f,
+  };
+}
+
+TextStyle bodyStyle(const Theme& theme)  { return styled(theme.fontSize, theme.text, 0.0f); }
+TextStyle labelStyle(const Theme& theme) { return styled(theme.fontSize - 2.0f, theme.textDim, 0.6f); }
+TextStyle titleStyle(const Theme& theme) { return styled(theme.fontSize + 4.0f, theme.text, 0.0f); }
+```
+
+<Aside type="caution" title="There is no DefaultTextStyle">
+Every `Text` call site takes a complete `TextStyle`. Six helper functions is the
+whole workaround, and it works — but it means the tree carries a full style struct
+at every text leaf where Flutter carries an inherited one. On the
+[gaps list](/fltr/project/gaps-and-rework/).
+</Aside>
+
+### Surfaces
+
+```cpp title="docs/demo/src/ui/theme.cc"
+BoxDecoration panelDecoration(const Theme& theme) {
+  return BoxDecoration{
+      .color = theme.surface,
+      .radius = BorderRadius::all(theme.radius),
+      .borderColor = theme.border,
+      .borderWidth = theme.hairline,
+  };
+}
+```
+
+<Aside type="note" title="&quot;Sleek&quot; here means restraint, because it has to">
+`BoxDecoration` is fill, radius, border colour and border width. No gradients, no
+shadows, no blur. So the demo's look is built from hairline borders, 6px radii,
+and contrast carried by the border rather than by a fill — which happens to be a
+good modern look, and was not entirely a free choice.
+</Aside>
+
+## The compositions fltr does not ship
+
+The catalogue is deliberately primitive: no `Container`, no `Center`, no `Spacer`,
+no `ColoredBox`. So you write the handful you actually use, once.
+
+```cpp title="docs/demo/src/ui/widgets/panel.cc"
+WidgetRef panel(const Theme& theme, EdgeInsets padding, WidgetRef child) {
+  return DecoratedBox::make({
+      .decoration = panelDecoration(theme),
+      .child = Padding::make({.padding = padding, .child = child}),
+  });
+}
+
+WidgetRef gap(float size) { return SizedBox::make({.size = fltr::Size::square(size)}); }
+
+WidgetRef spacer(int flex) {
+  return Flexible::make({.flex = flex, .child = SizedBox::make({.size = fltr::Size::zero()})});
+}
+
+WidgetRef divider(const Theme& theme) {
+  return DecoratedBox::make({
+      .decoration = {.color = theme.border},
+      .child = SizedBox::make({.size = {fltr::kInf, theme.hairline}}),
+  });
+}
+
+WidgetRef sheet(fltr::Key key, const Theme& theme, float maxWidth, WidgetRef child) {
+  // `Align` with its default alignment is the `Center` that fltr does not ship
+  // under that name -- the capability is there, only the shorthand is missing.
+  return Align::make({
+      .key = key,
+      .alignment = Alignment::center(),
+      .child = ConstrainedBox::make({
+          .constraints = BoxConstraints{.maxWidth = maxWidth},
+          .child = Padding::make({.padding = EdgeInsets::all(theme.unit * 3.0f), .child = child}),
+      }),
+  });
+}
+```
+
+They are **functions, not widgets**, because none of them needs state or identity.
+A function composing widgets adds nothing to any of the three trees — the element
+tree sees only `DecoratedBox`, `Padding`, `SizedBox`.
+
+<Aside type="tip" title="What this step proved">
+Every missing catalogue entry turned out to be a shorthand, not a capability. The
+demo needed 70 lines of `panel.cc` to cover all of it, and none of it fights the
+framework.
+
+The finding is about ergonomics, not power: a new consumer will write this same
+file, with these same names, before they can write their first screen.
+</Aside>
+
+<LinkCard
+  title="Next: styled primitives"
+  description="The zero-rebuild hover pattern every control in the demo is built on."
+  href="/fltr/walkthrough/styled-primitives/"
+/>

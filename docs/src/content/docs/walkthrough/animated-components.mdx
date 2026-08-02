@@ -1,0 +1,241 @@
+---
+title: 13 — Animated components
+description: Every animation in the demo, sorted by what it invalidates — and the one that had to be expensive.
+---
+
+import { Aside, LinkCard, Tabs, TabItem } from '@astrojs/starlight/components';
+
+The demo animates eleven things. Ten of them repaint one render object per frame
+and rebuild nothing. This page is about the difference, and about the one that
+could not be on the cheap path.
+
+## The ledger
+
+| What | Mechanism | Invalidates |
+|---|---|---|
+| Button hover / press / focus | `AnimatedValue<BoxDecoration>` → `DecoratedBox::animation` | one repaint |
+| Button press scale | `AnimatedValue<Transform2D>` → `Transform::animation` | one repaint |
+| Page slide | `MappedValue<Transform2D>` from switcher presence | one repaint |
+| Page fade | switcher presence → `Opacity::animation` | one repaint |
+| Switch thumb | `MappedValue<Transform2D>` from `fractionOf` | one repaint |
+| Switch track colour | `StyledSurface` | one repaint |
+| Slider fill | `MappedValue<Transform2D>` scale about `centerLeft` | one repaint |
+| Slider thumb | `MappedValue<Transform2D>` translation | one repaint |
+| Hull / shield meters | `MappedValue<Transform2D>` from `Observable<float>` | one repaint |
+| "HULL CRITICAL" fade | `AnimatedOpacity` | one repaint |
+| **Score count-up** | `AnimatedValue<float>` → `setState` | **a rebuild per frame** |
+| Scrollbar fade, overscroll stretch | framework's own, render-attached | one repaint |
+
+## The cheap path, in full
+
+`Meter` is the smallest complete example.
+
+```cpp title="docs/demo/src/ui/widgets/readout.cc"
+Transform2D horizontalScale(float fraction, float) noexcept {
+  // Clamped rather than trusted: a game pushing 1.02 should not overflow the
+  // track, and the framework has no opinion about the range of a float.
+  const float clamped = std::clamp(fraction, 0.0f, 1.0f);
+  return Transform2D::scaling(clamped, 1.0f);
+}
+
+void MeterState::initState() { scale_.bind(widget().args().fraction, &horizontalScale, 0.0f); }
+
+void MeterState::didUpdateWidget(const Meter& previous) {
+  if (widget().args().fraction != previous.args().fraction) {
+    scale_.bind(widget().args().fraction, &horizontalScale, 0.0f);
+  }
+}
+
+void MeterState::dispose() { scale_.release(); }
+
+WidgetRef MeterState::build(BuildContext&) {
+  const Meter::Args& args = widget().args();
+
+  return DecoratedBox::make({
+      .decoration = {.color = args.track, .radius = BorderRadius::all(args.height * 0.5f)},
+      .child = ClipRect::make({
+          .radius = BorderRadius::all(args.height * 0.5f),
+          .child = fltr::Transform::make({
+              .animation = &scale_,
+              // Scaling about the left edge is what makes this a fill rather
+              // than a zoom -- and it is a paint operation, so no layout runs.
+              .origin = Alignment::centerLeft(),
+              .child = DecoratedBox::make({
+                  .decoration = {.color = args.fill},
+                  .child = SizedBox::make({.size = {fltr::kInf, args.height}}),
+              }),
+          }),
+      }),
+  });
+}
+```
+
+Four things make this cheap:
+
+1. The bar is **full width**, and the transform scales it. No layout is involved.
+2. The origin is `centerLeft`, so scaling reads as filling rather than zooming.
+3. `.animation = &scale_` hands the render object a pointer to a live value — the
+   built widget carries no snapshot.
+4. The `State` owns the value, so its lifetime is the element's.
+
+`build` runs once. Every subsequent frame is `markNeedsPaint` on one node.
+
+## The expensive path, on purpose
+
+```cpp title="docs/demo/src/ui/widgets/readout.hh"
+/// A number that rolls up to its new value.
+///
+/// This one *does* rebuild every frame it animates, and it has to: the animated
+/// quantity is a string, and there is no render-attached animated text in fltr.
+/// It is here as the deliberate counterexample to `Meter` -- one screen, both
+/// paths, and the cost of each visible in the frame stats.
+```
+
+```cpp title="docs/demo/src/ui/widgets/readout.cc"
+void CountUpState::onTargetChanged() {
+  if (widget().args().value == nullptr) return;
+  shown_.retarget(static_cast<float>(widget().args().value->value()));
+}
+
+void CountUpState::onTick() {
+  // This is the rebuild. It happens once per frame while the number is moving
+  // and not at all once it has settled, because the driver stops notifying.
+  setState([] {});
+}
+
+WidgetRef CountUpState::build(BuildContext&) {
+  const int rounded = static_cast<int>(std::lround(shown_.value()));
+  const int written = std::snprintf(buffer_, sizeof(buffer_), "%d", rounded);
+  text_ = written > 0 ? std::string_view{buffer_, static_cast<std::size_t>(written)}
+                      : std::string_view{buffer_, 0};
+
+  // The view points at this State's own buffer, which outlives every build it
+  // is handed to -- `Text` copies nothing.
+  return Text::make({.text = text_, .style = widget().args().style});
+}
+```
+
+Two subscriptions: one to the target value (`retarget` when the score changes), one
+to the interpolation itself (`setState` per tick).
+
+There is no way around it. The animated quantity is a **string**, and there is no
+render-attached animated text. The rebuild is one element and one `RenderParagraph`
+relayout per frame for 0.45 s, which is fine — but it is a rebuild, and it is
+visible in `buildCount()`.
+
+<Aside type="tip" title="It stops on its own">
+When the driver settles it stops notifying, so `onTick` stops firing and
+`buildCount()` goes flat. Nothing has to notice that the animation ended.
+</Aside>
+
+## `retarget` and interruption
+
+```cpp
+shown_.retarget(static_cast<float>(widget().args().value->value()));
+```
+
+`AnimatedValue<T>::retarget` re-bases the interval from the value **currently on
+screen** and restarts the driver from zero. Shooting three asteroids in quick
+succession does not restart the count from the old score each time — each new
+interval begins where the last one had actually reached, so the number never jumps
+and repeated interruption accumulates no error.
+
+`AnimationDriver`'s duration is the time for the **full** range, so a short journey
+takes proportionally less time. That is what makes hover in-and-out feel right on
+`StyledSurface` too.
+
+## Two ways of writing the same thing
+
+<Tabs>
+  <TabItem label="Implicit — AnimatedOpacity">
+
+```cpp title="docs/demo/src/ui/screens/hud.cc"
+return AnimatedOpacity::make({
+    .opacity = hull < 0.35f ? 1.0f : 0.0f,
+    .animation = {.duration = 0.25f, .curve = fltr::Curves::easeInOut},
+    .child = panel(...),
+});
+```
+
+Declare the target; the framework owns the driver, the tween and the ticker. A
+configuration change with a **different target** retargets; one with the same target
+does nothing.
+
+Frames after that rebuild nothing — the built widget hands the animated value down,
+not a snapshot.
+
+Reach for this when the target is a plain function of build-time state.
+
+  </TabItem>
+  <TabItem label="Explicit — StyledSurface">
+
+```cpp title="docs/demo/src/ui/widgets/styled_surface.cc"
+void StyledSurfaceState::retarget() {
+  const WidgetStates states = controller_ != nullptr ? controller_->value() : WidgetStates{};
+  const BoxDecoration decoration = resolveSurface(widget().style(), states);
+  if (!(decoration == decoration_.value())) decoration_.retarget(decoration);
+  ...
+}
+
+void StyledSurfaceState::onStatesChanged() { retarget(); }
+```
+
+Own the driver yourself when the trigger is **not** a configuration change. Hover
+arrives as a notification from a controller, and routing it through a rebuild just
+to reach an `AnimatedDecoration` would defeat the point.
+
+  </TabItem>
+</Tabs>
+
+## Muting
+
+```cpp title="docs/demo/src/ui/root.cc"
+TickerMode::make({
+    .enabled = !(screen == Screen::Playing && paused),
+    .child = screenFor(app, ThemeScope::of(inner), screen),
+})
+```
+
+Every driver in the subtree reads `TickerMode::of(context)` and mutes itself. A
+muted ticker holds **no subscription**, so `activeTickerCount()` drops and the
+frame genuinely costs nothing — and resumes exactly where it stopped, because a
+ticker carries a per-frame delta rather than an absolute clock.
+
+## What to watch
+
+```cpp title="docs/demo/src/app/app.cc"
+void App::refreshDebugText() {
+  const fltr::PipelineOwner::FrameStats& stats = binding_->pipeline().stats();
+  std::snprintf(debugText_, sizeof(debugText_),
+                "builds=%d layouts=%d paints=%d passes=%d tickers=%zu cmds=%zu",
+                binding_->buildOwner().buildCount(), stats.layouts, stats.paints,
+                stats.layoutPasses, binding_->tickers().activeTickerCount(),
+                backend_->lastCommandCount());
+}
+```
+
+Hover a button: `paints` moves, `builds` does not. Shoot an asteroid: `builds`
+climbs for 0.45 s, then flattens. Pause: `tickers` drops. Sit still: everything
+goes to zero.
+
+<Aside type="tip" title="What this step proved">
+The framework's central claim — that most animation should not rebuild anything —
+holds up across eleven animations of five different kinds. The one exception is
+exactly the case the framework has no mechanism for.
+
+Two findings. **No animated text**, so any moving number is a rebuild. And
+`MappedValue` — the adapter that made seven of these possible — is something every
+consumer will have to write.
+</Aside>
+
+<LinkCard
+  title="Architecture: animation"
+  description="Delta-driven tickers, exact muting, and the cheap-vs-expensive table."
+  href="/fltr/architecture/animation/"
+/>
+
+<LinkCard
+  title="Next: verify"
+  description="Four assertions that turn 'it seems fine' into a number that fails a build."
+  href="/fltr/walkthrough/verify/"
+/>

@@ -1,0 +1,318 @@
+---
+title: 10 — Settings
+description: RawToggle as a drag-aware switch, RawSlider with divisions, and both driving real window state.
+---
+
+import { Aside, LinkCard } from '@astrojs/starlight/components';
+
+Two switches and a slider, wired to fullscreen, vsync and the frame cap. This is
+where the component layer stops being a button and starts being a control surface.
+
+## The switch
+
+`RawToggle` is the one machine behind a checkbox, a switch and a radio. What makes
+it a *switch* is one number.
+
+```cpp title="docs/demo/src/ui/widgets/toggle_row.cc"
+  return RawToggle::make({
+      .key = spec.key,
+      .value = spec.value ? ToggleValue::On : ToggleValue::Off,
+      .onChanged = spec.onChanged,
+      // A non-zero drag extent is what makes this a switch rather than a
+      // checkbox: it creates the drag recognizer, and the thumb follows the
+      // finger instead of jumping when it is let go.
+      .dragExtent = travel,
+      .enabled = spec.enabled,
+      .autofocus = spec.autofocus,
+      .child = ...
+  });
+```
+
+`dragExtent = 0` creates **no drag recognizer at all** — that is a checkbox. A
+non-zero one means a drag of that distance moves the position end to end, and
+letting go past halfway reports the toggle.
+
+### The thumb
+
+The component publishes a 0..1 fraction. `MappedValue` turns it into a translation.
+
+```cpp title="docs/demo/src/ui/widgets/toggle_row.cc"
+Transform2D slideX(float fraction, float travel) noexcept {
+  return Transform2D::translation({fraction * travel, 0.0f});
+}
+
+WidgetRef SwitchThumbState::build(BuildContext& context) {
+  travel_.bind(ComponentScope::fractionOf(context), &slideX, widget().args().travel);
+
+  return fltr::Transform::make({
+      .animation = &travel_,
+      .origin = Alignment::centerLeft(),
+      .child = DecoratedBox::make({
+          .decoration = {.color = widget().args().color,
+                         .radius = BorderRadius::all(widget().args().diameter * 0.5f)},
+          .child = SizedBox::make({.size = fltr::Size::square(widget().args().diameter)}),
+      }),
+  });
+}
+```
+
+Dragging the thumb repaints **one render object** and rebuilds nothing — through
+the whole drag, at whatever rate the pointer reports.
+
+While dragging, the component pins the position rather than animating to it: the
+thumb is following a finger, not a clock. Letting go animates it home over
+`positionDuration`.
+
+### The track
+
+The track is a `StyledSurface` with pill radii, so it picks up hover, press, focus
+and disabled from the same machinery every button uses:
+
+```cpp title="docs/demo/src/ui/widgets/toggle_row.cc"
+  SurfaceStyle track = trackStyle(theme);
+  const BorderRadius pill = BorderRadius::all(kTrackHeight * 0.5f);
+  track.rest.radius = pill;
+  track.hovered.radius = pill;
+  track.pressed.radius = pill;
+  track.selected.radius = pill;
+  track.disabled.radius = pill;
+  if (spec.value && spec.enabled) {
+    track.rest.color = theme.accentSoft;
+    track.rest.borderColor = theme.accent;
+    track.hovered.color = theme.accentSoft;
+    track.hovered.borderColor = theme.accent;
+  }
+```
+
+<Aside type="note" title="Why the callback type is fltr's own">
+```cpp
+/// fltr's own signature, passed straight through: wrapping it in a
+/// `Callback<void(bool)>` would nest one 32-byte inline closure inside
+/// another, which `Callback` static-asserts against.
+fltr::Callback<void(fltr::ToggleValue)> onChanged;
+```
+
+A nicer `bool` API would need a lambda capturing the caller's `Callback` — a
+32-byte object inside a 32-byte budget. It does not fit, and the static assert
+tells you so at compile time rather than at runtime.
+</Aside>
+
+## The slider
+
+```cpp title="docs/demo/src/ui/widgets/slider_row.cc"
+  return RawSlider::make({
+      .key = spec.key,
+      .value = spec.value,
+      .min = spec.min,
+      .max = spec.max,
+      .divisions = spec.divisions,
+      .onChanged = spec.onChanged,
+      // The value maps across the track less the thumb, so both ends stay
+      // reachable -- the same number the visual uses for its travel.
+      .thumbExtent = 14.0f,
+      .enabled = spec.enabled,
+      .child = ...
+  });
+```
+
+### Two views of one fraction
+
+```cpp title="docs/demo/src/ui/widgets/slider_row.cc"
+Transform2D scaleX(float fraction, float) noexcept {
+  return Transform2D::scaling(std::clamp(fraction, 0.0f, 1.0f), 1.0f);
+}
+
+Transform2D slideX(float fraction, float travel) noexcept {
+  return Transform2D::translation({std::clamp(fraction, 0.0f, 1.0f) * travel, 0.0f});
+}
+
+WidgetRef SliderTrackState::build(BuildContext& context) {
+  const SliderTrack::Args& args = widget().args();
+  const float travel = std::max(0.0f, args.width - args.thumbSize);
+
+  fltr::ValueListenable<float>* fraction = ComponentScope::fractionOf(context);
+  fill_.bind(fraction, &scaleX, 0.0f);
+  thumb_.bind(fraction, &slideX, travel);
+  ...
+}
+```
+
+The fill is a **full-width bar scaled about its left edge**. That is what makes it a
+fill rather than a zoom, and it is a paint operation — no layout runs while the
+slider moves.
+
+```cpp title="docs/demo/src/ui/widgets/slider_row.cc"
+                  Align::make({
+                      .child = ClipRect::make({
+                          .radius = BorderRadius::all(kTrackThickness * 0.5f),
+                          .child = fltr::Transform::make({
+                              .animation = &fill_,
+                              .origin = Alignment::centerLeft(),
+                              .child = bar(args.fill),
+                          }),
+                      }),
+                  }),
+```
+
+Dragging the slider repaints two render objects. Nothing rebuilds and nothing
+lays out.
+
+<Aside type="caution" title="Fixed width, because there is no LayoutBuilder">
+```cpp
+/// A fixed-width slider track. Fixed because the thumb's travel has to be known
+/// when the mapping is set up, and fltr has no `LayoutBuilder` to ask the parent
+/// how wide it ended up -- a real gap, recorded on the gaps page.
+```
+
+The travel has to be a number at build time. There is no way to ask "how wide did I
+end up?" from a builder, so the width is hardcoded and `RawSlider::thumbExtent`
+is given the matching number by hand. Two constants that must agree, with nothing
+enforcing it.
+
+This is the most concrete missing capability the demo found. On the
+[gaps list](/fltr/project/gaps-and-rework/).
+</Aside>
+
+### Absolute mapping
+
+`RawSlider` maps the value **absolutely** from where the pointer is, rather than
+accumulating drag deltas. So the thumb goes to the pointer on the first frame and
+cannot drift over a long drag — and there is no separate thumb hit region, because
+pressing anywhere on the track is already a press on the thumb.
+
+## The screen
+
+```cpp title="docs/demo/src/ui/screens/settings.cc"
+                  // Only this subtree is rebuilt when a setting changes: the
+                  // title, the rule and the frame around it are untouched.
+                  Watch<GraphicsSettings>::make({
+                      .value = &app.graphics(),
+                      .builder = [&app](BuildContext& context,
+                                        const GraphicsSettings& current) -> WidgetRef {
+                        return graphicsPanel(app, ThemeScope::of(context), current);
+                      },
+                  }),
+```
+
+This is the case where a rebuild is genuinely the right answer: the labels change
+(`"ON"` / `"OFF"`), and one control's `enabled` flips.
+
+```cpp title="docs/demo/src/ui/screens/settings.cc"
+                  toggleRow(theme,
+                            {
+                                .key = Key::of("settings.fullscreen"),
+                                .label = "Fullscreen",
+                                .hint = current.fullscreen ? "ON" : "OFF",
+                                .value = current.fullscreen,
+                                .onChanged =
+                                    [&app](ToggleValue value) {
+                                      GraphicsSettings next = app.graphics().value();
+                                      next.fullscreen = value == ToggleValue::On;
+                                      app.applyGraphics(next);
+                                    },
+                                .autofocus = true,
+                            }),
+```
+
+```cpp title="docs/demo/src/ui/screens/settings.cc"
+                  sliderRow(theme,
+                            {
+                                .key = Key::of("settings.fps"),
+                                .label = "Frame cap",
+                                .valueText = app.maxFpsText(),
+                                .value = static_cast<float>(current.maxFps),
+                                .min = 30.0f,
+                                .max = 240.0f,
+                                // Seven divisions is eight stops, 30 apart, and
+                                // the component snaps for us -- the visual never
+                                // sees an intermediate value.
+                                .divisions = 7,
+                                .onChanged = ...,
+                                // The cap does nothing while vsync is driving
+                                // the frame rate, so it says so by being off.
+                                .enabled = !current.vsync,
+                            }),
+```
+
+## The round trip
+
+```cpp title="docs/demo/src/app/app.cc"
+void App::applyGraphics(const GraphicsSettings& settings) {
+  window_.apply(settings);
+  graphics_.set(window_.settings());
+  formatMaxFps();
+}
+```
+
+Three lines, and the middle one is the important one. The observable is set from
+**`window_.settings()`**, not from the requested value.
+
+```cpp title="docs/demo/src/platform/window.cc"
+void Window::apply(const GraphicsSettings& next) {
+  if (!open_ || next == settings_) return;
+
+  if (next.fullscreen != settings_.fullscreen) {
+    // raylib reports the state it is actually in, which is not always the state
+    // that was asked for -- a compositor may refuse. The settings screen shows
+    // what happened rather than what was requested.
+    ToggleFullscreen();
+  }
+
+  if (next.vsync != settings_.vsync) {
+    if (next.vsync) {
+      SetWindowState(FLAG_VSYNC_HINT);
+    } else {
+      ClearWindowState(FLAG_VSYNC_HINT);
+    }
+  }
+
+  if (next.maxFps != settings_.maxFps) SetTargetFPS(next.maxFps);
+
+  settings_ = next;
+  settings_.fullscreen = IsWindowFullscreen();
+}
+```
+
+<Aside type="tip" title="The switch shows reality, not intent">
+A compositor may refuse fullscreen. Because the observable is fed from what the
+window ended up in, the switch snaps back on its own — no error path, no
+reconciliation logic, just one value pushed and one `Watch` rebuilt.
+
+That works because `Observable<T>::set` compares first: a request that succeeded
+pushes the same value the toggle already showed and notifies nobody.
+</Aside>
+
+`apply` only touches what actually changed, because window calls are not free.
+`GraphicsSettings` being equality-comparable is what makes that one line.
+
+## The formatted value
+
+```cpp title="docs/demo/src/app/app.cc"
+void App::formatMaxFps() {
+  const int cap = graphics_.value().maxFps;
+  std::snprintf(maxFpsText_, sizeof(maxFpsText_), "%d", cap);
+}
+```
+
+```cpp title="docs/demo/src/app/app.hh"
+char maxFpsText_[16] = "144";
+```
+
+The same pattern as the menu's best score, for the same reason: `Text` does not
+copy its `string_view`.
+
+<Aside type="tip" title="What this step proved">
+Both components are complete: value, gestures, drag, keyboard, focus, disabled,
+snapping. The demo supplied only pixels.
+
+Two findings. The missing `LayoutBuilder` forced a hardcoded slider width and two
+constants that must agree. And there is no ambient view metrics — the settings
+screen wants surface size and knows it only because `App` happens to hold a
+`Window`.
+</Aside>
+
+<LinkCard
+  title="Next: gameplay and HUD"
+  description="The ship flies, and the HUD reads it without either side knowing."
+  href="/fltr/walkthrough/gameplay-hud/"
+/>

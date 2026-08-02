@@ -1,0 +1,168 @@
+---
+title: Walkthrough
+description: Build a complete game — menu, level select, settings, HUD, pause overlay and page transitions — on raylib, one file at a time.
+---
+
+import { Aside, Card, CardGrid, FileTree, LinkCard, Steps } from '@astrojs/starlight/components';
+
+We are going to build **drift**: a floaty spaceship in an asteroid field, with a
+main menu, a level select, a settings screen, a live HUD, a pause overlay, and
+animated page transitions in *and* out.
+
+raylib draws the ship and the rocks. fltr draws everything else.
+
+<CardGrid>
+  <Card title="The point is the seam" icon="puzzle">
+    The game and the UI never mention each other. The game publishes numbers into
+    observables; the UI reads them. A menu takes the keyboard from the ship
+    through one boolean.
+  </Card>
+  <Card title="Every step is real code" icon="approve-check">
+    Everything on these pages is copied from `docs/demo/`, which builds and passes
+    a scripted headless smoke test. Nothing here is illustrative pseudo-code.
+  </Card>
+  <Card title="Modifications are diffs" icon="pencil">
+    New files appear as complete code frames. When a later step changes the loop
+    or the root, you get the diff, not the whole file again.
+  </Card>
+  <Card title="Gaps are recorded, not hidden" icon="warning">
+    Where the framework made something awkward, the step says so and links to
+    the findings page instead of quietly working around it.
+  </Card>
+</CardGrid>
+
+## What you end up with
+
+<FileTree>
+- docs/demo/
+  - CMakeLists.txt
+  - assets/
+  - src/
+    - main.cc
+    - app/
+      - app.hh
+      - app.cc
+      - loop.hh
+      - loop.cc
+      - clock.hh
+      - clock.cc
+    - platform/
+      - window.hh
+      - window.cc
+      - backend.hh
+      - backend.cc
+      - text.hh
+      - text.cc
+      - input.hh
+      - input.cc
+    - game/
+      - ship.hh
+      - ship.cc
+      - field.hh
+      - field.cc
+      - levels.hh
+      - levels.cc
+      - session.hh
+      - session.cc
+    - ui/
+      - theme.hh
+      - theme.cc
+      - root.hh
+      - root.cc
+      - router.hh
+      - router.cc
+      - widgets/
+        - mapped_value.hh
+        - styled_surface.hh
+        - styled_surface.cc
+        - panel.hh
+        - panel.cc
+        - menu_button.hh
+        - menu_button.cc
+        - toggle_row.hh
+        - toggle_row.cc
+        - slider_row.hh
+        - slider_row.cc
+        - readout.hh
+        - readout.cc
+      - screens/
+        - main_menu.hh
+        - main_menu.cc
+        - level_select.hh
+        - level_select.cc
+        - settings.hh
+        - settings.cc
+        - hud.hh
+        - hud.cc
+        - pause.hh
+        - pause.cc
+</FileTree>
+
+About 4,500 lines, of which roughly a third is the raylib integration you write
+once and never touch again.
+
+## The map
+
+<Steps>
+
+1. **[Skeleton](/fltr/walkthrough/skeleton/)** — CMake `FetchContent`, a window
+   that opens.
+
+2. **[The loop](/fltr/walkthrough/the-loop/)** — the seven named steps of a
+   frame, and why the order between them matters.
+
+3. **[The backend](/fltr/walkthrough/backend/)** — every `PaintOp`, the three
+   state stacks, and the one thing raylib cannot express.
+
+4. **[Text](/fltr/walkthrough/text/)** — a real `TextService` over a raylib font,
+   because the shipped one is a stand-in.
+
+5. **[First pixels](/fltr/walkthrough/first-pixels/)** — `WidgetBinding`,
+   `attachRoot`, and a theme in an `Ambient<T>`.
+
+6. **[Styled primitives](/fltr/walkthrough/styled-primitives/)** — the
+   zero-rebuild hover pattern that every control in the demo is built on.
+
+7. **[The router](/fltr/walkthrough/router/)** — `AnimatedSwitcher` with a custom
+   slide transition, in and out.
+
+8. **[Main menu](/fltr/walkthrough/main-menu/)** — focus, autofocus, arrow
+   traversal, and Escape.
+
+9. **[Level select](/fltr/walkthrough/level-select/)** — `Scrollable` +
+   `Scrollbar` + `Overscroll`, and locked entries.
+
+10. **[Settings](/fltr/walkthrough/settings/)** — `RawToggle` and `RawSlider`
+    driving real window state.
+
+11. **[Gameplay and HUD](/fltr/walkthrough/gameplay-hud/)** — the ship flies, and
+    the HUD reads it without ever touching it.
+
+12. **[Pause menu](/fltr/walkthrough/pause-menu/)** — `Overlay`, a consumer-owned
+    entry, and an exit animation.
+
+13. **[Animated components](/fltr/walkthrough/animated-components/)** — the
+    cheap path and the expensive one, side by side.
+
+14. **[Verify](/fltr/walkthrough/verify/)** — the four assertions that turn "it
+    seems fine" into a number that fails a build.
+
+</Steps>
+
+<Aside type="tip" title="Build it as you go">
+```bash
+cmake -S docs/demo -B build-demo \
+      -DFETCHCONTENT_SOURCE_DIR_FLTR=$PWD
+cmake --build build-demo -j
+./build-demo/demo
+```
+
+Drop the `FETCHCONTENT_SOURCE_DIR_FLTR` override to fetch fltr from GitHub
+instead of your checkout.
+</Aside>
+
+<LinkCard
+  title="Start: the skeleton"
+  description="CMake, FetchContent, and a window that opens."
+  href="/fltr/walkthrough/skeleton/"
+/>

@@ -1,0 +1,250 @@
+---
+title: paint
+description: The display list, the paint command union, the Scene handed to your renderer, and the TextService boundary.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Everything in `include/fltr/paint/`. This is the entire surface a rendering
+backend touches — see [Writing a backend](/fltr/guides/writing-a-backend/) for
+how to consume it.
+
+## Handles
+
+```cpp title="fltr/paint/display_list.hpp"
+using ImageHandle     = std::uint64_t;
+using ParagraphHandle = std::uint64_t;
+using FontHandle      = std::uint64_t;   // fltr/paint/text.hpp
+
+inline constexpr ParagraphHandle kNullParagraph = 0;
+```
+
+GPU resources are consumer-owned. The framework refers to them by opaque handle
+and never loads, allocates, or frees one.
+
+## `PaintOp`
+
+```cpp
+enum class PaintOp : std::uint8_t {
+  PushTransform, PushClipRect, PushOpacity, Pop,   // state stack
+  DrawRect, DrawRRect, DrawImage, DrawParagraph,   // draws
+  DrawList,                                        // the repaint-boundary seam
+};
+
+const char* toString(PaintOp op) noexcept;
+```
+
+Every `Push` is balanced by a `Pop`, and `endRecording` asserts it. `DrawList`
+embeds another list **by reference**: the referenced list belongs to a repaint
+boundary and is re-recorded only when that subtree repaints, so a backend can
+cache its translation on `(list pointer, revision)`.
+
+## The command payloads
+
+```cpp
+struct PushTransformCmd { Transform2D transform; };
+struct PushClipRectCmd  { Rect rect; BorderRadius radius; };
+struct PushOpacityCmd   { float alpha; };
+
+struct DrawRectCmd  { Rect rect; Color color; };
+struct DrawRRectCmd { Rect rect; BorderRadius radius;
+                      Color fill; Color border; float borderWidth; };
+struct DrawImageCmd { Rect dst; Rect src; ImageHandle image; Color tint; };
+struct DrawParagraphCmd { ParagraphHandle paragraph; Offset offset; Color tint; };
+struct DrawListCmd  { const DisplayList* list; Offset offset; };
+```
+
+`DrawImageCmd::src` is in texel space — the consumer knows the texture.
+`DrawParagraphCmd::tint` is multiplied with the per-run colours the text service
+reported, which is how an `Opacity` above a `Text` reaches the glyphs.
+
+## `PaintCmd`
+
+```cpp
+struct PaintCmd {
+  PaintOp op;
+  union {
+    PushTransformCmd pushTransform;  PushClipRectCmd pushClipRect;
+    PushOpacityCmd   pushOpacity;    DrawRectCmd     drawRect;
+    DrawRRectCmd     drawRRect;      DrawImageCmd    drawImage;
+    DrawParagraphCmd drawParagraph;  DrawListCmd     drawList;
+  };
+  PaintCmd() noexcept;
+  explicit PaintCmd(PaintOp) noexcept;
+};
+
+static_assert(std::is_trivially_destructible_v<PaintCmd>);
+static_assert(std::is_trivially_copyable_v<PaintCmd>);
+```
+
+Fixed size and trivially copyable, so a list is a flat contiguous array a backend
+walks without indirection. The two `static_assert`s are in the header, not
+aspirational.
+
+## `DisplayList`
+
+```cpp
+class DisplayList {
+public:
+  void beginRecording();   // clears, ++revision, resets depth — retains capacity
+  void endRecording();     // asserts push/pop balance
+
+  void pushTransform(const Transform2D& m);
+  void pushClipRect(Rect r, BorderRadius radius = BorderRadius::zero());
+  void pushOpacity(float alpha);
+  void pop();
+
+  void drawRect(Rect r, Color color);
+  void drawRRect(Rect r, BorderRadius radius, Color fill,
+                 Color border = Color::transparent(), float borderWidth = 0.0f);
+  void drawImage(Rect dst, Rect src, ImageHandle image, Color tint = {255,255,255,255});
+  void drawParagraph(ParagraphHandle p, Offset at, Color tint = {255,255,255,255});
+  void drawList(const DisplayList* list, Offset at);
+
+  std::span<const PaintCmd> commands() const noexcept;
+  bool empty() const noexcept;
+  std::size_t size() const noexcept;
+  std::uint64_t revision() const noexcept;   // bumped by every beginRecording
+};
+```
+
+Nothing here assumes immediate-mode or retained-mode: the former walks the list
+each frame, the latter translates once and reuses that while `revision()` holds.
+
+<Aside type="note" title="beginRecording retains capacity">
+`cmds_.clear()` keeps the vector's storage, so a subtree that re-records the same
+shape every frame allocates nothing after the first. This is one of the reasons
+the framework's steady-state allocation count is zero.
+</Aside>
+
+## `Scene`
+
+```cpp
+struct Scene {
+  const DisplayList* root = nullptr;
+  Size surface;
+  std::uint64_t revision = 0;
+};
+```
+
+What `WidgetBinding::drawFrame` hands back. `revision` counts how many display
+lists the pipeline has re-recorded **in total** — unchanged since last frame means
+nothing anywhere was re-recorded and you may resubmit whatever you submitted last
+time.
+
+---
+
+## Text
+
+`fltr/paint/text.hpp`. Deep dive:
+[Implementing TextService](/fltr/guides/implementing-textservice/).
+
+### `TextStyle`
+
+```cpp
+struct TextStyle {
+  FontHandle font = 0;
+  float size = 14.0f;
+  Color color = {255, 255, 255, 255};
+  float letterSpacing = 0.0f;
+  float lineHeight = 1.2f;          // multiple of `size`
+  friend constexpr bool operator==(const TextStyle&, const TextStyle&) noexcept = default;
+};
+
+inline TextStyle lerp(const TextStyle& a, const TextStyle& b, float t) noexcept;
+```
+
+The `lerp` overload takes `b`'s font outright — fonts do not interpolate.
+
+```cpp
+enum class TextAlign    : std::uint8_t { Left, Center, Right };
+enum class TextOverflow : std::uint8_t { Clip, Ellipsis };
+```
+
+### What you are asked for
+
+```cpp
+struct TextSpan     { std::string_view text; TextStyle style; };
+
+struct ParagraphSpec {
+  std::span<const TextSpan> spans;
+  TextAlign align = TextAlign::Left;
+  int maxLines = 0;                            // 0 means unlimited
+  TextOverflow overflow = TextOverflow::Clip;
+};
+```
+
+### What you hand back
+
+```cpp
+struct PositionedRun {
+  Offset offset;            // top-left, paragraph-relative
+  Size size;
+  float baseline = 0.0f;    // from the run's top edge
+  std::uint32_t spanIndex = 0;
+  std::uint32_t byteBegin = 0, byteEnd = 0;
+};
+
+struct LineMetrics {
+  Rect bounds;              // paragraph-relative
+  float baseline = 0.0f;
+  std::uint32_t runBegin = 0, runCount = 0;
+};
+
+struct ParagraphMetrics {
+  Size size;
+  float firstBaseline = 0.0f, lastBaseline = 0.0f;
+  bool didExceedMaxLines = false, didEllipsize = false;
+  std::span<const LineMetrics>  lines;
+  std::span<const PositionedRun> runs;
+};
+```
+
+The spans point at storage the service owns and must stay valid until the handle
+is released.
+
+<Aside type="caution" title="A run is not a span and not a glyph">
+A `PositionedRun` is a *contiguous piece of one span placed on one line*.
+Explicitly not one glyph per character and not one run per span — a real shaper
+splits a span across lines and may merge or reorder within one.
+</Aside>
+
+### `TextService`
+
+```cpp
+class TextService {
+public:
+  virtual ~TextService() = default;
+  virtual ParagraphHandle acquire(const ParagraphSpec& spec, float maxWidth) = 0;
+  virtual const ParagraphMetrics& metrics(ParagraphHandle h) const = 0;
+  virtual void release(ParagraphHandle h) = 0;
+  virtual std::uint32_t byteOffsetAt(ParagraphHandle h, Offset local) const = 0;
+};
+```
+
+| Method | Contract |
+|---|---|
+| `acquire` | Measure and lay out into at most `maxWidth` logical pixels. `maxWidth` may be infinite. Returns a handle the caller owns. |
+| `metrics` | Valid until the handle is released. |
+| `release` | Caller-driven. `RenderParagraph` releases on re-layout and on destruction. |
+| `byteOffsetAt` | Byte offset in the source text nearest `local`. Present so hit testing inside text does not need a second mechanism later. |
+
+The service is passed by reference to `WidgetBinding` and **must outlive it**.
+
+### `MonospaceTextService`
+
+```cpp
+class MonospaceTextService final : public TextService {
+public:
+  explicit MonospaceTextService(float advanceRatio = 0.5f);
+  // ... the four overrides ...
+  std::size_t liveParagraphs() const;
+};
+```
+
+A development stand-in: fixed advance, greedy word wrap, no correctness beyond
+ASCII. It produces multiple lines and multiple runs *on purpose*, so layout,
+painting and hit testing meet the shape of data a real shaper returns.
+
+`liveParagraphs()` is the leak check — assert it returns to zero after
+`binding.reset()`. Expose the same thing from your own service.

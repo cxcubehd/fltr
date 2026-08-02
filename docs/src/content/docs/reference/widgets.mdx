@@ -1,0 +1,719 @@
+---
+title: widgets
+description: The widget framework — Widget, Element, State, reconciliation — plus the shipped catalogue, the binding, Ambient, Watch, and the implicit-animation layer.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Everything in `include/fltr/widgets/`. Architecture:
+[Overview](/fltr/architecture/overview/) and
+[Reactivity](/fltr/architecture/reactivity/).
+
+## The framework
+
+`fltr/widgets/framework.hpp`.
+
+### Build scope and the arena
+
+```cpp
+using WidgetType = TypeTag;
+template <class T> constexpr WidgetType widgetTypeOf() noexcept;
+
+Arena* currentBuildArena() noexcept;
+
+class BuildScope {
+public:
+  explicit BuildScope(Arena& arena) noexcept;
+  ~BuildScope();               // releases every widget allocated inside
+};
+
+bool isStaleGeneration(std::uint32_t generation) noexcept;
+```
+
+The arena is **ambient rather than a parameter**, because a widget expression
+nests arbitrarily deep and threading an allocator through it would put noise at
+exactly the call sites this framework optimises for.
+
+### `WidgetRef`
+
+```cpp
+class WidgetRef {
+public:
+  WidgetRef() = default;
+  WidgetRef(const Widget& widget, std::uint32_t generation) noexcept;
+
+  explicit operator bool() const noexcept;
+  WidgetType type() const noexcept;
+  Key key() const noexcept;
+  bool stale() const noexcept;
+
+  bool canUpdate(const Widget& existing) const noexcept;
+  bool canUpdate(WidgetRef other) const noexcept;
+
+  const Widget* get() const;
+  const Widget* operator->() const;
+  const Widget& operator*() const;
+};
+```
+
+A fat handle carrying **type and key** rather than reading them back through the
+pointer — so a ref that outlived its arena can still be reconciled without being
+dereferenced.
+
+<Aside type="tip" title="A stale ref means &quot;unchanged&quot;">
+That is the ordinary case, not an exotic one: an element that rebuilds alone
+re-emits the child ref it stored from an earlier build. The configuration behind
+it cannot have changed since, because the element holding it copied it verbatim,
+so the subtree it names needs no work.
+
+This is also the entire mechanism behind `AnimatedSwitcher`'s exit animations —
+re-emitting a stale ref retains the subtree.
+</Aside>
+
+Matching type and key reconcile onto the same element, keeping its `State` and its
+render object; anything else discards it and inflates afresh.
+
+### `WidgetList`
+
+```cpp
+class WidgetList {
+public:
+  WidgetList() = default;
+  WidgetList(std::initializer_list<WidgetRef> widgets);
+  static WidgetList generate(std::size_t count, FunctionRef<WidgetRef(std::size_t)> item);
+
+  std::size_t size() const noexcept;
+  bool empty() const noexcept;
+  bool stale() const noexcept;
+  const WidgetRef& operator[](std::size_t i) const;
+};
+```
+
+The braced list at the call site is a temporary, so entries are copied into the
+build arena. **Null refs are dropped**, which makes
+`visible ? Badge::make({...}) : WidgetRef{}` work inline.
+
+`generate` is the same list where the call site cannot spell its length — an
+overlay's entries, a switcher's live subtrees.
+
+### `Widget`
+
+```cpp
+class Widget {
+public:
+  Key key() const noexcept;
+  virtual WidgetType type() const noexcept = 0;
+  virtual const char* name() const noexcept = 0;
+  virtual ElementPtr createElement() const = 0;
+protected:
+  explicit Widget(Key key) noexcept;
+  ~Widget() = default;                     // non-virtual, protected
+};
+```
+
+Immutable configuration, alive for one build phase and released wholesale. A
+widget is never deleted and never destroyed polymorphically — hence the protected
+non-virtual destructor, which also keeps concrete widgets trivially destructible
+and so arena-safe.
+
+The copy constructor is protected too: a widget is immutable to everything except
+the element adopting it, which overwrites its whole configuration slot at once.
+
+### `BuildContext`
+
+```cpp
+class BuildContext {
+public:
+  Element& element() const noexcept;
+  BuildOwner& owner() const noexcept;
+  TextService& textService() const noexcept;
+  PointerBinding& pointerBinding() const noexcept;
+  KeyboardBinding& keyboard() const noexcept;
+  TickerRegistry& tickers() const noexcept;
+  bool mounted() const noexcept;
+};
+```
+
+A handle rather than the element itself, so building cannot reach the
+tree-mutating half of `Element`.
+
+### `Element`
+
+```cpp
+class Element {
+public:
+  Element* parent() const noexcept;
+  BuildOwner* owner() const noexcept;
+  int  depth() const noexcept;
+  bool mounted() const noexcept;
+  bool dirty() const noexcept;
+
+  virtual const Widget* widget() const noexcept = 0;
+  virtual void visitChildren(FunctionRef<void(Element&)>) const;
+  virtual RenderBox* renderObject() const;
+
+  void markNeedsBuild();
+  InheritedElementBase* dependOnInherited(WidgetType type);
+
+  virtual void mount(Element* parent, BuildOwner& owner);
+  virtual void unmount();
+  virtual void update(WidgetRef widget) = 0;
+  void rebuild();
+
+  virtual void writeParentData(ParentDataSlot slot) const;
+  virtual void detachRenderObject();
+
+protected:
+  virtual void performRebuild() = 0;
+  virtual void extendInheritedScope() {}   // before first build; ambient scope
+  virtual void didMount() {}               // after scope resolved, before first build
+
+  ElementPtr updateChild(ElementPtr child, WidgetRef widget);
+  ElementPtr inflate(WidgetRef widget);
+  void deactivate(ElementPtr child);
+};
+```
+
+`dependOnInherited` is **only valid from a build** — that is what re-registers the
+dependency. A read from anywhere else would be dropped by the next rebuild and
+silently stop updating.
+
+`detachRenderObject` destroys the subtree's render objects and is called once at
+the top of a subtree being discarded. `unmount` runs *after* it and must therefore
+never touch a render object.
+
+`didMount` runs once the element is linked and its ambient scope resolved, still
+before its first build — so a `State` reaches the tree's services from `initState`
+rather than having to wait for a build.
+
+### `ParentDataSlot`
+
+```cpp
+class ParentDataSlot {
+public:
+  template <class Data> explicit ParentDataSlot(Data& data) noexcept;
+  template <class Data> Data* as() const noexcept;   // null on type mismatch
+};
+```
+
+Tagged with the data's type, so a parent-data widget aimed at the wrong kind of
+container is refused rather than reinterpreting memory.
+
+### `ChildList`
+
+```cpp
+class ChildList {
+public:
+  void update(Element& parent, WidgetList widgets);
+  std::size_t size() const noexcept;
+  Element& operator[](std::size_t i) const noexcept;
+  void visit(FunctionRef<void(Element&)> visitor) const;
+};
+```
+
+Unkeyed children reconcile **by position**; keyed children reconcile **by key** and
+so survive reordering with `State` and render object intact. The scratch buffers
+are members, so a rebuild allocates nothing once the high-water mark is reached.
+
+### `State<W>`
+
+```cpp
+template <class W>
+class State {
+public:
+  virtual void initState() {}
+  virtual void didUpdateWidget(const W& previous) {}
+  virtual void dispose() {}
+  virtual WidgetRef build(BuildContext& context) = 0;
+
+  const W& widget() const noexcept;      // always the newest configuration
+  BuildContext context() const noexcept;
+  bool mounted() const noexcept;
+
+  void setState(FunctionRef<void()> change);
+};
+```
+
+Mutable state whose lifetime is its **element's**, not any widget's.
+`didUpdateWidget` receives the previous configuration and is where derived values
+are re-targeted. `setState` asserts the element is still mounted.
+
+### Element kinds
+
+| Element | Produces |
+|---|---|
+| `ComponentElement<W>` | a child by building |
+| `StatelessElement<W>` | calls `config.build(context)` |
+| `StatefulElement<W>` | owns a `State<W>`; `initState` on `didMount`, `dispose` on `unmount` |
+| `ParentDataElement<W>` | fills its slot in an ancestor container; creates no render object |
+| `RenderObjectElement` | the seam between the element and render trees |
+| `LeafRenderElement<W>` / `SingleChildRenderElement<W>` / `MultiChildRenderElement<W>` | zero / one / many children |
+| `InheritedElement<W>` | introduces one ambient value (`fltr/widgets/inherited.hpp`) |
+
+`ConfiguredElement<W, Base>` holds the configuration **by value**, so the element
+keeps a stable copy once the arena that produced the widget is gone.
+
+### Widget categories and `Configure`
+
+```cpp
+class StatelessWidget;              class StatefulWidget;
+class ParentDataWidget;             class InheritedWidget;
+class LeafRenderObjectWidget;       class SingleChildRenderObjectWidget;
+class MultiChildRenderObjectWidget;
+
+template <class Derived, class Base>
+class Configure : public Base {
+public:
+  WidgetType type() const noexcept final;
+  ElementPtr createElement() const final;
+  template <class Self = Derived>
+  static WidgetRef make(const typename Self::Args& args);
+};
+```
+
+`Configure` supplies what every concrete widget would otherwise repeat: its
+runtime type, the element that carries it, and the arena-allocating factory that
+call sites use.
+
+The `Self` template parameter defers naming `Derived::Args` until the call, by
+which point the derived widget is complete. It never deduces — a braced
+initialiser is a non-deduced context, so the default always wins. That is what
+makes `Padding::make({.padding = ..., .child = ...})` compile.
+
+### `BuildOwner`
+
+```cpp
+class BuildOwner {
+public:
+  BuildOwner(TextService&, PointerBinding&, KeyboardBinding&, TickerRegistry&) noexcept;
+
+  Arena& arena() noexcept;
+  TextService& textService() const noexcept;
+  PointerBinding& pointerBinding() const noexcept;
+  KeyboardBinding& keyboard() const noexcept;
+  TickerRegistry& tickers() const noexcept;
+
+  bool needsBuild() const noexcept;
+  std::size_t dirtyElementCount() const noexcept;
+  void flushBuild();                       // shallowest first
+
+  int buildCount() const noexcept;
+  void resetBuildCount() noexcept;
+
+  void adoptRootRenderObject(std::unique_ptr<RenderBox> root);
+  std::unique_ptr<RenderBox> releaseRootRenderObject() noexcept;
+  RenderBox* rootRenderObject() const noexcept;
+};
+```
+
+Mirrors what `PipelineOwner` does for layout and paint. None of the four services
+is owned here: the text service comes from the consumer, the other three from the
+binding.
+
+---
+
+## `WidgetBinding`
+
+`fltr/widgets/binding.hpp`. What the game loop holds.
+
+```cpp
+class WidgetBinding {
+public:
+  WidgetBinding(Size surface, TextService& textService);
+
+  template <class BuildRoot> void attachRoot(BuildRoot&& buildRoot);
+
+  void setSurface(Size surface);
+  Size surface() const noexcept;
+
+  void dispatchPointer(const PointerEvent& event);              // void
+  bool dispatchSignal(const PointerSignalEvent& event);         // consumed?
+  bool dispatchKey(const KeyEvent& event);                      // consumed?
+
+  Scene drawFrame(float seconds = 0.0f);
+  bool needsFrame() const noexcept;
+  MouseCursor cursor() const noexcept;
+
+  BuildOwner& buildOwner() noexcept;
+  PipelineOwner& pipeline() noexcept;
+  PointerBinding& pointers() noexcept;
+  KeyboardBinding& keyboard() noexcept;
+  TickerRegistry& tickers() noexcept;
+  Element* rootElement() const noexcept;
+  RenderView* renderView() const noexcept;
+};
+```
+
+It owns the three trees and runs the three phases — build, layout, paint — in that
+order, once per frame. It owns **neither the window nor the clock**: the surface
+size is pushed in, and a frame happens when the consumer asks for one.
+
+`attachRoot` runs `buildRoot` inside a `BuildScope` and wraps the result in a
+`View`. It is called exactly once.
+
+The two dispatch `bool`s answer the same question — did the UI take it? — so an
+unconsumed wheel notch or key belongs to the game.
+
+`needsFrame()` is true if any of: dirty elements, dirty layout or paint, an
+unresolved hover, an active ticker, a pending gesture timeout.
+
+<Aside type="caution" title="Declaration order is teardown order">
+The element tree unmounts before the pipeline detaches, which is before the build
+owner drops the render tree — and a region being dropped withdraws from the
+pointer binding, while a `State` being disposed releases its ticker, so those two
+outlive them all. The `TextService` you pass in must outlive the binding.
+</Aside>
+
+---
+
+## The catalogue
+
+`fltr/widgets/basic.hpp`. Every widget takes a single braced `Args`, every `Args`
+begins with `Key key`, and every one is created with `Widget::make({...})`.
+
+### Structure
+
+| Widget | `Args` | Notes |
+|---|---|---|
+| `View` | `child` | the root; size comes from the binding's surface, not configuration |
+| `Padding` | `padding`, `child` | |
+| `Align` | `alignment`, `animation`, `widthFactor`, `heightFactor`, `child` | |
+| `ConstrainedBox` | `constraints`, `child` | |
+| `SizedBox` | `size`, `child` | a tight `ConstrainedBox` |
+| `DecoratedBox` | `decoration`, `animation`, `child` | |
+| `Opacity` | `opacity`, `animation`, `child` | |
+| `Transform` | `transform`, `animation`, `origin`, `child` | |
+| `ClipRect` | `radius`, `child` | |
+| `RepaintBoundary` | `child` | |
+
+<Aside type="caution" title="Align::animation is the expensive one">
+Alignment is resolved during **layout**, so driving it from an animation lays out
+this subtree on every frame of it. It is correct, and it is the only animated
+property in the catalogue that is not free. `Opacity`, `Transform` and
+`DecoratedBox` all animate on the paint path.
+</Aside>
+
+Where an `animation` field exists, passing a non-null `ValueListenable<T>*`
+overrides the plain value and routes changes straight to the render object.
+
+### Flex
+
+```cpp
+class Row    final : public Configure<Row,    FlexWidget<Axis::Horizontal>>;
+class Column final : public Configure<Column, FlexWidget<Axis::Vertical>>;
+
+struct Args {
+  Key key;
+  MainAxisAlignment mainAxisAlignment = MainAxisAlignment::Start;
+  CrossAxisAlignment crossAxisAlignment = CrossAxisAlignment::Center;
+  MainAxisSize mainAxisSize = MainAxisSize::Max;
+  float spacing = 0.0f;
+  WidgetList children;
+};
+```
+
+```cpp
+class Flexible final : public Configure<Flexible, ParentDataWidget> {
+  struct Args { Key key; int flex = 1; FlexFit fit = FlexFit::Tight; WidgetRef child; };
+};
+```
+
+`flex` is a **weight, not a size**, and `FlexFit::Loose` lets the child take less
+than its share.
+
+### Stack
+
+```cpp
+class Stack final : public Configure<Stack, MultiChildRenderObjectWidget> {
+  struct Args { Key key; Alignment alignment = Alignment::topLeft();
+                StackFit fit = StackFit::Loose; WidgetList children; };
+};
+
+class Positioned final : public Configure<Positioned, ParentDataWidget> {
+  struct Args { Key key;
+                std::optional<float> left, top, right, bottom, width, height;
+                WidgetRef child; };
+};
+```
+
+Any subset of the edges may be given.
+
+### `Pointer`
+
+Every way a pointer can address the area its child occupies.
+
+```cpp
+struct Args {
+  Key key;
+  HitTestBehavior behavior = HitTestBehavior::DeferToChild;
+  MouseCursor cursor = MouseCursor::Defer;
+  PointerButtons buttons{PointerButton::Primary};
+
+  Callback<void()> onEnter, onExit;
+
+  Callback<void()> onTapDown, onTap, onTapCancel, onDoubleTap;
+
+  Callback<void(const LongPressStartDetails&)>      onLongPress;
+  Callback<void(const LongPressMoveUpdateDetails&)> onLongPressMoveUpdate;
+  Callback<void(const LongPressEndDetails&)>        onLongPressEnd;
+  Callback<void()>                                  onLongPressCancel;
+
+  DragAxis dragAxis = DragAxis::Pan;
+  DragStartBehavior dragStartBehavior = DragStartBehavior::Start;
+  Callback<void(const DragDownDetails&)>   onDragDown;
+  Callback<void(const DragStartDetails&)>  onDragStart;
+  Callback<void(const DragUpdateDetails&)> onDragUpdate;
+  Callback<void(const DragEndDetails&)>    onDragEnd;
+  Callback<void()>                          onDragCancel;
+
+  Callback<bool(const PointerSignalEvent&)> onSignal;
+
+  WidgetRef child;
+};
+```
+
+Three separate mechanisms share one region:
+
+- a **gesture** is contested in the arena and only the winner is told;
+- **hover** is resolved by diffing what lies under the cursor and is never
+  contested;
+- a **signal** is offered to each region innermost-first until one takes it —
+  returning `true` from `onSignal` consumes it.
+
+Only the recognizers a call site actually asks for are created, so a region that
+just reports hover holds none.
+
+`onTapDown` fires when this region **wins** the pointer, which is when press
+feedback is correct to show — not necessarily the instant the pointer went down.
+Adding `onDoubleTap` delays a single tap by the double-tap timeout, because until
+it elapses the first tap may still turn out to be the first half of one.
+
+<Aside type="caution" title="Callback captures must outlive the widget">
+A callback is copied into the region and invoked from `dispatchPointer` or, for
+enter and exit, from the start of a frame. Anything it captures by reference must
+outlive the widget. `Callback` also has a 32-byte inline budget — see
+[core](/fltr/reference/core/).
+</Aside>
+
+### `IgnorePointer` / `AbsorbPointer`
+
+```cpp
+IgnorePointer::make({.ignoring = true, .child = ...});    // whatever is behind is reachable
+AbsorbPointer::make({.absorbing = true, .child = ...});   // nothing behind sees it either
+```
+
+`AbsorbPointer` is what a disabled control over live content wants.
+
+### Leaves
+
+```cpp
+class Text final : public Configure<Text, LeafRenderObjectWidget> {
+  struct Args { Key key; std::string_view text; TextStyle style;
+                TextAlign align = TextAlign::Left; int maxLines = 0;
+                TextOverflow overflow = TextOverflow::Clip; };
+};
+
+class Sprite final : public Configure<Sprite, LeafRenderObjectWidget> {
+  struct Args { Key key; ImageHandle image = 0; Size size;
+                Rect source = Rect::zero(); Color tint = {255,255,255,255}; };
+};
+```
+
+<Aside type="danger" title="Text does not copy its string">
+`text` is **not** copied into the arena: it must point at storage that outlives the
+build. A string literal or a game-owned buffer does; a `std::string` built inside
+the builder does not.
+</Aside>
+
+---
+
+## `Ambient<T>` and `Watch<T>`
+
+`fltr/widgets/reactive.hpp`.
+
+```cpp
+template <class T>
+class Ambient final : public Configure<Ambient<T>, InheritedWidget> {
+public:
+  struct Args { Key key; T value{}; WidgetRef child; };
+  static const T& of(BuildContext& context);
+};
+```
+
+Ambient data for a subtree — a theme, a layout scale — read with `of` in **O(1)**
+rather than by walking ancestors. Changing it rebuilds exactly the elements whose
+last build read it; a widget between the value and its readers is not disturbed.
+
+`T` is copied into the build arena, so it must be trivially destructible, and it
+`static_assert`s on `std::equality_comparable` — an unchanged ambient value
+notifies nobody.
+
+`of` asserts that an `Ambient<T>` exists above. `TickerMode::of` is the deliberate
+exception that returns a default instead.
+
+```cpp
+template <class T>
+class Watch final : public Configure<Watch<T>, StatefulWidget> {
+public:
+  using Builder = Callback<WidgetRef(BuildContext&, const T&)>;
+  struct Args { Key key; ValueListenable<T>* value = nullptr; Builder builder; };
+};
+```
+
+```cpp
+Watch<int>::make({
+  .value = &shield,
+  .builder = [](BuildContext&, const int& hp) { return Bar::make({.value = hp}); },
+})
+```
+
+Rebuilds its own subtree, and nothing else, when the value changes. A push of an
+equal value never reaches it at all. It does not care *why* the value moved — a
+game-pushed `Observable<T>` and an `AnimatedValue<T>` are the same thing to it.
+
+Use it when the **structure** of the subtree changes with the value; when only the
+painting does, hand the value to a render object instead and skip the rebuild.
+
+The value must outlive the widget.
+
+### The ambient scope
+
+`fltr/widgets/inherited.hpp`.
+
+```cpp
+class InheritedElementBase : public Listenable { ... };
+
+class InheritedScope {
+public:
+  void extend(const InheritedScope* parent, WidgetType type, InheritedElementBase& node);
+  InheritedElementBase* find(WidgetType type) const noexcept;
+  std::size_t size() const noexcept;
+};
+```
+
+A **snapshot rather than a path to walk**. An element that introduces a value
+copies its parent's entries and adds its own; every other element points at its
+parent's scope. A scope holds no link to the one it was extended from, so a lookup
+structurally *cannot* become an ancestor walk — it is one hash probe whatever the
+depth. The table is open-addressed, power-of-two sized and never more than half
+full.
+
+`InheritedElement::adopt` notifies readers **before** the subtree below is
+reconciled, so a reader deeper down is built by the same frame even when the
+subtree between is unchanged and reconciliation skips it.
+
+---
+
+## Animated widgets
+
+`fltr/widgets/animated.hpp`. Architecture:
+[Animation](/fltr/architecture/animation/).
+
+### `TickerMode`
+
+```cpp
+class TickerMode final : public Configure<TickerMode, InheritedWidget> {
+public:
+  struct Args { Key key; bool enabled = true; WidgetRef child; };
+  static bool of(BuildContext& context);   // enabled unless something above says otherwise
+};
+```
+
+Mutes every ticker in its subtree. A panel that is hidden rather than removed keeps
+its state and its subscriptions but costs no time at all, and resumes exactly
+where it stopped — tickers carry a per-frame delta, so a muted one has no elapsed
+time to reconcile when it comes back.
+
+A tree with no `TickerMode` in it pays nothing for the mechanism.
+
+### The implicit-animation layer
+
+```cpp
+template <class Derived> class ImplicitlyAnimatedWidget : public StatefulWidget;
+```
+
+A widget joins the layer by naming its value type (`using Value = ...`), its
+`target()`, its `animation()` config, and a static `compose(self, value)` that
+wraps the widget it needs around the animated value.
+
+| Widget | `Args` beyond `key`, `animation`, `child` | Composes |
+|---|---|---|
+| `AnimatedOpacity` | `opacity` | `Opacity{.animation = ...}` |
+| `AnimatedTransform` | `transform`, `origin` | `Transform{.animation = ...}` |
+| `AnimatedDecoration` | `decoration` | `DecoratedBox{.animation = ...}` |
+| `AnimatedAlign` | `alignment`, `widthFactor`, `heightFactor` | `Align{.animation = ...}` |
+
+```cpp
+AnimatedOpacity::make({
+  .opacity = hovered ? 1.0f : 0.35f,
+  .animation = {.duration = 0.12f, .curve = Curves::easeOut},
+  .child = badge(),
+})
+```
+
+A configuration change **re-targets the interpolation from the value on screen**
+and runs the driver from zero, so an interruption is continuous and repeated
+interruption accumulates no error — every new interval begins where the last one
+had actually reached.
+
+Only the configuration change rebuilds. Each tick after it invalidates exactly one
+render object, because what the built widget hands down is the animated value
+itself rather than a snapshot of it.
+
+The state also calls `driver_.setMuted(!TickerMode::of(context))` on every build,
+which is how muting reaches implicit animations.
+
+<Aside type="note" title="AnimatedAlign is the one whose frames are not free">
+Alignment resolves during layout, so every frame of it lays out the subtree below.
+Correct, invalidated properly, and the reason the other three exist.
+</Aside>
+
+---
+
+## `AnimatedSwitcher`
+
+`fltr/widgets/switcher.hpp`.
+
+```cpp
+using PresenceTransition = Callback<WidgetRef(WidgetRef, ValueListenable<float>&)>;
+
+WidgetRef fadePresence(WidgetRef child, ValueListenable<float>& presence);
+
+class AnimatedSwitcher final : public Configure<AnimatedSwitcher, StatefulWidget> {
+public:
+  struct Args {
+    Key key;
+    WidgetRef child;                                  // null is a child too
+    AnimationDriver::Config animation;
+    PresenceTransition transition = &fadePresence;
+    Alignment alignment = Alignment::center();
+  };
+};
+```
+
+Swaps its child for another, animating the old one out and the new one in. The
+transition receives the subtree and how present it is: **0 gone, 1 fully there**.
+
+The outgoing subtree is *retained*: it stays mounted, keeps its `State` and its
+render objects, keeps ticking, and is discarded only once its animation has
+finished. That needed no change to reconciliation — a widget ref outlives the
+arena that made it, and re-emitting a stale one already means "this subtree is
+unchanged, skip it".
+
+Two children are the **same child** when their type and key match, the same rule
+reconciliation uses everywhere. Two panels of the same type therefore need keys to
+swap rather than update in place.
+
+A subtree on its way out is inert: it takes no pointer input and nothing in it can
+hold the focus, so a control cannot be pressed or tabbed into while it disappears.
+Both guards are always present and only their flag moves.
+
+**Null is a child too** — it animates whatever is there out and leaves nothing,
+which is how a panel is dismissed.
+
+```cpp
+AnimatedSwitcherState::liveCount()   // the shown subtree plus every one still leaving
+```
+
+`fadePresence` hands the value to a render object, so a frame of it repaints one
+object and rebuilds nothing. A custom transition should do the same.

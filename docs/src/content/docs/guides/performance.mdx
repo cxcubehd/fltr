@@ -1,0 +1,159 @@
+---
+title: Performance
+description: The numbers that turn claims into assertions, the three sinks ranked by cost, and what to do when a frame is doing work it should not.
+---
+
+import { Aside, Card, CardGrid, Steps } from '@astrojs/starlight/components';
+
+This runs inside a game frame. A steady-state frame should cost effectively
+nothing, and a typical HUD update should touch a handful of nodes. Both of those
+are measurable rather than aspirational.
+
+## The instruments
+
+```cpp
+const auto& stats = binding.pipeline().stats();   // reset at the start of every frame
+stats.layouts;                 // render objects laid out
+stats.paints;                  // render objects painted
+stats.boundariesRelaidOut;
+stats.boundariesRepainted;
+stats.layoutPasses;            // 0 or 1 is healthy
+
+binding.buildOwner().buildCount();        // elements rebuilt
+binding.tickers().activeTickerCount();    // tickers holding a live subscription
+scene.revision;                           // total re-recordings, pipeline-wide
+```
+
+A one-line debug overlay built from these is the cheapest diagnostic you will
+ever add:
+
+```cpp
+std::snprintf(debug_, sizeof(debug_),
+              "builds=%d layouts=%d paints=%d passes=%d tickers=%zu cmds=%zu",
+              binding.buildOwner().buildCount(), stats.layouts, stats.paints,
+              stats.layoutPasses, binding.tickers().activeTickerCount(),
+              backend.lastCommandCount());
+```
+
+## The three sinks, ranked
+
+| Sink | What it invalidates | When to reach for it |
+|---|---|---|
+| `observeForPaint` — every `animation` field except `Align`'s | one render object repaints | colour, alpha, transform, scroll offset |
+| `Watch<T>` | one subtree rebuilds, then lays out and paints | the tree's *shape* changes with the value |
+| `observeForLayout` — `Align::animation` | the subtree relayouts every frame | genuinely animating a size or a position that layout owns |
+
+<Aside type="tip" title="Most things you would reach for a rebuild for have a paint path">
+A progress bar is a `Transform` scaling a full-width fill about its left edge — a
+repaint. A switch thumb is a `Transform` translating — a repaint. A hover
+highlight is a `DecoratedBox` with an animated decoration — a repaint. Only text
+genuinely needs a rebuild, because there is no animated text.
+</Aside>
+
+## Boundaries
+
+A `RepaintBoundary` gives a subtree its own display list. Repainting inside it
+re-records only that list; moving it re-records only the parent's (tiny) one.
+
+```cpp
+RepaintBoundary::make({.key = Key::of("hud"), .child = hud()})
+```
+
+Worth adding around:
+
+- a HUD whose numbers tick while the rest of the screen is still;
+- anything animating continuously next to a large static tree;
+- a scrollable's content — `RenderViewport` is already a boundary for you.
+
+Not worth adding around small leaves. Each boundary is a `DisplayList` object and
+one extra command in the parent.
+
+Relayout boundaries are free and you get them by giving a subtree tight
+constraints — a `SizedBox` or a tight `ConstrainedBox` around something whose
+size you already know stops layout invalidation from propagating past it.
+
+## Quantise before you push
+
+```cpp
+speed.set(static_cast<int>(std::lround(ship_.speed())));   // not the float
+```
+
+An `Observable<T>` set to an equal value notifies nobody. The float changes every
+frame; the digits you draw do not. This one line is the difference between
+rebuilding a readout sixty times a second and rebuilding it when it has something
+new to say.
+
+## Steady state allocates nothing
+
+Every drain loop uses a member scratch vector, and `DisplayList::beginRecording`
+retains capacity. The framework's own test suite overrides global `operator new`
+to count allocations and asserts the count does not move across a frame of fling,
+a frame of wheel easing, or a frame of hover animation.
+
+To keep that true on your side:
+
+<CardGrid>
+  <Card title="Do" icon="approve-check">
+    Keep formatted strings in buffers your session owns. Keep controllers and
+    animated values in `State` objects. Reuse `WidgetList` shapes rather than
+    rebuilding a different tree each frame.
+  </Card>
+  <Card title="Do not" icon="error">
+    Build a `std::string` inside a builder and hand a view of it to `Text` — that
+    is both an allocation and a dangling pointer. Allocate a controller per
+    frame. Reach for `std::function` where a `Callback` fits.
+  </Card>
+</CardGrid>
+
+## Diagnosing a frame that will not go quiet
+
+<Steps>
+
+1. **Is `scene.revision` moving on an idle frame?** Something is dirtying itself.
+   Dump `dumpElementTree` and look for a `Watch` on a value you are pushing
+   unquantised.
+
+2. **Is `buildCount()` non-zero while only an animation runs?** Something is on
+   the rebuild path that has a paint path available. Look for a `StatesBuilder`
+   where an animated decoration would do.
+
+3. **Is `activeTickerCount()` higher than the number of things visibly moving?**
+   An animation in a hidden subtree is still ticking. Wrap it in
+   `TickerMode({.enabled = false})`, or let `AnimatedSwitcher` remove it.
+
+4. **Is `layoutPasses` greater than 1?** Laying out a node dirtied an ancestor
+   that had already been visited. This is a real bug and the drain caps it at 32
+   passes rather than freezing — so it shows up as a stale frame, not a hang.
+
+5. **Is `stats.layouts` large when only a colour changed?** Something is on
+   `observeForLayout` that should be on `observeForPaint`. In the shipped
+   catalogue, `Align::animation` is the only one that is.
+
+</Steps>
+
+## What to assert in CI
+
+```cpp
+// Layout converges.
+assert(stats.layoutPasses <= 1);
+
+// An idle frame re-records nothing.
+assert(binding.drawFrame(0.0f).revision == binding.drawFrame(0.0f).revision);
+
+// Nothing wants a frame once everything settled.
+assert(!binding.needsFrame());
+
+// The tree released every paragraph it acquired.
+binding.reset();
+assert(text.liveParagraphs() == 0);
+```
+
+The walkthrough's demo runs all four in a scripted headless pass over every
+screen, which is what turned "it seems fine" into a number that fails a build.
+
+<Aside type="note" title="Where the framework caps rather than asserts">
+The build drain and the layout drain are both capped at 32 passes. In a checked
+build the cap is reported; in a release build it degrades to one stale frame with
+no diagnostic. That is a deliberate choice — a frozen game is worse than a late
+one — and it is why asserting on `layoutPasses` yourself is worth the two lines.
+</Aside>

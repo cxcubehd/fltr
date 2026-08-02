@@ -1,0 +1,364 @@
+---
+title: 4 — Text
+description: A real TextService over a raylib font — tokenise, wrap, place on a shared baseline, and hand back runs a shaper would recognise.
+---
+
+import { Aside, LinkCard, Steps } from '@astrojs/starlight/components';
+
+fltr ships `MonospaceTextService`, and its own header calls it a development
+stand-in: fixed advance, greedy wrap, no correctness beyond ASCII. So the demo
+writes a real one.
+
+It is not a shaper — no bidi, no clusters, no ellipsis — but it measures with the
+font, wraps on word boundaries, places runs on a common baseline from real glyph
+metrics, and stops in exactly the places the interface says a real implementation
+would keep going.
+
+## The interface
+
+Four methods:
+
+```cpp
+virtual ParagraphHandle acquire(const ParagraphSpec& spec, float maxWidth) = 0;
+virtual const ParagraphMetrics& metrics(ParagraphHandle h) const = 0;
+virtual void release(ParagraphHandle h) = 0;
+virtual std::uint32_t byteOffsetAt(ParagraphHandle h, Offset local) const = 0;
+```
+
+## `platform/text.hh`
+
+```cpp title="docs/demo/src/platform/text.hh"
+class RaylibTextService final : public fltr::TextService {
+public:
+  explicit RaylibTextService(std::span<const char* const> fontPaths, int atlasSize = 48);
+  ~RaylibTextService() override;
+
+  fltr::ParagraphHandle acquire(const fltr::ParagraphSpec& spec, float maxWidth) override;
+  const fltr::ParagraphMetrics& metrics(fltr::ParagraphHandle handle) const override;
+  void release(fltr::ParagraphHandle handle) override;
+  std::uint32_t byteOffsetAt(fltr::ParagraphHandle handle, fltr::Offset local) const override;
+
+  /// Draws a measured paragraph. The backend hands `DrawParagraph` straight to
+  /// this, so nothing but the text service knows what a run is.
+  void draw(fltr::ParagraphHandle handle, fltr::Offset origin, fltr::Color tint) const;
+
+  /// Outstanding handles. Zero after teardown is how a paragraph leak is caught.
+  std::size_t liveParagraphs() const noexcept { return live_; }
+
+private:
+  struct Slot {
+    bool live = false;
+    /// One copy per span, so a run can be measured and drawn long after the
+    /// `string_view` the framework passed in has gone away.
+    std::vector<std::string> spans;
+    std::vector<fltr::TextStyle> styles;
+    std::vector<fltr::PositionedRun> runs;
+    std::vector<fltr::LineMetrics> lines;
+    fltr::ParagraphMetrics metrics;
+  };
+
+  Font font_{};
+  bool ownsFont_ = false;
+  float ascentRatio_ = 0.78f;
+  std::size_t live_ = 0;
+  std::vector<Slot> slots_;
+  std::vector<std::size_t> free_;
+  mutable std::string scratch_;
+};
+```
+
+`draw` is **not** part of `TextService`. Adding it here keeps every notion of
+glyphs and runs inside the service, and the backend never learns what a run is.
+
+## The font, and the baseline
+
+```cpp title="docs/demo/src/platform/text.cc"
+RaylibTextService::RaylibTextService(std::span<const char* const> fontPaths, int atlasSize) {
+  for (const char* path : fontPaths) {
+    if (path == nullptr || !FileExists(path)) continue;
+    font_ = LoadFontEx(path, atlasSize, nullptr, 0);
+    ownsFont_ = font_.glyphCount > 0;
+    if (ownsFont_) break;
+  }
+  if (!ownsFont_) font_ = GetFontDefault();
+
+  // The baseline is derived from the font rather than guessed: raylib places a
+  // glyph at `offsetY` below the line top, so the bottom of a capital letter is
+  // where the baseline sits. fltr's placeholder service hardcodes this ratio and
+  // says so; a real one should not.
+  const int index = GetGlyphIndex(font_, 'H');
+  if (index >= 0 && index < font_.glyphCount && font_.baseSize > 0) {
+    const float top = static_cast<float>(font_.glyphs[index].offsetY);
+    const float height = font_.recs[index].height;
+    ascentRatio_ = (top + height) / static_cast<float>(font_.baseSize);
+  }
+
+  slots_.reserve(64);
+}
+```
+
+The paths are tried in order and the first that loads wins, ending with raylib's
+built-in bitmap font:
+
+```cpp title="docs/demo/src/app/app.cc"
+constexpr const char* kFontPaths[] = {
+    DEMO_ASSET_DIR "/JetBrainsMono-Regular.ttf",
+    "/usr/share/fonts/truetype/jetbrains-mono/JetBrainsMono-Regular.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf",
+};
+```
+
+<Aside type="tip" title="Falling back rather than failing is the point of the boundary">
+Nothing above `TextService` can tell which font it got, or whether one was found
+at all. Layout asks for a measurement and gets one; the answer being from a bitmap
+fallback changes the numbers and nothing else.
+</Aside>
+
+## Handles
+
+```cpp title="docs/demo/src/platform/text.cc"
+ParagraphHandle RaylibTextService::acquire(const ParagraphSpec& spec, float maxWidth) {
+  std::size_t index;
+  if (!free_.empty()) {
+    index = free_.back();
+    free_.pop_back();
+  } else {
+    index = slots_.size();
+    slots_.emplace_back();
+  }
+  // ... measure into slots_[index] ...
+  ++live_;
+  return static_cast<ParagraphHandle>(index + 1u);
+}
+
+void RaylibTextService::release(ParagraphHandle handle) {
+  if (handle == fltr::kNullParagraph) return;
+  Slot& slot = slotFor(handle);
+  if (!slot.live) return;
+  slot.live = false;
+  free_.push_back(static_cast<std::size_t>(handle) - 1u);
+  --live_;
+}
+```
+
+A slot vector plus a free list. `index + 1` so zero stays available as
+`kNullParagraph`. Reusing slots means the `std::string` and `std::vector` capacity
+inside them is reused too, so a paragraph re-measured every layout stops
+allocating after the first time.
+
+`RenderParagraph` releases before re-acquiring and releases in its destructor, so
+`liveParagraphs()` returning to zero after teardown is a real leak check.
+
+## Measuring
+
+<Steps>
+
+1. **Copy the spans.** The `string_view`s belong to the caller.
+
+   ```cpp title="docs/demo/src/platform/text.cc"
+   for (const fltr::TextSpan& span : spec.spans) {
+     slot.spans.emplace_back(span.text);
+     slot.styles.push_back(span.style);
+   }
+   ```
+
+2. **Tokenise**, keeping trailing spaces attached to the word before them — so a
+   break swallows the space instead of starting the next line with it.
+
+   ```cpp title="docs/demo/src/platform/text.cc"
+   struct Token {
+     std::uint32_t span;
+     std::uint32_t begin;
+     std::uint32_t end;
+     bool hardBreak;
+   };
+
+   for (std::uint32_t s = 0; s < slot.spans.size(); ++s) {
+     const std::string& text = slot.spans[s];
+     std::uint32_t i = 0;
+     while (i < text.size()) {
+       if (text[i] == '\n') {
+         tokens.push_back({s, i, i + 1u, true});
+         ++i;
+         continue;
+       }
+       const std::uint32_t begin = i;
+       while (i < text.size() && text[i] != '\n' && !isSpace(text[i])) ++i;
+       while (i < text.size() && isSpace(text[i])) ++i;
+       tokens.push_back({s, begin, i, false});
+     }
+   }
+   ```
+
+3. **Wrap greedily**, breaking between tokens only.
+
+   ```cpp title="docs/demo/src/platform/text.cc"
+   if (bounded && !lineRuns.empty() && lineWidth + width > maxWidth) {
+     flushLine();
+     if (atLimit()) { exceeded = true; break; }
+   }
+
+   // Extend the run in progress when this token continues the same span
+   // contiguously; otherwise start a new one. This is why a run is "a piece of
+   // one span on one line" and not "one span" or "one word".
+   if (!lineRuns.empty() && lineRuns.back().span == token.span &&
+       lineRuns.back().end == token.begin) {
+     lineRuns.back().end = token.end;
+     lineRuns.back().width += width;
+   } else {
+     lineRuns.push_back({token.span, token.begin, token.end, width});
+   }
+   lineWidth += width;
+   ```
+
+4. **Place the runs on a shared baseline.** The line's baseline is the maximum
+   ascent of its runs; its height is that plus the maximum descent.
+
+   ```cpp title="docs/demo/src/platform/text.cc"
+   float baseline = 0.0f;
+   float depth = 0.0f;
+   for (const PendingRun& run : lineRuns) {
+     const TextStyle& style = slot.styles[run.span];
+     baseline = std::max(baseline, ascent(style));
+     depth = std::max(depth, style.size * style.lineHeight - ascent(style));
+   }
+   const float height = baseline + depth;
+
+   for (const PendingRun& run : lineRuns) {
+     const TextStyle& style = slot.styles[run.span];
+     slot.runs.push_back(PositionedRun{
+         .offset = {x, top + baseline - ascent(style)},
+         .size = {run.width, style.size * style.lineHeight},
+         .baseline = ascent(style),
+         .spanIndex = run.span,
+         .byteBegin = run.begin,
+         .byteEnd = run.end,
+     });
+     x += run.width;
+   }
+   ```
+
+   `top + baseline - ascent(style)` is what makes 12pt and 24pt text on the same
+   line sit on a common baseline instead of a common top edge.
+
+5. **Apply alignment.** Against a bounded width, shift by the slack. Against an
+   infinite one there is nothing to align to yet, so it is fixed up afterwards.
+
+   ```cpp title="docs/demo/src/platform/text.cc"
+   // 3. Alignment against an unbounded measurement, now that the width is known.
+   if (!bounded && spec.align != fltr::TextAlign::Left) {
+     for (const LineMetrics& line : slot.lines) {
+       const float slack = std::max(0.0f, widest - line.bounds.width());
+       const float shift = spec.align == fltr::TextAlign::Center ? slack * 0.5f : slack;
+       for (std::uint32_t r = line.runBegin; r < line.runBegin + line.runCount; ++r) {
+         slot.runs[r].offset.dx += shift;
+       }
+     }
+   }
+   ```
+
+6. **Fill in the metrics.**
+
+   ```cpp title="docs/demo/src/platform/text.cc"
+   slot.metrics = ParagraphMetrics{
+       .size = Size{bounded ? std::min(widest, maxWidth) : widest, top},
+       .firstBaseline = slot.lines.empty() ? 0.0f : slot.lines.front().baseline,
+       .lastBaseline = slot.lines.empty()
+                           ? 0.0f
+                           : slot.lines.back().bounds.top + slot.lines.back().baseline,
+       .didExceedMaxLines = exceeded,
+       // Ellipsis is expressible in the interface and not implemented here. The
+       // demo never asks for it; see the "Gaps and rework" page.
+       .didEllipsize = false,
+       .lines = slot.lines,
+       .runs = slot.runs,
+   };
+   ```
+
+   The spans point into the slot, which stays alive until the handle is released.
+
+</Steps>
+
+## Hit testing
+
+```cpp title="docs/demo/src/platform/text.cc"
+std::uint32_t RaylibTextService::byteOffsetAt(ParagraphHandle handle, Offset local) const {
+  const Slot& slot = slotFor(handle);
+  if (slot.lines.empty()) return 0;
+
+  const LineMetrics* line = &slot.lines.front();
+  for (const LineMetrics& candidate : slot.lines) {
+    if (local.dy >= candidate.bounds.top) line = &candidate;
+  }
+  // ... then walk the runs of that line, then the bytes of the run,
+  //     returning the nearest boundary
+}
+```
+
+Line, then run, then byte. Measuring one byte at a time is O(n) per query and
+perfectly adequate for a click; a real implementation would use the shaper's
+cluster map.
+
+## Drawing
+
+```cpp title="docs/demo/src/platform/text.cc"
+void RaylibTextService::draw(ParagraphHandle handle, Offset origin, Color tint) const {
+  const Slot& slot = slotFor(handle);
+  if (!slot.live) return;
+
+  for (const PositionedRun& run : slot.runs) {
+    const std::string& text = slot.spans[run.spanIndex];
+    const TextStyle& style = slot.styles[run.spanIndex];
+    scratch_.assign(text, run.byteBegin, run.byteEnd - run.byteBegin);
+
+    // The run's colour is the style's, modulated by the tint the display list
+    // carried -- which is how an `Opacity` above a `Text` reaches the glyphs.
+    const ::Color colour{
+        static_cast<unsigned char>(style.color.r * tint.r / 255),
+        static_cast<unsigned char>(style.color.g * tint.g / 255),
+        static_cast<unsigned char>(style.color.b * tint.b / 255),
+        static_cast<unsigned char>(style.color.a * tint.a / 255),
+    };
+
+    // raylib positions text by the top-left of its line box, which is exactly
+    // what a `PositionedRun` offset is, so no baseline arithmetic is needed here.
+    DrawTextEx(font_, scratch_.c_str(),
+               Vector2{origin.dx + run.offset.dx, origin.dy + run.offset.dy}, style.size,
+               style.letterSpacing, colour);
+  }
+}
+```
+
+## Where it stops
+
+<Aside type="caution" title="Three things this deliberately does not do">
+- **Ellipsis.** `TextOverflow::Ellipsis` and `didEllipsize` exist in the interface;
+  this returns `false` unconditionally. Implementing it means trimming the last run
+  to fit an ellipsis glyph and reporting that you did.
+- **Shaping.** No bidi, no ligatures, no cluster boundaries. Wrapping is
+  ASCII-space-based, so it is wrong for CJK and for scripts without spaces.
+- **Caret and selection rectangles.** The interface has no byte→rect direction at
+  all, so text editing is impossible regardless of what this file does.
+</Aside>
+
+<Aside type="tip" title="What this step proved">
+The interface is the right shape — 340 lines of consumer code produced real runs
+that layout, painting and hit testing all consumed without special-casing.
+
+The finding: **fltr ships no `TextService` a consumer can use.** Text is required
+by the widget catalogue, so every consumer writes this file. That is the largest
+single gap the demo found.
+</Aside>
+
+<LinkCard
+  title="Guide: implementing TextService"
+  description="The same contract without raylib in the way."
+  href="/fltr/guides/implementing-textservice/"
+/>
+
+<LinkCard
+  title="Next: first pixels"
+  description="WidgetBinding, attachRoot, and a theme in an Ambient<T>."
+  href="/fltr/walkthrough/first-pixels/"
+/>

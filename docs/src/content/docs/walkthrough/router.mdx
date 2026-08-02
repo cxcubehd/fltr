@@ -1,0 +1,310 @@
+---
+title: 7 — The router
+description: An enum in an Observable, AnimatedSwitcher, and a slide transition that runs in and out for the cost of two repaints a frame.
+---
+
+import { Aside, LinkCard, Steps } from '@astrojs/starlight/components';
+
+fltr has no navigator, no routes and no screen stack — deliberately, because a
+game engine already has one. What it has instead is enough to build one in about
+forty lines, and this is that.
+
+## The whole router
+
+```cpp title="docs/demo/src/ui/router.hh"
+/// fltr has no navigator, no routes and no screen stack, deliberately: a game
+/// engine already has one. This is the whole router -- an enum in an
+/// `Observable`, watched at the top of the tree.
+enum class Screen : std::uint8_t { MainMenu, LevelSelect, Settings, Playing };
+```
+
+```cpp title="docs/demo/src/app/app.hh"
+fltr::Observable<Screen> screen_{Screen::MainMenu};
+```
+
+```cpp title="docs/demo/src/app/app.cc"
+void App::goTo(Screen screen) {
+  if (screen_.value() == screen) return;
+
+  const bool leavingPlay = screen_.value() == Screen::Playing;
+  screen_.set(screen);
+
+  if (screen == Screen::Playing) {
+    if (overlay_ != nullptr && !pauseEntry_.inserted()) overlay_->insert(pauseEntry_);
+  } else if (leavingPlay) {
+    setPaused(false);
+    pauseEntry_.remove();
+  }
+}
+```
+
+That is it. `Observable<Screen>::set` notifies only on change, so `goTo` with the
+current screen is free.
+
+## Building the root
+
+Now the root gets its real shape. This is the file every later step diffs into.
+
+```cpp title="docs/demo/src/ui/root.cc"
+WidgetRef buildRoot(App& app) {
+  return ThemeScope::make({
+      .value = Theme{},
+      // A focus scope is what brings the focus subsystem into existence at all:
+      // a tree without one holds no focus nodes and no key handlers. It is also
+      // the traversal group, so tab and the arrow keys work inside it.
+      .child = FocusScope::make({
+          .child = Shortcuts::make({
+              .shortcuts =
+                  {
+                      {.stroke = KeyStroke{.key = LogicalKey::Escape},
+                       .onInvoke = [&app] { app.togglePause(); }},
+                      {.stroke = KeyStroke{.key = LogicalKey::Backspace},
+                       .onInvoke = [&app] { app.goTo(Screen::MainMenu); }},
+                  },
+              // Nothing creates an overlay for you. One here, directly under the
+              // root, is what the pause panel is inserted into.
+              .child = Overlay::make({
+                  .child = Watch<Screen>::make({
+                      .value = &app.screen(),
+                      .builder = [&app](BuildContext& context, const Screen& screen) -> WidgetRef {
+                        // The overlay is found here, on the way down, and kept
+                        // for the callbacks that will insert into it later.
+                        app.bindOverlay(Overlay::of(context));
+
+                        return AnimatedSwitcher::make({
+                            // The pause flag is watched *inside* the presence so
+                            // that toggling it rebuilds one node rather than
+                            // swapping the whole page.
+                            .child = Watch<bool>::make({
+                                .key = keyFor(screen),
+                                .value = &app.paused(),
+                                .builder = [&app, screen](BuildContext& inner,
+                                                          const bool& paused) -> WidgetRef {
+                                  return TickerMode::make({
+                                      // Animations in a paused gameplay screen
+                                      // stop entirely: a muted ticker holds no
+                                      // subscription and consumes no time.
+                                      .enabled = !(screen == Screen::Playing && paused),
+                                      .child = screenFor(app, ThemeScope::of(inner), screen),
+                                  });
+                                },
+                            }),
+                            .animation = {.duration = 0.22f, .curve = fltr::Curves::easeOutCubic},
+                            .transition = &slidePresence,
+                        });
+                      },
+                  }),
+              }),
+          }),
+      }),
+  });
+}
+```
+
+Five wrappers, each doing exactly one thing:
+
+| Layer | Why it is there |
+|---|---|
+| `ThemeScope` | one ambient value, O(1) read anywhere below |
+| `FocusScope` | brings the focus subsystem into existence; also the traversal group |
+| `Shortcuts` | Escape and Backspace, wherever the focus is |
+| `Overlay` | nothing creates one for you; the pause panel needs it |
+| `Watch<Screen>` | the router |
+
+### The keys
+
+```cpp title="docs/demo/src/ui/root.cc"
+/// The switcher tells presences apart by key, and two of them are alive at once
+/// while a transition runs -- so the key has to name the screen, not the widget.
+fltr::Key keyFor(Screen screen) {
+  switch (screen) {
+    case Screen::MainMenu: return fltr::Key::of("page.menu");
+    case Screen::LevelSelect: return fltr::Key::of("page.levels");
+    case Screen::Settings: return fltr::Key::of("page.settings");
+    case Screen::Playing: return fltr::Key::of("page.playing");
+  }
+  return {};
+}
+```
+
+<Aside type="caution" title="Without distinct keys, nothing animates">
+`AnimatedSwitcher` decides two children are the same child when their **type and
+key match** — the same rule reconciliation uses everywhere. Every screen here is
+wrapped in a `Watch<bool>`, so they all have the same type. Without the key they
+would update in place and the transition would never run.
+</Aside>
+
+### The nesting order that matters
+
+`Watch<bool>` (pause) is **inside** the switcher's child, not outside it. Toggling
+pause therefore rebuilds one node deep in the tree. If it wrapped the switcher, a
+pause would look like a screen change and trigger a full page transition.
+
+## The transition
+
+`AnimatedSwitcher` hands a subtree a 0..1 "how present am I" value. The default is
+`fadePresence`; this one slides too.
+
+```cpp title="docs/demo/src/ui/router.hh"
+/// The in and out halves of a page transition.
+///
+/// `AnimatedSwitcher` hands a subtree a 0..1 "how present am I" value and keeps
+/// the outgoing subtree mounted, ticking and *never rebuilt* until it reaches
+/// zero. Both properties here are render-attached, so an entire page slides and
+/// fades for the cost of two repaints per frame and no builds at all.
+class PresenceSlide final : public fltr::Configure<PresenceSlide, fltr::StatefulWidget> {
+public:
+  struct Args {
+    fltr::Key key;
+    /// Owned by the switcher; outlives this subtree by construction, because the
+    /// subtree is what the switcher is animating.
+    fltr::ValueListenable<float>* presence = nullptr;
+    float distance = 18.0f;
+    fltr::WidgetRef child;
+  };
+  ...
+private:
+  MappedValue<fltr::Transform2D> offset_;
+};
+```
+
+```cpp title="docs/demo/src/ui/router.cc"
+/// Fully present sits at rest; on its way in or out it is pushed down. The same
+/// curve therefore reads as "rises into place" and "sinks away".
+Transform2D rise(float presence, float distance) noexcept {
+  return Transform2D::translation({0.0f, (1.0f - presence) * distance});
+}
+
+WidgetRef PresenceSlideState::build(BuildContext&) {
+  offset_.bind(widget().args().presence, &rise, widget().args().distance);
+
+  return Opacity::make({
+      // The presence value goes straight to the render object: no rebuild, and
+      // no snapshot of it stored in a widget configuration.
+      .animation = widget().args().presence,
+      .child = fltr::Transform::make({
+          .animation = &offset_,
+          .child = widget().args().child,
+      }),
+  });
+}
+
+WidgetRef slidePresence(WidgetRef child, fltr::ValueListenable<float>& presence) {
+  return PresenceSlide::make({.presence = &presence, .child = child});
+}
+```
+
+One function `rise`, and the same curve reads as "rises into place" going in and
+"sinks away" going out — because presence runs 0→1 on entry and 1→0 on exit.
+
+## `MappedValue`
+
+`Opacity` wants a `ValueListenable<float>` and the switcher gives one, so that
+side connects directly. `Transform` wants a `ValueListenable<Transform2D>`, and
+there is nothing in fltr that converts. This is the adapter, and it earns its keep
+four more times before the demo is done.
+
+```cpp title="docs/demo/src/ui/widgets/mapped_value.hh"
+/// Derives one animated value from another, without a rebuild.
+///
+/// fltr's render-attached properties take a `ValueListenable<T>` of exactly the
+/// type they need -- `Transform2D` for `Transform`, `float` for `Opacity`. What
+/// a component or a switcher publishes is a 0..1 fraction. This is the adapter
+/// between them, and it is the whole reason the demo can animate a switch thumb,
+/// a progress fill and a page transition without rebuilding anything.
+template <class Out>
+class MappedValue final : public fltr::ValueListenable<Out> {
+public:
+  /// A plain function pointer, and one scalar to close over -- how far a thumb
+  /// travels, how far a page slides. Enough for every use here, and it keeps the
+  /// adapter trivially copyable-ish and free of allocation.
+  using Fn = Out (*)(float fraction, float parameter);
+
+  void bind(fltr::ValueListenable<float>* source, Fn fn, float parameter) {
+    fn_ = fn;
+    parameter_ = parameter;
+    if (source == source_) { recompute(); return; }
+    subscription_.detach();
+    source_ = source;
+    if (source_ != nullptr) {
+      fltr::subscribeMember<MappedValue, &MappedValue::onSourceChanged>(*source_, subscription_,
+                                                                       this);
+    }
+    recompute();
+  }
+
+  void release() {
+    subscription_.detach();
+    source_ = nullptr;
+  }
+
+  const Out& value() const noexcept override { return value_; }
+
+private:
+  void recompute() {
+    const float fraction = source_ != nullptr ? source_->value() : 0.0f;
+    const Out next = fn_ != nullptr ? fn_(fraction, parameter_) : Out{};
+    if (next == value_) return;
+    value_ = next;
+    this->notifyListeners();
+  }
+  ...
+};
+```
+
+It is deliberately the same shape as `AnimatedValue<T>`: a `ValueListenable` that
+subscribes to a source and republishes. Owning one is a `State`'s job, because a
+render object holds a pointer to it.
+
+<Aside type="tip" title="Why this belongs in the framework">
+Every zero-rebuild animation that is not already the right type needs this
+adapter. The demo wrote it once and used it for the page slide, the switch thumb,
+the slider fill, the slider thumb and the HUD meter.
+
+That is a strong signal it should ship. On the
+[gaps list](/fltr/project/gaps-and-rework/).
+</Aside>
+
+## Exit animations, and how they are possible
+
+The outgoing subtree stays mounted, keeps its `State` and its render objects, and
+keeps ticking until its presence reaches zero.
+
+That needed **no change to reconciliation**. A `WidgetRef` carries the type and key
+it needs to reconcile without being dereferenced, so the switcher re-emits the
+stale ref it saved from an earlier build, and reconciliation reads that as "this
+subtree is unchanged — skip it".
+
+A subtree on its way out is also inert: it takes no pointer input and nothing in
+it can hold the focus, so you cannot click a button on a page that is halfway gone.
+
+## Muting
+
+```cpp
+TickerMode::make({
+    .enabled = !(screen == Screen::Playing && paused),
+    .child = screenFor(app, ThemeScope::of(inner), screen),
+})
+```
+
+A muted ticker holds no subscription at all, so a paused gameplay screen's
+animations consume literally nothing — and resume exactly where they stopped,
+because a ticker carries a per-frame delta rather than an absolute clock.
+
+`binding.tickers().activeTickerCount()` is how you check this, and the demo's debug
+readout prints it.
+
+<Aside type="tip" title="What this step proved">
+Hand-rolling a router took an enum, an `Observable`, a `Watch` and a key function.
+Nothing was missing, and the framework's refusal to ship a navigator looks correct
+for a game engine.
+
+The one real cost: `MappedValue` had to be invented before any of it could stay on
+the zero-rebuild path.
+</Aside>
+
+<LinkCard
+  title="Next: the main menu"
+  description="Focus, autofocus, arrow traversal, and Escape."
+  href="/fltr/walkthrough/main-menu/"
+/>
