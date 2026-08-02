@@ -1,14 +1,14 @@
 ---
 title: Styling components
-description: Components carry behaviour and never style — the two ways to consume what they publish, and how to make hover cost nothing.
+description: Components carry behaviour and never style. The two ways to consume what they publish, and how to make hover cost nothing.
 ---
 
 import { Aside, Card, CardGrid, Tabs, TabItem } from '@astrojs/starlight/components';
 
 fltr has a component layer that Flutter keeps private. `RawButton`, `RawToggle`,
 `RawSlider` and `RawProgress` own their value, their hit regions, their gesture
-recognizers, their focus node and their keyboard handling — and own **nothing**
-about how any of it looks.
+recognizers, their focus node and their keyboard handling. They own nothing about
+how any of it looks.
 
 You supply the visual subtree. What flows between the two is a bitset.
 
@@ -45,7 +45,7 @@ therefore does not change the tree's shape and does not re-inflate your visuals.
 ## Two ways to read it
 
 <Tabs>
-  <TabItem label="StatesBuilder — rebuilds">
+  <TabItem label="StatesBuilder: rebuilds">
 
 ```cpp
 StatesBuilder::make({
@@ -58,14 +58,14 @@ StatesBuilder::make({
 })
 ```
 
-Simple, matches Flutter's `builder` idiom, and **costs a rebuild per hover**. Use
-it when the *structure* of the visual changes with the state — a checkmark that
-appears, a spinner that replaces a label.
+Simple, matches Flutter's `builder` idiom, and costs a rebuild per hover. Use it
+when the structure of the visual changes with the state: a checkmark that appears,
+a spinner that replaces a label.
 
 Outside a component it builds once with no states set and subscribes to nothing.
 
   </TabItem>
-  <TabItem label="Observable — zero rebuilds">
+  <TabItem label="Observable: zero rebuilds">
 
 ```cpp
 class StyledSurfaceState final : public State<StyledSurface> {
@@ -90,20 +90,20 @@ class StyledSurfaceState final : public State<StyledSurface> {
 };
 ```
 
-The state change **retargets an interpolation a render object is already
-observing**. Hovering rebuilds nothing at all; it repaints one node.
+The state change retargets an interpolation a render object is already observing.
+Hovering rebuilds nothing at all; it repaints one node.
 
-This is the path that milestones 7 and 8 paid for, and it is what the walkthrough
-uses for every control.
+This is the path milestones 7 and 8 paid for, and what the walkthrough uses for
+every control.
 
   </TabItem>
 </Tabs>
 
 <Aside type="tip" title="Reading statesOf subscribes to the scope, not the controller">
-`ComponentScope::statesOf(context)` makes your element depend on the *scope*,
-which only changes when a different component wraps you — almost never. The
-subscription to the controller itself is one you make explicitly, which is what
-lets you route it to a render object instead of to a rebuild.
+`ComponentScope::statesOf(context)` makes your element depend on the scope, which
+only changes when a different component wraps you. The subscription to the
+controller itself is one you make explicitly, which is what lets you route it to a
+render object instead of to a rebuild.
 </Aside>
 
 ## Resolution order
@@ -141,7 +141,7 @@ ValueListenable<float>* fraction = ComponentScope::fractionOf(context);
 A toggle's on-ness, a slider's value as a fraction of its range, a progress bar's
 fill. It is null for a button, which has no such quantity.
 
-To use it without a rebuild you need it as the type the render property wants —
+To use it without a rebuild you need it as the type the render property wants:
 `Transform2D` for a `Transform`, `float` for an `Opacity`. A small adapter owned
 by a `State` bridges the two:
 
@@ -164,8 +164,8 @@ public:
   <Card title="A progress fill" icon="bars">
     `fraction → Transform2D::scaling(t, 1)` with `origin = centerLeft`, handed to
     a `Transform` around a full-width bar. Scaling about the left edge is what
-    makes it a fill rather than a zoom — and it is a paint operation, so no
-    layout runs.
+    makes it a fill rather than a zoom, and it is a paint operation, so no layout
+    runs.
   </Card>
 </CardGrid>
 
@@ -175,8 +175,8 @@ There is no animated text colour and no ambient default text style, so a `Text`
 takes a fixed `TextStyle` at every call site. That means a label cannot follow
 hover without a rebuild.
 
-In practice it does not need to. `enabled` and `selected` are **configuration**,
-not interaction — they are known at build time:
+In practice it does not need to. `enabled` and `selected` are configuration rather
+than interaction, so they are known at build time:
 
 ```cpp
 TextStyle labelFor(const Theme& theme, const MenuButtonSpec& spec) {
@@ -211,10 +211,9 @@ than a dozen ambient values means a theme change notifies once, and O(1) lookup
 means reading it anywhere costs a single hash probe.
 
 <Aside type="caution" title="What BoxDecoration can express">
-Fill, corner radius, border colour, border width. That is all — no gradients, no
-shadows, no background images, no blur. A "sleek modern" look therefore has to be
-built out of restraint: hairline borders, small radii, and contrast carried by
-the border rather than by a fill. That constraint is on the
-[gaps list](/fltr/project/gaps-and-rework/), and it is the single most visible
-one.
+Fill, corner radius, border colour, border width, and nothing else. No gradients,
+no shadows, no background images, no blur. A modern look therefore has to be built
+out of restraint: hairline borders, small radii, and contrast carried by the
+border rather than by a fill. That constraint is on the
+[gaps list](/fltr/project/gaps-and-rework/) and it is the most visible one.
 </Aside>

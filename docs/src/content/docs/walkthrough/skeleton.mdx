@@ -1,12 +1,12 @@
 ---
-title: 1 — Skeleton
+title: 1. Skeleton
 description: FetchContent for fltr and raylib, the two options a consumer has to turn off, and a window that opens.
 ---
 
 import { Aside, LinkCard, Steps } from '@astrojs/starlight/components';
 
 Two dependencies, one executable, and a window. Nothing here touches fltr's API
-yet — this step exists because the *build* is where the first real gap shows up.
+yet. This step exists because the build is where the first gap shows up.
 
 ## `CMakeLists.txt`
 
@@ -75,19 +75,19 @@ target_compile_options(demo PRIVATE -Wall -Wextra -Wpedantic -Wno-missing-field-
 optional**. Without it, depending on fltr builds its 376-test suite as a side
 effect. The options are plain unprefixed `option()`s, so nothing warns you.
 
-And the link line is `fltr`, not `fltr::fltr` — the project defines no `ALIAS`
-target, no `install()` and no package config, so `find_package` is not an option
-either. Both are on the [gaps list](/fltr/project/gaps-and-rework/).
+The link line is `fltr`, not `fltr::fltr`. The project defines no `ALIAS` target,
+no `install()` and no package config, so `find_package` is not an option either.
+Both are on the [gaps list](/fltr/project/gaps-and-rework/).
 </Aside>
 
-`-Wno-missing-field-initializers` is worth explaining: every fltr widget is
-configured with a designated-initialiser `Args` struct, and you almost never set
-every field. That warning would fire on essentially every call site.
+`-Wno-missing-field-initializers` is there because every fltr widget is configured
+with a designated-initialiser `Args` struct and you rarely set every field. The
+warning would fire on nearly every call site.
 
 ## `src/main.cc`
 
-The entry point does argument parsing and nothing else. The four flags are what
-make the demo verifiable later.
+Argument parsing and nothing else. The four flags are what make the demo
+verifiable in step 14.
 
 ```cpp title="docs/demo/src/main.cc"
 #include <cstdio>
@@ -206,9 +206,9 @@ fltr::Size Window::surface() const {
 }
 ```
 
-Opening with `maxFps = -1` and immediately calling `apply` means the real
-`SetTargetFPS` goes through the one code path that will also serve the settings
-screen. There is no second way to change the frame cap.
+Opening with `maxFps = -1` and immediately calling `apply` sends the real
+`SetTargetFPS` through the same code path the settings screen will use later, so
+there is only one place the frame cap changes.
 
 We come back to `apply` and `applyCursor` in
 [step 10](/fltr/walkthrough/settings/).
@@ -252,18 +252,17 @@ float Clock::advance() {
 }
 ```
 
-Twenty lines, and one of them is the reason the smoke test in
-[step 14](/fltr/walkthrough/verify/) can assert on animation state at all: with
-`fixedStep_` set, every run of the demo produces the identical sequence of frames.
+With `fixedStep_` set, every run of the demo produces the identical sequence of
+frames, which is what lets the smoke test in
+[step 14](/fltr/walkthrough/verify/) assert on animation state.
 
-<Aside type="tip" title="What this step proved">
-The build works, and it cost two `set()` calls and a bare target name that a
-consumer has no way to discover. That is the first finding, and it happened before
-a single line of UI code.
+<Aside type="note" title="First finding">
+The build works, but it cost two `set()` calls and a bare target name that a
+consumer has no way to discover. That turned up before a single line of UI code.
 </Aside>
 
 <LinkCard
   title="Next: the loop"
-  description="Seven named steps, and why the ordering between them is load-bearing."
+  description="Seven named steps, and why the ordering between them matters."
   href="/fltr/walkthrough/the-loop/"
 />

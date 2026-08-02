@@ -36,8 +36,8 @@ void Backend::run(const fltr::DisplayList& list, fltr::Offset origin) {
 ## The three stacks
 
 `PushTransform`, `PushClipRect` and `PushOpacity` open a group; `Pop` closes the
-innermost one. They nest, but they do **not** alternate — so you cannot infer
-which stack a `Pop` unwinds from the stack depths. Record the order:
+innermost one. They nest but do not alternate, so you cannot infer which stack a `Pop` unwinds
+from the stack depths. Record the order:
 
 ```cpp
 enum class Group : unsigned char { Transform, Clip, Opacity };
@@ -77,13 +77,13 @@ rlPushMatrix();
 rlMultMatrixf(matrix);
 ```
 
-Keep a CPU-side copy of the accumulated transform too — you will need it for
-clipping, which is not affected by the matrix.
+Keep a CPU-side copy of the accumulated transform too. Clipping needs it, because
+a scissor rectangle is not affected by the matrix.
 
   </TabItem>
   <TabItem label="Clip">
 
-The clip rectangle is in the *current* coordinate space, but a scissor test is
+The clip rectangle is in the current coordinate space, but a scissor test is
 applied to the framebuffer. Map it, intersect with the parent clip, and remember
 the previous one so a `Pop` can restore it:
 
@@ -114,9 +114,9 @@ colour emitted inside the group:
 ```
 
 This is correct for content that does not overlap itself and subtly wrong for
-content that does — two overlapping half-transparent shapes inside a 50% group
-composite differently than the group would. A backend that wants it exact renders
-the group to a texture and composites once.
+content that does: two overlapping half-transparent shapes inside a 50% group
+composite differently than the group would. Rendering the group to a texture and
+compositing once is the exact version.
 
   </TabItem>
   <TabItem label="Rects">
@@ -136,8 +136,8 @@ case fltr::PaintOp::DrawRRect:
 ```
 
 `BorderRadius` carries four corners with independent x and y radii. If your
-renderer only takes one number — raylib does — pick one and say so. Colours are
-straight (non-premultiplied) RGBA8; the framework never blends.
+renderer only takes one number, as raylib does, pick one and say so in a comment.
+Colours are straight (non-premultiplied) RGBA8; the framework never blends.
 
   </TabItem>
   <TabItem label="Images">
@@ -153,8 +153,8 @@ case fltr::PaintOp::DrawImage: {
 ```
 
 `ImageHandle` is a `std::uint64_t` that means whatever you decide. A vector index
-plus one — reserving zero for "none" — is enough. An empty `src` rectangle means
-"the whole texture", which the framework cannot know for itself.
+plus one, reserving zero for "none", is enough. An empty `src` rectangle means
+the whole texture, which the framework cannot know for itself.
 
   </TabItem>
   <TabItem label="Paragraphs">
@@ -166,13 +166,13 @@ case fltr::PaintOp::DrawParagraph:
   break;
 ```
 
-The command carries a `ParagraphHandle` and an offset — no text, no glyphs, no
-font. Ask the same `TextService` that measured it to draw it. Keeping the
-knowledge of runs and glyphs inside the text service is what stops the backend
-from having to grow a text renderer.
+The command carries a `ParagraphHandle` and an offset: no text, no glyphs, no
+font. Ask the same `TextService` that measured it to draw it. Keeping runs and
+glyphs inside the text service is what stops the backend from growing a text
+renderer.
 
-The tint is **multiplied** with the per-run colours the service reported, which is
-how an `Opacity` above a `Text` reaches the glyphs.
+The tint is multiplied with the per-run colours the service reported, which is how
+an `Opacity` above a `Text` reaches the glyphs.
 
   </TabItem>
   <TabItem label="DrawList">
@@ -187,8 +187,8 @@ This is the repaint-boundary seam. The referenced list belongs to a boundary and
 is re-recorded only when that subtree repaints, so it is safe to cache a
 translation of it keyed on `(const DisplayList*, list->revision())`.
 
-The offset is how the boundary is positioned: it painted itself at its own
-origin, and the parent places it. Push a translation, run the sub-list, pop.
+The offset positions the boundary: it painted itself at its own origin, and the
+parent places it. Push a translation, run the sub-list, pop.
 
   </TabItem>
 </Tabs>
@@ -211,12 +211,12 @@ struct Scene {
 
 2. **Per-boundary cache.** Key on `(list pointer, list->revision())`. A boundary
    whose revision has not moved is byte-for-byte the recording you already
-   translated — reissue whatever you built from it.
+   translated, so reissue whatever you built from it.
 
 3. **Immediate-mode renderers get neither for free.** raylib clears and redraws
    every frame, so the walk happens regardless. The revision is still worth
-   reading: it tells you whether the *UI* did any work, which is the number you
-   want in a debug overlay.
+   reading: it tells you whether the UI did any work, which is the number you want
+   in a debug overlay.
 
 </Steps>
 
@@ -228,27 +228,27 @@ rounded corners; doing it properly needs a stencil pass or a shader that discard
 outside the rounded region.
 
 Dropping the corners is a reasonable first pass, and it is visible only where
-something actually overflows its rounded container. Say so in your backend rather
-than leaving it to be discovered.
+something overflows its rounded container. Say so in your backend rather than
+leaving it to be discovered.
 </Aside>
 
 <Aside type="caution" title="Group opacity">
 See the Opacity tab above. Folding alpha into colours is the cheap approximation;
-rendering the group to a texture is the correct one. Pick deliberately.
+rendering the group to a texture is the correct one.
 </Aside>
 
 ## Verifying it without pixels
 
-Before you have anything on screen, `dumpDisplayList` tells you what you *should*
-be drawing:
+Before you have anything on screen, `dumpDisplayList` tells you what you should be
+drawing:
 
 ```cpp
 std::printf("%s\n", fltr::dumpDisplayList(*scene.root).c_str());
 ```
 
 It recurses into embedded sub-lists, so a boundary's contents appear in place.
-Output is deterministic — no addresses, no timings, floats via a fixed `%.6g`
-with `-0` normalised — so it diffs cleanly in a test.
+Output is deterministic (no addresses, no timings, floats via a fixed `%.6g` with
+`-0` normalised) so it diffs cleanly in a test.
 
 The [walkthrough](/fltr/walkthrough/backend/) builds a complete raylib backend,
 covering every command above, in about 180 lines.

@@ -5,9 +5,8 @@ description: Where each call goes, why input is not part of the frame, and how a
 
 import { Aside, Steps } from '@astrojs/starlight/components';
 
-fltr is a library your loop calls, not a framework that calls your loop. This is
-the shape that works, and each step is separated because the ordering between
-them is load-bearing.
+fltr is a library your loop calls, not a framework that calls your loop. Each step
+below is a separate function because the ordering between them matters.
 
 ```cpp title="loop.cc"
 fltr::Scene runFrame(App& app) {
@@ -31,16 +30,15 @@ binding.attachRoot([&] { return buildRoot(app); });   // runs inside a build sco
 ```
 
 `attachRoot` wraps whatever you return in a `View`, mounts the element tree, and
-installs the resulting `RenderView` as the pipeline root. It runs **once** —
-everything that changes afterwards changes through an observable, not by
-re-running the builder.
+installs the resulting `RenderView` as the pipeline root. It runs once. Everything
+that changes afterwards changes through an observable rather than by re-running
+the builder.
 
 <Aside type="caution" title="Construction order">
-If your `TextService` needs a graphics context — most do, to rasterise a glyph
-atlas — then it cannot be a constructor member alongside the binding. Open the
-window, then build the text service, then build the binding. And tear them down
-in the reverse order: the tree has to release its paragraphs before the service
-that owns them goes away.
+Most text services need a graphics context to rasterise a glyph atlas, which means
+yours cannot be a constructor member alongside the binding. Open the window, then
+build the text service, then build the binding. Tear them down in reverse: the
+tree has to release its paragraphs before the service that owns them goes away.
 </Aside>
 
 ## Input is not part of the frame
@@ -54,15 +52,15 @@ const bool consumed = binding.dispatchSignal(wheel);   // did the UI take it?
 const bool taken    = binding.dispatchKey(key);        // did the UI take it?
 ```
 
-The two `bool`s are how the UI and the game share an input device. `false` means
-no widget wanted it, so the game may have it — scroll the world, zoom the camera,
-move the ship.
+The two `bool`s are how the UI and the game share an input device. `false` means no
+widget wanted it, so the game may have it: scroll the world, zoom the camera, move
+the ship.
 
 <Aside type="tip" title="Held keys are state, not history">
 Read held keys straight from your platform rather than accumulating them from the
-events you dispatched. A game wants the current position of the stick, not the
-log of how it got there. Dispatch the discrete events to fltr for focus and
-shortcuts; poll for movement.
+events you dispatched. A game wants the current position of the stick, not the log
+of how it got there. Dispatch discrete events to fltr for focus and shortcuts, and
+poll for movement.
 </Aside>
 
 ### Taking the controls away
@@ -100,8 +98,8 @@ no-op and notifies nobody, so pushing everything costs a handful of comparisons.
 
 **Quantise before you push.** The ship's speed changes every frame; the displayed
 speed does not. Rounding to a whole number turns sixty rebuilds a second into one
-rebuild whenever the digits actually change. fltr cannot make that decision for
-you — it does not know how you are going to render the number.
+rebuild whenever the digits change. fltr cannot make that decision for you,
+because it does not know how you are going to render the number.
 
 ## Resizing
 
@@ -119,8 +117,8 @@ window.applyCursor(binding.cursor());
 ```
 
 Read once per frame, after `drawFrame`. `MouseCursor` is resolved by walking the
-hover path deepest-first and taking the innermost non-`Defer` opinion, so a
-button asking for `Click` inside a panel asking for `Basic` wins.
+hover path deepest-first and taking the innermost non-`Defer` opinion, so a button
+asking for `Click` inside a panel asking for `Basic` wins.
 
 ## Presenting
 
@@ -134,9 +132,9 @@ void present(App& app, const fltr::Scene& scene) {
 }
 ```
 
-The game and the UI are drawn by different code into the same framebuffer. That
-is the whole integration: fltr contributes an ordered list of commands and has no
-opinion about what else is on screen.
+The game and the UI are drawn by different code into the same framebuffer. fltr
+contributes an ordered list of commands and has no opinion about what else is on
+screen.
 
 ## Skipping work
 
@@ -149,8 +147,8 @@ opinion about what else is on screen.
 2. **Check `scene.revision` if submission is expensive.** Unchanged means nothing
    anywhere was re-recorded and you may reissue whatever you built last frame.
 
-3. **Use `needsFrame()` only to skip the whole frame** — for an editor or a tool
-   that idles rather than a game that is animating continuously anyway.
+3. **Use `needsFrame()` only to skip the whole frame.** That suits an editor or a
+   tool that idles, not a game that is animating continuously anyway.
 
 </Steps>
 
@@ -176,5 +174,5 @@ assert(text.liveParagraphs() == 0);
 ```
 
 If the first one fails, something in your tree dirties an ancestor during layout.
-If the second fails, something is dirtying itself every frame — usually a
-`Watch` on a value that is being pushed unquantised.
+If the second fails, something is dirtying itself every frame, usually a `Watch`
+on a value that is being pushed unquantised.

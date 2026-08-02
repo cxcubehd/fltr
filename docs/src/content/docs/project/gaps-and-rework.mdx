@@ -1,18 +1,18 @@
 ---
 title: Gaps and rework
-description: What building a complete game UI on fltr actually hit — what is missing, what it forced, and what it would take to fix.
+description: "What building a complete game UI on fltr actually hit: what is missing, what it forced, and what it would take to fix."
 ---
 
 import { Aside, Badge, Card, CardGrid, Steps } from '@astrojs/starlight/components';
 
-This is the page the demo was built for. Everything below was hit while writing
-[the walkthrough](/fltr/walkthrough/) — a real game UI on a real renderer — rather
-than reasoned about in the abstract.
+This is the page the demo was built for. Everything below turned up while writing
+[the walkthrough](/fltr/walkthrough/), a real game UI on a real renderer, rather
+than while reasoning about it in the abstract.
 
-Nothing here is a complaint about the architecture. The three-tree split, the
+None of it is a complaint about the architecture. The three-tree split, the
 constraint protocol, the invalidation model and the component layer all held up
-under a live simulation. What follows is the list of things that are missing,
-awkward, or promised-but-not-delivered.
+under a live simulation. What follows is what is missing, awkward, or
+promised-but-not-delivered.
 
 <CardGrid>
   <Card title="4 that block a consumer" icon="error">
@@ -25,8 +25,8 @@ awkward, or promised-but-not-delivered.
   <Card title="3 backend-facing" icon="setting">
     Commands that promise more than a simple renderer can deliver.
   </Card>
-  <Card title="4 deliberately deferred" icon="information">
-    Still correctly deferred — but the demo now says what would have needed them.
+  <Card title="4 still deferred" icon="information">
+    Still correctly deferred, but the demo now says what would have needed them.
   </Card>
 </CardGrid>
 
@@ -61,8 +61,8 @@ dependency, and nothing warns them.
 
 **Workaround in the demo:** two `set(... OFF CACHE BOOL "" FORCE)` lines before
 `FetchContent_MakeAvailable`, with a comment explaining why.
-**Fix:** default them to `OFF` when `PROJECT_IS_TOP_LEVEL` is false — the standard
-idiom, and one line each.
+**Fix:** default them to `OFF` when `PROJECT_IS_TOP_LEVEL` is false. That is the
+standard idiom, and one line each.
 
 <Aside type="note" title="FLTR_BUILD_EXAMPLES points at a directory that has never existed">
 `CMakeLists.txt` globs `examples/*.cpp`. There is no `examples/` directory in git
@@ -72,7 +72,7 @@ history. The option is on by default and does nothing.
 ### 3. There is no `TextService` a consumer can ship <Badge text="text" variant="danger" />
 
 `Text` is required by the widget catalogue, and the only implementation is
-`MonospaceTextService` — whose own header calls it a development stand-in: fixed
+`MonospaceTextService`, whose own header calls it a development stand-in: fixed
 advance, greedy wrap, hardcoded ascent ratio, no correctness beyond ASCII.
 
 So **every consumer writes a text service before they can draw a label.**
@@ -111,8 +111,8 @@ from a builder.
 **Hit at:** [walkthrough step 10](/fltr/walkthrough/settings/).
 **Cost:** two constants (`SliderTrack::width` and `RawSlider::thumbExtent`) that
 must agree, with nothing enforcing it. A slider cannot fill available space.
-**Fix:** workstream F. This is build-during-layout, which is the expensive one —
-it punches a hole in phase separation and touches arena lifetimes.
+**Fix:** workstream F. This is build-during-layout, the expensive one: it punches a
+hole in phase separation and touches arena lifetimes.
 
 ### 6. Every consumer will write `MappedValue` <Badge text="animation" variant="caution" />
 
@@ -142,9 +142,9 @@ A rolling score is a rebuild per frame, because the animated quantity is a strin
 and no render object animates one.
 
 **Hit at:** [walkthrough step 13](/fltr/walkthrough/animated-components/).
-**Cost:** `CountUp` calls `setState` per tick — the only rebuild-per-frame
-animation in the demo, and no arrangement of existing pieces avoids it.
-**Related:** there is also no animated text *colour*, so a label cannot follow
+**Cost:** `CountUp` calls `setState` per tick, the only rebuild-per-frame animation
+in the demo, and no arrangement of existing pieces avoids it.
+**Related:** there is also no animated text colour, so a label cannot follow
 hover without a rebuild.
 **Fix:** a `RenderParagraph` that observes a `ValueListenable<TextStyle>` for paint
 gets the colour case for free (`setStyle` already distinguishes colour-only changes
@@ -160,7 +160,7 @@ label at every call site carries a complete `TextStyle`.
 theme tokens.
 **Cost:** it works, and it means the tree carries a full style struct at every text
 leaf. There is also no way to write "**bold** in the middle of a sentence" at all.
-**Fix:** workstream H — `ParagraphSpec` already takes `std::span<const TextSpan>`,
+**Fix:** workstream H. `ParagraphSpec` already takes `std::span<const TextSpan>`,
 so the interface is ready; it is `Text` that only ever passes one.
 
 ### 9. Every formatted label needs a buffer somebody owns <Badge text="text" variant="caution" />
@@ -170,8 +170,9 @@ so the interface is ready; it is `Text` that only ever passes one.
 
 **Workaround in the demo:** four `char[16]`s on `Session`, one on `App`, one per
 `CountUpState`, each reformatted when its value changes.
-**Cost:** correct and allocation-free, and it is a trap a new consumer will hit on
-their first score counter — the failure is silent corruption, not a compile error.
+**Cost:** correct and allocation-free, but a trap a new consumer will hit on their
+first score counter, and the failure is silent corruption rather than a compile
+error.
 **Fix:** either document it much more loudly, or add a `TextOwned` variant that
 copies into the render object (which already owns a `std::string`).
 
@@ -179,27 +180,24 @@ copies into the render object (which already owns a `std::string`).
 
 No gradients, no shadows, no background images, no blur.
 
-**Cost:** a "sleek modern" look has to be built entirely from restraint — hairline
-borders, small radii, contrast carried by the border. That turned out well, and it
-was not a free choice. A drop shadow under the pause panel is simply not
-expressible.
+**Cost:** a modern look has to be built entirely from restraint: hairline borders,
+small radii, contrast carried by the border. That turned out well, and it was not
+a free choice. A drop shadow under the pause panel is not expressible at all.
 **Fix:** `DrawRRectCmd` would need a shadow field or a new `PaintOp`, and every
-backend would have to implement it. Worth deciding deliberately rather than by
-omission.
+backend would have to implement it. Worth an explicit decision either way.
 
 ### 11. The layout catalogue is missing shorthands, not capabilities <Badge text="layout" variant="caution" />
 
 No `Center`, no `Container`, no `ColoredBox`, no `Spacer`, no `Wrap`, no grid, no
 `AspectRatio`, no `Visibility`/`Offstage`, no intrinsics.
 
-**Workaround in the demo:** 70 lines of `panel.cc` covering all of it —
-`Align` with default alignment *is* `Center`, `Flexible` around a zero `SizedBox`
-*is* `Spacer`.
+**Workaround in the demo:** 70 lines of `panel.cc` covering all of it. `Align` with
+default alignment is `Center`; `Flexible` around a zero `SizedBox` is `Spacer`.
 **Cost:** low, but every consumer writes the same file with the same names before
-their first screen. A grid is the one genuine absence — a 5×2 level layout would be
+their first screen. A grid is the one genuine absence: a 5×2 level layout would be
 a `Column` of `Row`s with the arithmetic by hand.
 **Fix:** workstream I. Cheap, and the framework's own rule ("add widgets when a
-screen needs them") has now been satisfied — a screen needed them.
+screen needs them") is now satisfied, because a screen needed them.
 
 ### 12. No ambient view metrics <Badge text="ergonomics" variant="caution" />
 
@@ -207,7 +205,7 @@ Surface size, UI scale and input mode are all threaded by hand.
 
 **Cost:** the demo's screens know the surface size only because `App` happens to
 hold a `Window`. A widget deep in the tree cannot ask.
-**Fix:** workstream K — one `Ambient<ViewMetrics>` installed by `WidgetBinding`,
+**Fix:** workstream K. One `Ambient<ViewMetrics>` installed by `WidgetBinding`,
 which already knows the surface.
 
 ---
@@ -232,8 +230,8 @@ actually overflows a rounded container.
 ### 14. `PushOpacity` has no analogue in an immediate-mode renderer <Badge text="paint" variant="note" />
 
 The backend must fold alpha into every colour it emits inside the group. That is
-correct and unavoidable — and it is not documented anywhere, so every backend
-author rediscovers it.
+correct and unavoidable, and it is not documented anywhere, so every backend author
+rediscovers it.
 
 **Fix:** documentation. The [backend guide](/fltr/guides/writing-a-backend/) now
 says it.
@@ -244,13 +242,13 @@ Three push kinds, one `Pop`. Pushes nest but do **not** alternate, so a backend 
 to record the order groups were opened in.
 
 **Cost:** the demo's first implementation compared stack depths and was wrong. The
-fix is a three-line `groups_` vector — obvious afterwards, and an afternoon to find.
+fix is a three-line `groups_` vector: obvious afterwards, an afternoon to find.
 **Fix:** either give `Pop` a `PaintOp` field naming what it closes (one byte in a
 union that already exists), or say this in the header.
 
 ---
 
-## Deliberately deferred — and what the demo would have wanted
+## Deferred, and what the demo would have wanted
 
 ### Lazy children
 
@@ -265,8 +263,8 @@ not want it.
 
 ### Navigation and routes
 
-Correctly absent — a game engine already has a screen stack. The demo hand-rolled a
-router in about forty lines, and
+Correctly absent, since a game engine already has a screen stack. The demo
+hand-rolled a router in about forty lines, and
 [step 7](/fltr/walkthrough/router/) is now the reference implementation of that
 pattern.
 
@@ -292,8 +290,8 @@ consumer who ships a text service before that lands has to revise it.
 Three call sites in the demo had to be restructured around it:
 
 - `ToggleRowSpec::onChanged` passes fltr's own `Callback<void(ToggleValue)>`
-  through rather than wrapping it in a nicer `bool` API — one 32-byte closure
-  inside another does not fit;
+  through rather than wrapping it in a nicer `bool` API, because one 32-byte
+  closure inside another does not fit;
 - `statistic()` takes a function pointer plus an owner pointer instead of a
   closure;
 - `Watch` builders read the theme from the ambient scope inside the builder rather
@@ -322,24 +320,24 @@ button" flow has this shape.
 
 <Steps>
 
-1. **Packaging** (#1, #2) — 25 lines of CMake, and until it lands nobody can
+1. **Packaging** (#1, #2). About 25 lines of CMake, and until it lands nobody can
    depend on this properly.
 
-2. **CI** (#4) — build, `ctest`, and `demo --smoke` under xvfb.
+2. **CI** (#4). Build, `ctest`, and `demo --smoke` under xvfb.
 
-3. **Ship `MappedValue`** (#6) — 70 header-only lines; makes the cheap animation
-   path actually reachable.
+3. **Ship `MappedValue`** (#6). Seventy header-only lines that make the cheap
+   animation path reachable.
 
-4. **Extend the `TextService` interface** (text editing) — cheap now, breaking
+4. **Extend the `TextService` interface** for text editing. Cheap now, breaking
    later.
 
-5. **A reference `TextService`** (#3) — the biggest ergonomic win after packaging.
+5. **A reference `TextService`** (#3). The biggest ergonomic win after packaging.
 
-6. **`DefaultTextStyle` and spans** (#8), **layout shorthands** (#11), **ambient
-   view metrics** (#12) — workstreams H, I and K, all now justified by a real
+6. **`DefaultTextStyle` and spans** (#8), **layout shorthands** (#11) and **ambient
+   view metrics** (#12): workstreams H, I and K, all now justified by a real
    screen.
 
-7. **`LayoutBuilder`** (#5) — the expensive one. Worth doing only when a second
+7. **`LayoutBuilder`** (#5). The expensive one. Worth doing only when a second
    screen wants it.
 
 </Steps>

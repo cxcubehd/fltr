@@ -1,5 +1,5 @@
 ---
-title: 9 — Level select
+title: 9. Level select
 description: Scrollable, Scrollbar and Overscroll around a keyed list, and what "not lazy" costs.
 ---
 
@@ -89,10 +89,9 @@ is.
 other.
 
 <Aside type="tip" title="Disabled swallows, it does not ignore">
-That is deliberate and it is what you want here: a locked card is drawn over the
-scroll content, and a click on it must not fall through to whatever is behind. If
-you want the other behaviour, wrap it in `IgnorePointer` — both exist, and the
-distinction is why.
+That is what you want here: a locked card is drawn over the scroll content, and a
+click on it must not fall through to whatever is behind. For the other behaviour,
+wrap it in `IgnorePointer`. Both exist, and this is the distinction between them.
 </Aside>
 
 ### Keys, again
@@ -163,10 +162,10 @@ which is the assumption its thumb geometry is built on.
 fltr::ScrollController levelScroll_;
 ```
 
-Not owned by any widget. `ScrollController` holds no offset of its own — the
-`Scrollable` owns the position and lends it to the controller — and the two clear
-each other's pointer on the way out, so either outliving the other is inert rather
-than dangling.
+Not owned by any widget. `ScrollController` holds no offset of its own; the
+`Scrollable` owns the position and lends it to the controller. The two clear each
+other's pointer on the way out, so either outliving the other is inert rather than
+dangling.
 
 <Aside type="note" title="The controller is why the outer two work at all">
 An ancestor cannot passively observe a descendant scrolling; `ScrollScope` only
@@ -175,9 +174,9 @@ controller. That is the recorded cost of "no new dispatch mechanisms", and here 
 is exactly three identical `.controller =` lines.
 </Aside>
 
-`Scrollbar` and `Overscroll` both watch the controller **and** the position,
-because a controller has no position until the scrollable below it has built —
-and an indicator that wraps a scrollable is always built first.
+`Scrollbar` and `Overscroll` watch the controller as well as the position, because
+a controller has no position until the scrollable below it has built, and an
+indicator that wraps a scrollable is always built first.
 
 ## Not lazy, and it says so
 
@@ -195,7 +194,7 @@ offset inside a clip. `RenderViewport` observes the position for *paint*, so a
 frame of scrolling:
 
 - runs **no layout**;
-- re-records the viewport's own display list — a clip and one `DrawList` reference;
+- re-records the viewport's own display list, a clip and one `DrawList` reference;
 - repaints the scrollbar thumb, which also observes for paint.
 
 `stats.layouts` stays at zero through an entire fling. The demo's debug readout
@@ -220,7 +219,7 @@ void Input::pumpSignals(fltr::WidgetBinding& binding) {
 }
 ```
 
-`dispatchSignal` returns whether the UI consumed it — the demo ignores the answer
+`dispatchSignal` returns whether the UI consumed it. The demo ignores the answer
 because it has nothing else to scroll, but a game with a zoomable camera would use
 it.
 
@@ -231,13 +230,12 @@ browser does when a scrolled-to-the-end list lets the page scroll instead.
 A wheel notch is **eased toward** rather than applied, so spinning the wheel
 accumulates into one target instead of jumping once per notch.
 
-<Aside type="tip" title="What this step proved">
-The scroll layer is complete for a menu: physics, a fling, a fading draggable
-scrollbar, an overscroll stretch, and focus traversal that scrolls the next card
-into view by the minimum amount.
+<Aside type="note" title="Complete for a menu">
+Physics, a fling, a fading draggable scrollbar, an overscroll stretch, and focus
+traversal that scrolls the next card into view by the minimum amount.
 
-Two findings, both already known: no lazy children, and no grid — a 5×2 layout of
-levels would have to be a `Column` of `Row`s with the arithmetic done by hand.
+Two known limits: no lazy children, and no grid. A 5×2 layout of levels would be a
+`Column` of `Row`s with the arithmetic done by hand.
 </Aside>
 
 <LinkCard

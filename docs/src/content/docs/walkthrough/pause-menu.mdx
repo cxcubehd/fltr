@@ -1,5 +1,5 @@
 ---
-title: 12 — Pause menu
+title: 12. Pause menu
 description: An Overlay, a consumer-owned entry, a null child that animates out, and TickerMode stopping the world behind it.
 ---
 
@@ -28,8 +28,8 @@ App::App(const Options& options)
 ```
 
 The entry holds a builder and is owned by `App`, not by any widget. That is fltr's
-rule for everything a widget refers to by pointer — `ScrollController`,
-`FocusNode`, `WidgetStatesController`, `AnchorLink`, and this.
+rule for everything a widget refers to by pointer: `ScrollController`, `FocusNode`,
+`WidgetStatesController`, `AnchorLink`, and this.
 
 ## Finding the overlay
 
@@ -64,9 +64,8 @@ void App::goTo(Screen screen) {
 }
 ```
 
-Read it during the build, keep the pointer, use it from a callback. That split is
-worth internalising — it is the same shape any "open a dialog from a button" flow
-takes.
+Read it during the build, keep the pointer, use it from a callback. Any "open a
+dialog from a button" flow has this shape.
 
 <Aside type="tip" title="The entry is inserted for the whole gameplay screen">
 Not when the game is paused. It is inserted on entering `Playing` and removed on
@@ -105,7 +104,7 @@ That ternary is the whole dismissal. `WidgetRef{}` is a **child**, and the switc
 treats it as one: whatever is there animates out and nothing takes its place.
 
 The outgoing subtree stays mounted, keeps its `State`, keeps ticking, is never
-rebuilt, and is discarded once its presence reaches zero. It is also inert — it
+rebuilt, and is discarded once its presence reaches zero. It is also inert: it
 takes no pointer input and nothing in it can hold the focus, so you cannot click
 "Resume" on a panel that is halfway gone.
 
@@ -130,9 +129,9 @@ WidgetRef panelFor(App& app, const Theme& theme, Outcome outcome) {
 }
 ```
 
-The scrim is **inside** the animated subtree, not a second overlay entry. One
-subtree in, one subtree out, one animation — and the scrim's fade is automatically
-in step with the panel's.
+The scrim is inside the animated subtree rather than a second overlay entry. One
+subtree in, one subtree out, one animation, and the scrim's fade stays in step
+with the panel's.
 
 ```cpp title="docs/demo/src/ui/theme.cc"
 BoxDecoration scrimDecoration(const Theme& theme) {
@@ -140,8 +139,8 @@ BoxDecoration scrimDecoration(const Theme& theme) {
 }
 ```
 
-`StackFit::Expand` makes the scrim fill the overlay, which fills the base child —
-so it covers the whole HUD without anyone computing a size.
+`StackFit::Expand` makes the scrim fill the overlay, which fills the base child, so
+it covers the whole HUD without anyone computing a size.
 
 ## One panel, three meanings
 
@@ -209,8 +208,8 @@ panel is the result screen, so Escape does not dismiss it.
 ```
 
 <Aside type="tip" title="Muted means unsubscribed, not skipped">
-A muted ticker holds **no subscription at all**. It is not called and told to do
-nothing — it is not called. `activeTickerCount()` drops, and the demo's debug
+A muted ticker holds no subscription at all. It is not called and told to do
+nothing; it is not called. `activeTickerCount()` drops, and the demo's debug
 readout shows it drop.
 
 And because a ticker carries a per-frame delta rather than an absolute clock, a
@@ -242,20 +241,20 @@ flowchart TD
   class H,P yours
 ```
 
-The base child alone decides the overlay's size — an overlay must never change the
-layout of what it overlays, however large an entry is. Entries paint after the
-base and, because hit testing walks children in reverse, are tested **before** it,
+The base child alone decides the overlay's size, because an overlay must never
+change the layout of what it overlays however large an entry is. Entries paint
+after the base and, because hit testing walks children in reverse, are tested
+before it,
 which is what makes the scrim swallow clicks aimed at the HUD.
 
-<Aside type="tip" title="What this step proved">
-Exit animations work, and they cost nothing structurally — no "keep-alive" flag,
-no dismissal callback, no second tree. The `WidgetRef` carrying its own type and
-key is what made retaining an outgoing subtree fall out of reconciliation instead
-of being bolted onto it.
+<Aside type="note" title="Exit animations cost nothing structurally">
+No keep-alive flag, no dismissal callback, no second tree. A `WidgetRef` carrying
+its own type and key is what made retaining an outgoing subtree fall out of
+reconciliation instead of being bolted onto it.
 
-The finding is small: `Overlay::of` being a build-only read means an app that opens
-panels from callbacks has to stash the `OverlayState*` during a build. Three lines
-in this demo, and not obvious the first time.
+One rough edge: `Overlay::of` is a build-only read, so an app that opens panels
+from callbacks has to stash the `OverlayState*` during a build. Three lines here,
+and not obvious the first time.
 </Aside>
 
 <LinkCard

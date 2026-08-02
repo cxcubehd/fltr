@@ -1,5 +1,5 @@
 ---
-title: 8 — Main menu
+title: 8. Main menu
 description: A column of buttons, autofocus, arrow traversal, Escape, and the 32-byte budget a Callback gives you.
 ---
 
@@ -84,10 +84,10 @@ WidgetRef mainMenuScreen(App& app, const Theme& theme) {
 
 ## `MainAxisSize::Min` matters here
 
-The outer `Column` is inside a `sheet`, which centres it. `MainAxisSize::Max` — the
-default — would make it fill the whole surface height, and centring something that
-already fills its parent does nothing. `Min` makes the column exactly as tall as
-its children, so the `Align` above it has something to centre.
+The outer `Column` is inside a `sheet`, which centres it. The default,
+`MainAxisSize::Max`, would make it fill the whole surface height, and centring
+something that already fills its parent does nothing. `Min` makes the column
+exactly as tall as its children, so the `Align` above it has something to centre.
 
 `CrossAxisAlignment::Stretch` on the button column is what makes every button the
 same width without any of them being told a width.
@@ -154,9 +154,9 @@ void App::togglePause() {
 }
 ```
 
-One shortcut registration at the root, and the meaning is resolved by app state.
-The alternative — a `Shortcuts` per screen — would mean four registrations and four
-chances for two of them to be live at once during a page transition.
+One registration at the root, with the meaning resolved from app state. A
+`Shortcuts` per screen would mean four registrations and four chances for two of
+them to be live at once during a page transition.
 
 ## Callbacks and the 32-byte budget
 
@@ -168,10 +168,10 @@ chances for two of them to be live at once during a page transition.
 a 64-bit target, and static-asserts if they do not fit. It never allocates.
 
 <Aside type="caution" title="What fits, and what does not">
-One reference is 8 bytes. A reference plus an index — as level select uses — is 16.
-Capturing three or four things by value is where it starts to be tight, and
-capturing a `std::string` fails to compile outright, because the captures must be
-trivially copyable as well as small.
+One reference is 8 bytes; a reference plus an index, as level select uses, is 16.
+Three or four values is where it starts to be tight, and capturing a `std::string`
+fails to compile outright, because the captures must be trivially copyable as well
+as small.
 
 The way out is the way the demo already works: capture `&app` and reach for what
 you need through it.
@@ -183,8 +183,8 @@ you need through it.
 body(theme, app.session().bestText())
 ```
 
-Not `std::to_string(best)`. `Text` takes a `std::string_view` and **does not copy
-it** — the storage has to outlive the build.
+Not `std::to_string(best)`. `Text` takes a `std::string_view` and does not copy it,
+so the storage has to outlive the build.
 
 ```cpp title="docs/demo/src/game/session.hh"
 std::string_view bestText() const noexcept { return bestText_; }
@@ -196,13 +196,13 @@ A `char` buffer the session owns, reformatted when the value changes. Building a
 `std::string` inside the builder would be both an allocation and a dangling
 pointer.
 
-<Aside type="tip" title="What this step proved">
-Full keyboard navigation — tab, arrows, activation, and two global shortcuts — cost
-one `FocusScope`, one `.autofocus = true`, and two `Shortcuts` entries.
+<Aside type="note" title="What the keyboard cost">
+Tab, arrows, activation and two global shortcuts came to one `FocusScope`, one
+`.autofocus = true`, and two `Shortcuts` entries.
 
-The finding is small but real: `Text`'s `string_view` contract turns every
-formatted label into a buffer somebody has to own. Every screen in this demo has
-one, and a new consumer will hit it on their first score counter.
+Smaller but real: `Text`'s `string_view` contract turns every formatted label into
+a buffer somebody has to own. Every screen in this demo has one, and a new
+consumer will hit it on their first score counter.
 </Aside>
 
 <LinkCard

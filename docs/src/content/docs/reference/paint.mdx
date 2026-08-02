@@ -5,9 +5,9 @@ description: The display list, the paint command union, the Scene handed to your
 
 import { Aside } from '@astrojs/starlight/components';
 
-Everything in `include/fltr/paint/`. This is the entire surface a rendering
-backend touches — see [Writing a backend](/fltr/guides/writing-a-backend/) for
-how to consume it.
+Everything in `include/fltr/paint/`. This is the whole surface a rendering backend
+touches. See [Writing a backend](/fltr/guides/writing-a-backend/) for how to
+consume it.
 
 ## Handles
 
@@ -54,7 +54,7 @@ struct DrawParagraphCmd { ParagraphHandle paragraph; Offset offset; Color tint; 
 struct DrawListCmd  { const DisplayList* list; Offset offset; };
 ```
 
-`DrawImageCmd::src` is in texel space — the consumer knows the texture.
+`DrawImageCmd::src` is in texel space, since the consumer knows the texture.
 `DrawParagraphCmd::tint` is multiplied with the per-run colours the text service
 reported, which is how an `Opacity` above a `Text` reaches the glyphs.
 
@@ -86,7 +86,7 @@ aspirational.
 ```cpp
 class DisplayList {
 public:
-  void beginRecording();   // clears, ++revision, resets depth — retains capacity
+  void beginRecording();   // clears, ++revision, resets depth; retains capacity
   void endRecording();     // asserts push/pop balance
 
   void pushTransform(const Transform2D& m);
@@ -128,8 +128,8 @@ struct Scene {
 ```
 
 What `WidgetBinding::drawFrame` hands back. `revision` counts how many display
-lists the pipeline has re-recorded **in total** — unchanged since last frame means
-nothing anywhere was re-recorded and you may resubmit whatever you submitted last
+lists the pipeline has re-recorded in total. Unchanged since last frame means
+nothing anywhere was re-recorded, and you may resubmit whatever you submitted last
 time.
 
 ---
@@ -154,7 +154,7 @@ struct TextStyle {
 inline TextStyle lerp(const TextStyle& a, const TextStyle& b, float t) noexcept;
 ```
 
-The `lerp` overload takes `b`'s font outright — fonts do not interpolate.
+The `lerp` overload takes `b`'s font outright, since fonts do not interpolate.
 
 ```cpp
 enum class TextAlign    : std::uint8_t { Left, Center, Right };
@@ -204,9 +204,9 @@ The spans point at storage the service owns and must stay valid until the handle
 is released.
 
 <Aside type="caution" title="A run is not a span and not a glyph">
-A `PositionedRun` is a *contiguous piece of one span placed on one line*.
-Explicitly not one glyph per character and not one run per span — a real shaper
-splits a span across lines and may merge or reorder within one.
+A `PositionedRun` is a contiguous piece of one span placed on one line. Not one
+glyph per character, and not one run per span: a real shaper splits a span across
+lines and may merge or reorder within one.
 </Aside>
 
 ### `TextService`
@@ -243,8 +243,8 @@ public:
 ```
 
 A development stand-in: fixed advance, greedy word wrap, no correctness beyond
-ASCII. It produces multiple lines and multiple runs *on purpose*, so layout,
-painting and hit testing meet the shape of data a real shaper returns.
+ASCII. It produces multiple lines and multiple runs so that layout, painting and
+hit testing meet the shape of data a real shaper returns.
 
-`liveParagraphs()` is the leak check — assert it returns to zero after
+`liveParagraphs()` is the leak check: assert it returns to zero after
 `binding.reset()`. Expose the same thing from your own service.

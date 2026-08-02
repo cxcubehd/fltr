@@ -1,13 +1,13 @@
 ---
 title: The frame
-description: What drawFrame does, in order, and why every one of those orderings is load-bearing.
+description: What drawFrame does, in order, and why each of those orderings matters.
 ---
 
 import { Aside, Steps } from '@astrojs/starlight/components';
 
 `WidgetBinding::drawFrame(float seconds)` is the only call into fltr's frame.
-Everything else — dispatching input, pushing state — happens outside it, at
-whatever rate your platform produces events.
+Dispatching input and pushing state happen outside it, at whatever rate your
+platform produces events.
 
 ```mermaid
 sequenceDiagram
@@ -43,15 +43,15 @@ sequenceDiagram
 <Steps>
 
 1. **Animations tick before the build.** A tick becomes a `setState` on whatever
-   is watching it. Ticking *after* `flushBuild` would leave every `Watch` showing
-   last frame's value — one frame of lag on every animated readout in the tree.
+   is watching it. Ticking after `flushBuild` would leave every `Watch` showing
+   last frame's value, one frame of lag on every animated readout in the tree.
 
 2. **The gesture clock advances before the build too.** A long press whose timer
    expires during this frame fires its callback now, so the menu it opens is
    built in this frame rather than the next one.
 
 3. **Hover settles before the build, against last frame's layout.** Moving the
-   pointer is not the only way the thing under it changes — the tree can move
+   pointer is not the only way the thing under it changes; the tree can move
    beneath a stationary pointer. Re-resolving here means whatever enter/exit
    produces is built in the same frame.
 
@@ -99,18 +99,18 @@ bool WidgetBinding::needsFrame() const noexcept {
 You rarely need it. `drawFrame` with nothing dirty performs no work in any phase
 and returns a `Scene` whose `revision` is unchanged, so the cheaper test is
 usually "did `revision` move" on the output rather than "will it move" on the
-input. `needsFrame` earns its place when the *submission* is expensive — a
-retained-mode backend that would otherwise re-walk the list.
+input. `needsFrame` earns its place when submission itself is expensive, such as
+a retained-mode backend that would otherwise re-walk the list.
 
 ## Non-convergence is capped, not asserted away
 
 A node cannot spin on its own: it is still marked dirty while its own
-`performLayout` runs, so marking itself short-circuits. Two nodes dirtying *each
-other* can spin, and that is a real bug class in this design.
+`performLayout` runs, so marking itself short-circuits. Two nodes dirtying each
+other can spin, and that is a real bug class in this design.
 
-The drain is capped at 32 passes in every build. The failure mode is therefore
-one stale frame rather than a frozen game, and `FrameStats::layoutPasses` exposes
-the count — a healthy frame is 0 or 1.
+The drain is capped at 32 passes in every build, so the failure mode is one stale
+frame rather than a frozen game. `FrameStats::layoutPasses` exposes the count. A
+healthy frame is 0 or 1.
 
 <Aside type="caution" title="It degrades silently in release">
 With `FLTR_CHECKS=0` a pathological tree simply produces a stale frame with no
@@ -123,9 +123,9 @@ demo does exactly that.
 `PipelineOwner` tracks which phase it is in, and the invariants are checked in
 both directions:
 
-- `markNeedsLayout` refuses to run during the paint phase — painting must not
-  dirty layout.
-- `paintWithContext` requires the paint phase — nothing may be painted outside it.
+- `markNeedsLayout` refuses to run during the paint phase, because painting must
+  not dirty layout.
+- `paintWithContext` requires the paint phase, so nothing is painted outside it.
 
 A detached tree has no owner and therefore no phase, which is how tests construct
 render objects by hand and lay them out directly.
@@ -160,7 +160,6 @@ re-recorded, and you may resubmit whatever you submitted last time.
 | `boundariesRepainted` | 1 for a HUD number ticking inside a repaint boundary |
 | `layoutPasses` | 0 or 1. Anything more means layout dirtied an unvisited ancestor. |
 
-Alongside them, `BuildOwner::buildCount()` and
-`TickerRegistry::activeTickerCount()` are the two numbers that turn "hovering
-costs no rebuilds" and "a hidden animation costs nothing" from claims into
-assertions.
+`BuildOwner::buildCount()` and `TickerRegistry::activeTickerCount()` sit
+alongside them. Those two are how you check that hovering costs no rebuilds and
+that a hidden animation costs nothing.

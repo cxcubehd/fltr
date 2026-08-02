@@ -1,6 +1,6 @@
 ---
 title: harness
-description: Four functions that turn the three trees into stable, diffable text — how correctness is observed without a renderer.
+description: Four functions that turn the three trees into stable, diffable text, so correctness is observable without a renderer.
 ---
 
 import { Aside } from '@astrojs/starlight/components';
@@ -11,8 +11,8 @@ There is no renderer during most of this framework's work, so correctness has to
 be observable without pixels. These produce a stable, diffable textual form of
 what the pipeline actually built.
 
-Output is deliberately terse and deterministic: **no addresses, no timings**, floats
-via a fixed `%.6g` with `-0` normalised.
+Output is terse and deterministic: no addresses, no timings, floats via a fixed
+`%.6g` with `-0` normalised.
 
 ## The four dumps
 
@@ -38,7 +38,7 @@ View size=320x120 [repaint-boundary] [relayout-boundary]
         Paragraph size=18x14.4 at=(278,40.8) "84%"
 ```
 
-The detail after the size comes from each object's `describe()` override — that is
+The detail after the size comes from each object's `describe()` override, which is
 the only thing that method is for.
 
 The `[relayout-boundary]` and `[repaint-boundary]` annotations are the fastest way
@@ -56,8 +56,8 @@ DrawParagraph #1 at=(12,52.8) #FF8B8B99
 DrawParagraph #2 at=(290,52.8) #FFECECEF
 ```
 
-Paragraphs appear as handles, not text — `#1` is what the `TextService` returned,
-and resolving it back to glyphs is the backend's job.
+Paragraphs appear as handles rather than text. `#1` is what the `TextService`
+returned, and resolving it back to glyphs is the backend's job.
 
 ### `dumpScene`
 
@@ -79,7 +79,7 @@ column tells you immediately whether reconciliation is matching what you expecte
 <Aside type="tip" title="Golden tests are the intended use">
 Because the output is deterministic, the whole of a screen's layout can be an
 expected string in a test. That is how the framework's own 376 tests assert layout
-without a window — and it works just as well for a consumer's screens.
+without a window, and it works just as well for a consumer's screens.
 </Aside>
 
 ## `fltr::dbg`

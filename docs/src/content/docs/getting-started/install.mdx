@@ -82,10 +82,9 @@ fltr::detail::setViolationHandler(
 ```cmake
 set(FLTR_ENABLE_CHECKS OFF CACHE BOOL "" FORCE)
 ```
-With checks off, `FLTR_EXPECTS` compiles to nothing — including the ones that
-currently *catch* undefined behaviour, such as a stale `WidgetRef` reaching
-`inflate`. Ship with them off only once you are confident, and keep them on in
-every test and development build.
+With checks off, `FLTR_EXPECTS` compiles to nothing, including the ones that
+currently catch undefined behaviour such as a stale `WidgetRef` reaching
+`inflate`. Keep them on in every test and development build.
   </TabItem>
 </Tabs>
 

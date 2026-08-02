@@ -1,13 +1,13 @@
 ---
-title: 11 — Gameplay and HUD
+title: 11. Gameplay and HUD
 description: The game publishes numbers, the HUD reads them, and neither knows the other exists.
 ---
 
 import { Aside, LinkCard } from '@astrojs/starlight/components';
 
-The ship flies now. What matters on this page is not the physics — it is the
-**seam**: how a simulation running at 60 Hz feeds a UI without either side
-knowing about the other.
+The ship flies now. The physics is not the interesting part; the seam is. How does
+a simulation running at 60 Hz feed a UI without either side knowing about the
+other?
 
 ## The game half
 
@@ -40,8 +40,8 @@ public:
 ```
 
 The floatiness is not decoration. Momentum means the HUD numbers change
-**continuously**, which is exactly the load the reactivity layer should be shown
-under — a readout that only moves when you press a button proves nothing.
+continuously, which is the load worth putting the reactivity layer under. A readout
+that only moves when you press a button proves nothing.
 
 ## The seam
 
@@ -72,9 +72,9 @@ public:
 ```
 
 <Aside type="tip" title="Separate observables, not one snapshot struct">
-A single `Observable<HudSnapshot>` would notify every reader whenever *any* field
-moved — and something always moves. Six separate observables mean the score
-readout hears about the score and nothing else.
+A single `Observable<HudSnapshot>` would notify every reader whenever any field
+moved, and something always moves. Six separate observables mean the score readout
+hears about the score and nothing else.
 </Aside>
 
 ```cpp title="docs/demo/src/game/session.cc"
@@ -97,9 +97,9 @@ everything costs a handful of comparisons and notifies only what moved.
 speed.set(static_cast<int>(std::lround(ship_.speed())));   // not the float
 ```
 
-One `lround` is the difference between rebuilding the speed readout **sixty times
-a second** and rebuilding it when the digits change. fltr cannot make that decision
-for you — it does not know how you are going to render the number.
+One `lround` is the difference between rebuilding the speed readout sixty times a
+second and rebuilding it when the digits change. fltr cannot make that decision for
+you, because it does not know how you are going to render the number.
 
 ### The text buffers
 
@@ -187,8 +187,8 @@ WidgetRef hudScreen(App& app, const Theme& theme) {
 ```
 
 `StackFit::Expand` makes the stack's size depend only on its constraints, which
-also makes it `sizedByParent` — an unconditional relayout boundary. A HUD cluster
-resizing never reaches the view.
+also makes it `sizedByParent` and therefore an unconditional relayout boundary. A
+HUD cluster resizing never reaches the view.
 
 <Aside type="tip" title="Why IgnorePointer and not AbsorbPointer">
 The critical warning is faded to zero opacity most of the time, but it is still
@@ -196,8 +196,8 @@ The critical warning is faded to zero opacity most of the time, but it is still
 everything below it invisible to the pointer, so a click aimed at an asteroid
 reaches the field.
 
-`AbsorbPointer` would do the opposite — swallow the click. That is what a disabled
-control over live content wants, and it is not what this wants.
+`AbsorbPointer` would do the opposite and swallow the click, which is what a
+disabled control over live content wants rather than what this wants.
 </Aside>
 
 ## The cheap gauge
@@ -235,7 +235,7 @@ That it takes a plain `ValueListenable<float>` is the point: `Observable<float>`
 from the game and `ComponentScope::fractionOf` from a `RawProgress` are the same
 type, so one widget serves both.
 
-## The expensive counter, on purpose
+## The counter that has to rebuild
 
 ```cpp title="docs/demo/src/ui/widgets/readout.hh"
 /// A number that rolls up to its new value.
@@ -263,8 +263,7 @@ private:
 };
 ```
 
-Both are on the same screen, deliberately. Shoot an asteroid and watch the debug
-readout: `builds` climbs for 0.45 s while the score rolls, then goes flat. The
+Both sit on the same screen. Shoot an asteroid and watch the debug readout: `builds` climbs for 0.45 s while the score rolls, then goes flat. The
 gauges never touch it.
 
 ## The `Callback` budget, again
@@ -316,21 +315,19 @@ WidgetRef criticalWarning(App& app) {
 }
 ```
 
-The `Watch` rebuilds whenever the hull fraction moves — which is often. The
-`AnimatedOpacity` retargets only when the **boolean** flips, because
+The `Watch` rebuilds whenever the hull fraction moves, which is often. The
+`AnimatedOpacity` retargets only when the boolean flips, because
 `ImplicitlyAnimatedState::didUpdateWidget` compares targets before retargeting.
 
 Frames of the fade after that rebuild nothing: what the built widget hands down is
 the animated value itself, not a snapshot of it.
 
-<Aside type="tip" title="What this step proved">
-The reactivity layer holds up under a continuously-changing simulation. Six
-observables, pushed unconditionally at 60 Hz, and the only thing that rebuilds is
-the one readout whose digits actually changed — plus the count-up, which cannot
-avoid it.
+<Aside type="note" title="The count-up is the exception">
+Six observables, pushed unconditionally at 60 Hz, and the only thing that rebuilds
+is the readout whose digits changed.
 
-The finding is the count-up itself: **there is no animated text**. A rolling number
-is a rebuild per frame, and no arrangement of the existing pieces avoids it.
+Except the count-up, because there is no animated text. A rolling number is a
+rebuild per frame, and no arrangement of the existing pieces avoids it.
 </Aside>
 
 <LinkCard

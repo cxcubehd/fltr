@@ -1,5 +1,5 @@
 ---
-title: 5 — First pixels
+title: 5. First pixels
 description: Construction order, attachRoot, a theme in an Ambient<T>, and the small compositions fltr does not ship.
 ---
 
@@ -53,12 +53,11 @@ list.
 
 `attachRoot` runs the builder inside a `BuildScope`, exactly once, and wraps what
 it returns in a `View`. Everything that changes afterwards changes through an
-observable — the builder is never re-run.
+observable, and the builder is never re-run.
 
 ## A theme
 
-fltr has no theme system, on purpose. `Ambient<T>` is the mechanism; the tokens
-are yours.
+There is no theme system. `Ambient<T>` is the mechanism, and the tokens are yours.
 
 ```cpp title="docs/demo/src/ui/theme.hh"
 /// The whole visual vocabulary of the demo, in one trivially destructible,
@@ -89,9 +88,9 @@ using ThemeScope = fltr::Ambient<Theme>;
 ```
 
 One struct rather than a dozen ambient values, so a theme change notifies once.
-`Ambient<T>` requires `T` to be trivially destructible (it is copied into the build
-arena) and equality-comparable (an unchanged value must notify nobody) — the
-defaulted `operator==` is what satisfies the second.
+`Ambient<T>` requires `T` to be trivially destructible, since it is copied into
+the build arena, and equality-comparable, since an unchanged value must notify
+nobody. The defaulted `operator==` satisfies the second.
 
 ### Text styles are derived, not stored
 
@@ -123,10 +122,9 @@ TextStyle titleStyle(const Theme& theme) { return styled(theme.fontSize + 4.0f, 
 ```
 
 <Aside type="caution" title="There is no DefaultTextStyle">
-Every `Text` call site takes a complete `TextStyle`. Six helper functions is the
-whole workaround, and it works — but it means the tree carries a full style struct
-at every text leaf where Flutter carries an inherited one. On the
-[gaps list](/fltr/project/gaps-and-rework/).
+Every `Text` call site takes a complete `TextStyle`. Six helper functions cover it,
+but the tree carries a full style struct at every text leaf where Flutter carries
+an inherited one. On the [gaps list](/fltr/project/gaps-and-rework/).
 </Aside>
 
 ### Surfaces
@@ -145,14 +143,14 @@ BoxDecoration panelDecoration(const Theme& theme) {
 <Aside type="note" title="&quot;Sleek&quot; here means restraint, because it has to">
 `BoxDecoration` is fill, radius, border colour and border width. No gradients, no
 shadows, no blur. So the demo's look is built from hairline borders, 6px radii,
-and contrast carried by the border rather than by a fill — which happens to be a
-good modern look, and was not entirely a free choice.
+and contrast carried by the border rather than by a fill. That happens to look
+good, and it was not entirely a free choice.
 </Aside>
 
 ## The compositions fltr does not ship
 
-The catalogue is deliberately primitive: no `Container`, no `Center`, no `Spacer`,
-no `ColoredBox`. So you write the handful you actually use, once.
+The catalogue is primitive: no `Container`, no `Center`, no `Spacer`, no
+`ColoredBox`. So you write the handful you use, once.
 
 ```cpp title="docs/demo/src/ui/widgets/panel.cc"
 WidgetRef panel(const Theme& theme, EdgeInsets padding, WidgetRef child) {
@@ -189,17 +187,16 @@ WidgetRef sheet(fltr::Key key, const Theme& theme, float maxWidth, WidgetRef chi
 }
 ```
 
-They are **functions, not widgets**, because none of them needs state or identity.
-A function composing widgets adds nothing to any of the three trees — the element
-tree sees only `DecoratedBox`, `Padding`, `SizedBox`.
+They are functions rather than widgets, because none of them needs state or
+identity. A function composing widgets adds nothing to any of the three trees: the
+element tree sees only `DecoratedBox`, `Padding` and `SizedBox`.
 
-<Aside type="tip" title="What this step proved">
-Every missing catalogue entry turned out to be a shorthand, not a capability. The
-demo needed 70 lines of `panel.cc` to cover all of it, and none of it fights the
-framework.
+<Aside type="note" title="Missing shorthands, not missing capabilities">
+Every gap in the catalogue turned out to be a name rather than a capability, and
+70 lines of `panel.cc` covered all of them without fighting the framework.
 
-The finding is about ergonomics, not power: a new consumer will write this same
-file, with these same names, before they can write their first screen.
+The cost is ergonomic: a new consumer writes this same file, with roughly these
+same names, before their first screen.
 </Aside>
 
 <LinkCard

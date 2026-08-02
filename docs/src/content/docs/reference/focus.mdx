@@ -51,12 +51,12 @@ public:
 };
 ```
 
-Owned by exactly one `State` — the component's own, or the consumer's when it
-supplied one — and referred to non-owningly by everything else.
+Owned by exactly one `State`, either the component's own or the consumer's when it
+supplied one, and referred to non-owningly by everything else.
 
 A node is **inert until attached under a scope**. With no `FocusScope` above it
 there is no parent to attach to, no manager, no key handler and no place in any
-traversal order — so a component holds its node either way and costs nothing for
+traversal order, so a component holds its node either way and costs nothing for
 it.
 
 It is a `Listenable` and notifies whenever this subtree gains or loses the focus,
@@ -66,16 +66,16 @@ The three policy axes are Flutter's own, not invented ones:
 
 | Setting | Meaning |
 |---|---|
-| `canRequestFocus = false` | never focusable at all — a HUD element with no business in a menu's tab order |
+| `canRequestFocus = false` | never focusable at all, such as a HUD element with no business in a menu's tab order |
 | `skipTraversal = true` | focusable by click or programmatically, never reached by Tab or a D-pad |
-| `descendantsAreFocusable = false` | excludes the whole subtree — Flutter's `ExcludeFocus` |
+| `descendantsAreFocusable = false` | excludes the whole subtree, Flutter's `ExcludeFocus` |
 
 `asScope()` exists for the reason `asPointerRegion` does: a scope is told apart
 from an ordinary node without RTTI.
 
 `rect()` is what directional traversal and scroll-into-view both read.
 
-`attach` re-parents, which a `Focus` widget does from its build — the one phase in
+`attach` re-parents, which a `Focus` widget does from its build, the one phase in
 which the ambient scope is known. Re-attaching to the same parent does nothing, so
 an ordinary rebuild costs nothing here.
 
@@ -104,8 +104,8 @@ focused node and the shortcuts above it, and nothing moves on its own.
 Flutter separates `FocusScope` from `FocusTraversalGroup`, so one scope may
 contain several independent tab orders. Here Tab wraps within the innermost
 enclosing scope and the arrows search inside it. The cost is that two independent
-orders need two nested scopes rather than two groups in one — which is how it
-would be written anyway.
+orders need two nested scopes rather than two groups in one, which is how it would
+be written anyway.
 </Aside>
 
 ## `FocusManager`
@@ -133,8 +133,8 @@ public:
 };
 ```
 
-Owned by the **outermost `FocusScope` in a tree, not by the binding** — which is
-exactly what makes a tree without one cost nothing.
+Owned by the outermost `FocusScope` in a tree rather than by the binding, which is
+what makes a tree without one cost nothing.
 
 `rootScope()` goes null once the scope node the manager was built around has been
 destroyed, which a consumer's own node may well be before the tree that named it.
@@ -165,13 +165,13 @@ The cost: a two-column form tabs down the columns only if it was built that way.
 
 Directional traversal takes the nearest traversable node beyond this one's centre
 in that direction, **preferring one whose extent overlaps** the current node's on
-the other axis — the overlap band that makes a D-pad feel right in a column of
+the other axis. That overlap band is what makes a D-pad feel right in a column of
 buttons.
 
 `nodeCount()` is the "focus costs nothing where it is not used" claim as a number.
 
 The manager's walk vectors are members, so neither a key nor a focus move
-allocates once the high-water mark is reached — and a node destroyed from its own
+allocates once the high-water mark is reached, and a node destroyed from its own
 callback can blank itself out of the walk. A `notifyGeneration_` counter ends the
 outer walk when a listener moves the focus again from its own callback.
 
@@ -192,7 +192,7 @@ public:
 ```
 
 The subscription is both how focus changes arrive **and** how this knows a
-consumer's node is still alive — a `Subscription` unhooks itself when its
+consumer's node is still alive. A `Subscription` unhooks itself when its
 `Listenable` is destroyed, so no second pointer has to be kept in step.
 
 `release()` detaches explicitly rather than leaving it to the destructor, and the
@@ -289,8 +289,8 @@ Key combinations that fire while the focus is anywhere inside this subtree. It i
 a focus node that never takes the focus, so keys reach it on their way up the
 chain from whatever is focused below.
 
-Modifiers are matched **exactly** — Ctrl-S is not Ctrl-Shift-S, which is what
-Flutter's `SingleActivator` does too.
+Modifiers are matched exactly: Ctrl-S is not Ctrl-Shift-S, which is what Flutter's
+`SingleActivator` does too.
 
 The braced list at the call site is a temporary, so entries are copied into the
 build arena, the same bargain `WidgetList` makes. The `State` then copies them out

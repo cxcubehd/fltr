@@ -1,13 +1,13 @@
 ---
 title: Design notes
-description: An index into DESIGN.md — where the reasoning behind each decision lives, milestone by milestone.
+description: An index into DESIGN.md, where the reasoning behind each decision lives, milestone by milestone.
 ---
 
 import { Aside, LinkCard } from '@astrojs/starlight/components';
 
-These docs explain **what** fltr does and **how** to use it. `DESIGN.md` in the
-repository root — 131 KB, 2,476 lines — explains **why**, milestone by milestone,
-including the divergences from Flutter and what each one cost.
+These docs explain what fltr does and how to use it. `DESIGN.md` in the repository
+root (131 KB, 2,476 lines) explains why, milestone by milestone, including the
+divergences from Flutter and what each one cost.
 
 This page is the index into it.
 
@@ -31,71 +31,70 @@ first place, and nothing below them is negotiable without a redesign.
 2. **Constraints down, sizes up, single pass.** A child cannot see its parent's
    size. This is what makes layout linear rather than iterative.
 3. **Relayout and repaint boundaries.** Update cost is proportional to the dirty
-   set, not the tree — and layout invalidation and paint invalidation are
-   *separate* paths with separate dirty lists.
+   set rather than the tree, and layout invalidation and paint invalidation are
+   separate paths with separate dirty lists.
 4. **Gesture arena.** Overlapping interactive regions resolve deterministically.
 
 Covered here: [Invariants and sharp edges](/fltr/architecture/invariants/).
 
-## Phase one — the architecture
+## Phase one: the architecture
 
 | `DESIGN.md` | Milestone | Read it for | Docs |
 |---|---|---|---|
-| `:32` | M1 — geometry, constraints, commands, text | why `Transform2D` is 2×3 rather than 4×4; why the text boundary is four methods | [core](/fltr/reference/core/), [paint](/fltr/reference/paint/) |
-| `:182` | M2 — the render tree | parent data living in the parent; why `render/` depends on nothing above it | [layout](/fltr/architecture/layout/) |
-| `:298` | M3 — the pipeline | the phase enum being enforced rather than documented; the 32-pass cap | [the frame](/fltr/architecture/the-frame/) |
-| `:410` | M4 — widgets and elements | the arena and its trivially-destructible rule; `WidgetRef` carrying type and key | [memory and lifetimes](/fltr/architecture/memory-and-lifetimes/) |
-| `:597` | Review of M1–M4 | what the first four milestones got wrong and what was changed | — |
-| `:701` | M5 — pointer routing, arena, hover | routing by pointer id instead of a cached path, and the two reasons | [input](/fltr/architecture/input/) |
-| `:924` | M6 — reactivity and ambient propagation | the snapshot scope that structurally cannot become an ancestor walk | [reactivity](/fltr/architecture/reactivity/) |
-| `:1085` | M7 — animation | delta-driven tickers; duration as the full range | [animation](/fltr/architecture/animation/) |
-| `:1245` | M8 — implicit animations | the render-attached path, and why it is the point of the whole design | [animation](/fltr/architecture/animation/) |
+| `:32` | M1: geometry, constraints, commands, text | why `Transform2D` is 2×3 rather than 4×4; why the text boundary is four methods | [core](/fltr/reference/core/), [paint](/fltr/reference/paint/) |
+| `:182` | M2: the render tree | parent data living in the parent; why `render/` depends on nothing above it | [layout](/fltr/architecture/layout/) |
+| `:298` | M3: the pipeline | the phase enum being enforced rather than documented; the 32-pass cap | [the frame](/fltr/architecture/the-frame/) |
+| `:410` | M4: widgets and elements | the arena and its trivially-destructible rule; `WidgetRef` carrying type and key | [memory and lifetimes](/fltr/architecture/memory-and-lifetimes/) |
+| `:597` | Review of M1–M4 | what the first four milestones got wrong and what was changed | |
+| `:701` | M5: pointer routing, arena, hover | routing by pointer id instead of a cached path, and the two reasons | [input](/fltr/architecture/input/) |
+| `:924` | M6: reactivity and ambient propagation | the snapshot scope that structurally cannot become an ancestor walk | [reactivity](/fltr/architecture/reactivity/) |
+| `:1085` | M7: animation | delta-driven tickers; duration as the full range | [animation](/fltr/architecture/animation/) |
+| `:1245` | M8: implicit animations | the render-attached path, and why it is the point of the whole design | [animation](/fltr/architecture/animation/) |
 
-## Phase two — usability
+## Phase two: usability
 
 | `DESIGN.md` | Milestone | Read it for | Docs |
 |---|---|---|---|
-| `:1364` | M9 — input foundations | one drag recognizer with an axis instead of three classes; the gesture clock | [gestures](/fltr/reference/gestures/) |
-| `:1561` | M10 — scrolling | scrolling as a paint operation; activities as a closed set, not a hierarchy | [scrolling](/fltr/architecture/scrolling/) |
-| `:1816` | M11 — focus and keyboard | one key walk instead of four layers; build-order traversal | [focus and keyboard](/fltr/architecture/focus-and-keyboard/) |
-| `:1994` | M12 — component behaviours | why the guard is always present; the builder-vs-observable question | [styling components](/fltr/guides/styling-components/) |
-| `:2223` | M13 — overlay and portals | size resolved at layout, position at paint; entries named by id | [overlay](/fltr/architecture/overlay/) |
-| `:2380` | M14 — exit animations | why retaining a removed subtree needed no change to reconciliation | [widgets](/fltr/reference/widgets/) |
+| `:1364` | M9: input foundations | one drag recognizer with an axis instead of three classes; the gesture clock | [gestures](/fltr/reference/gestures/) |
+| `:1561` | M10: scrolling | scrolling as a paint operation; activities as a closed set, not a hierarchy | [scrolling](/fltr/architecture/scrolling/) |
+| `:1816` | M11: focus and keyboard | one key walk instead of four layers; build-order traversal | [focus and keyboard](/fltr/architecture/focus-and-keyboard/) |
+| `:1994` | M12: component behaviours | why the guard is always present; the builder-vs-observable question | [styling components](/fltr/guides/styling-components/) |
+| `:2223` | M13: overlay and portals | size resolved at layout, position at paint; entries named by id | [overlay](/fltr/architecture/overlay/) |
+| `:2380` | M14: exit animations | why retaining a removed subtree needed no change to reconciliation | [widgets](/fltr/reference/widgets/) |
 
 ## The build prompts
 
 Two more documents in the repository root:
 
-**`INSTRUCTIONS.md`** — the original brief for phase one. The rule that has shaped
-the catalogue ever since is here: *add widgets when a target screen needs them, not
-speculatively.*
+**`INSTRUCTIONS.md`** is the original brief for phase one. The rule that has shaped
+the catalogue ever since is here: add widgets when a target screen needs them, not
+speculatively.
 
-**`INSTRUCTIONS2.md`** — the phase-two plan. Worth reading for two sections in
-particular:
+**`INSTRUCTIONS2.md`** is the phase-two plan. Two sections are worth reading:
 
-- **"The gaps, stated plainly"** (`:63`) — the six things missing after M8, written
+- **"The gaps, stated plainly"** (`:63`): the six things missing after M8, written
   before any of them were built. Comparing that list to the
   [findings page](/fltr/project/gaps-and-rework/) is the clearest picture of what
   phase two actually closed.
-- **"Candidate workstreams"** (`:167`) — A through M, of which A–E and J were
+- **"Candidate workstreams"** (`:167`): A through M, of which A–E and J were
   committed as M9–M14. The letters referenced throughout the findings page are
   these: **F** is `LayoutBuilder` and lazy children, **H** is text spans and
   ambient style, **I** is the layout catalogue, **K** is ambient view metrics,
   **M** is text editing.
 
-## What the docs deliberately do not carry over
+## What the docs do not carry over
 
-`DESIGN.md` records **what is verified** at the end of each milestone — the exact
-tests and what each one asserts. That belongs with the source, not with the
-consumer documentation, and it is the best reading in the file if you want to know
-how seriously a claim was checked.
+`DESIGN.md` records what is verified at the end of each milestone: the exact tests
+and what each one asserts. That belongs with the source rather than the consumer
+documentation, and it is the best reading in the file if you want to know how
+seriously a claim was checked.
 
 Two examples, quoted verbatim:
 
 > A frame of exit animation builds nothing and allocates nothing.
 
-> The retained subtree keeps ticking — a number it accumulated on its own after it
-> was removed — and stops when it is finally discarded.
+> The retained subtree keeps ticking (a number it accumulated on its own after it
+> was removed) and stops when it is finally discarded.
 
 The suite is 376 tests and 2,077 checks, green on GCC 13.3 and Clang 18.1 under
 `-Wall -Wextra -Wpedantic -Wshadow -Wnon-virtual-dtor`, and under ASan + UBSan. The

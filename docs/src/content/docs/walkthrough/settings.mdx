@@ -1,5 +1,5 @@
 ---
-title: 10 — Settings
+title: 10. Settings
 description: RawToggle as a drag-aware switch, RawSlider with divisions, and both driving real window state.
 ---
 
@@ -28,9 +28,9 @@ it a *switch* is one number.
   });
 ```
 
-`dragExtent = 0` creates **no drag recognizer at all** — that is a checkbox. A
-non-zero one means a drag of that distance moves the position end to end, and
-letting go past halfway reports the toggle.
+`dragExtent = 0` creates no drag recognizer at all, which is a checkbox. A non-zero
+one means a drag of that distance moves the position end to end, and letting go
+past halfway reports the toggle.
 
 ### The thumb
 
@@ -56,8 +56,8 @@ WidgetRef SwitchThumbState::build(BuildContext& context) {
 }
 ```
 
-Dragging the thumb repaints **one render object** and rebuilds nothing — through
-the whole drag, at whatever rate the pointer reports.
+Dragging the thumb repaints one render object and rebuilds nothing, through the
+whole drag, at whatever rate the pointer reports.
 
 While dragging, the component pins the position rather than animating to it: the
 thumb is following a finger, not a clock. Letting go animates it home over
@@ -92,9 +92,9 @@ and disabled from the same machinery every button uses:
 fltr::Callback<void(fltr::ToggleValue)> onChanged;
 ```
 
-A nicer `bool` API would need a lambda capturing the caller's `Callback` — a
-32-byte object inside a 32-byte budget. It does not fit, and the static assert
-tells you so at compile time rather than at runtime.
+A nicer `bool` API would need a lambda capturing the caller's `Callback`: a 32-byte
+object inside a 32-byte budget. It does not fit, and the static assert says so at
+compile time.
 </Aside>
 
 ## The slider
@@ -137,8 +137,8 @@ WidgetRef SliderTrackState::build(BuildContext& context) {
 }
 ```
 
-The fill is a **full-width bar scaled about its left edge**. That is what makes it a
-fill rather than a zoom, and it is a paint operation — no layout runs while the
+The fill is a full-width bar scaled about its left edge, which is what makes it a
+fill rather than a zoom. It is a paint operation, so no layout runs while the
 slider moves.
 
 ```cpp title="docs/demo/src/ui/widgets/slider_row.cc"
@@ -175,10 +175,10 @@ This is the most concrete missing capability the demo found. On the
 
 ### Absolute mapping
 
-`RawSlider` maps the value **absolutely** from where the pointer is, rather than
-accumulating drag deltas. So the thumb goes to the pointer on the first frame and
-cannot drift over a long drag — and there is no separate thumb hit region, because
-pressing anywhere on the track is already a press on the thumb.
+`RawSlider` maps the value absolutely from where the pointer is, rather than
+accumulating drag deltas, so the thumb goes to the pointer on the first frame and
+cannot drift over a long drag. There is no separate thumb hit region either,
+because pressing anywhere on the track is already a press on the thumb.
 
 ## The screen
 
@@ -275,7 +275,7 @@ void Window::apply(const GraphicsSettings& next) {
 
 <Aside type="tip" title="The switch shows reality, not intent">
 A compositor may refuse fullscreen. Because the observable is fed from what the
-window ended up in, the switch snaps back on its own — no error path, no
+window ended up in, the switch snaps back on its own: no error path, no
 reconciliation logic, just one value pushed and one `Watch` rebuilt.
 
 That works because `Observable<T>::set` compares first: a request that succeeded
@@ -301,14 +301,13 @@ char maxFpsText_[16] = "144";
 The same pattern as the menu's best score, for the same reason: `Text` does not
 copy its `string_view`.
 
-<Aside type="tip" title="What this step proved">
+<Aside type="note" title="Two gaps this screen hit">
 Both components are complete: value, gestures, drag, keyboard, focus, disabled,
 snapping. The demo supplied only pixels.
 
-Two findings. The missing `LayoutBuilder` forced a hardcoded slider width and two
-constants that must agree. And there is no ambient view metrics — the settings
-screen wants surface size and knows it only because `App` happens to hold a
-`Window`.
+The missing `LayoutBuilder` forced a hardcoded slider width and two constants that
+have to agree. And with no ambient view metrics, this screen knows the surface
+size only because `App` happens to hold a `Window`.
 </Aside>
 
 <LinkCard

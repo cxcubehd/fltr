@@ -1,6 +1,6 @@
 ---
 title: Implementing TextService
-description: The four-method boundary through which the framework asks for text, what a PositionedRun really means, and where a real implementation keeps going.
+description: The four-method boundary through which the framework asks for text, what a PositionedRun means, and where a real implementation keeps going.
 ---
 
 import { Aside, Steps } from '@astrojs/starlight/components';
@@ -29,10 +29,10 @@ public:
 };
 ```
 
-That is the whole interface. `MonospaceTextService` ships with fltr and its own
-header calls it a development stand-in — fixed advance, greedy wrap, no
-correctness beyond ASCII. It exists so that layout, painting and hit testing meet
-the *shape* of data a real shaper returns, not to render.
+`MonospaceTextService` ships with fltr, and its own header calls it a development
+stand-in: fixed advance, greedy wrap, no correctness beyond ASCII. It exists so
+that layout, painting and hit testing meet the shape of data a real shaper
+returns, not to render.
 
 ## What you are asked for
 
@@ -72,12 +72,12 @@ struct ParagraphMetrics {
 ```
 
 <Aside type="note" title="A run is not a span and not a glyph">
-A `PositionedRun` is *a contiguous piece of one span placed on one line*.
-Explicitly **not** one glyph per character, and **not** one run per span: a real
-shaper splits a span across lines and may merge or reorder within one.
+A `PositionedRun` is a contiguous piece of one span placed on one line. Not one
+glyph per character, and not one run per span: a real shaper splits a span across
+lines and may merge or reorder within one.
 
-Getting this right in your implementation is the difference between a stand-in
-and something a real shaper can drop into.
+Getting this right is the difference between a stand-in and something a real
+shaper can drop into.
 </Aside>
 
 The spans in `ParagraphMetrics` must stay valid until the handle is released, so
@@ -117,21 +117,21 @@ available as `kNullParagraph`.
    moved, take a copy per span.
 
 2. **Tokenise.** Split each span into words and hard breaks, keeping trailing
-   spaces attached to the word before them — so a break swallows the space
-   instead of starting the next line with it.
+   spaces attached to the word before them, so a break swallows the space instead
+   of starting the next line with it.
 
 3. **Wrap greedily.** Measure each token; if it would exceed `maxWidth` and the
    line is not empty, break. Extend the run in progress when the next token
    continues the same span contiguously; otherwise start a new run.
 
-4. **Place the runs on a shared baseline.** Line baseline is the maximum ascent
-   of its runs; line height is that plus the maximum descent. Each run's top is
-   `lineTop + lineBaseline - runAscent`. That is what makes text of two different
-   sizes sit on a common line.
+4. **Place the runs on a shared baseline.** The line's baseline is the maximum
+   ascent of its runs, and its height is that plus the maximum descent. Each run's
+   top is `lineTop + lineBaseline - runAscent`, which is what makes text of two
+   different sizes sit on a common line.
 
-5. **Apply alignment.** Against a bounded `maxWidth`, shift each line by the
-   slack. Against an infinite one there is nothing to align to yet — compute the
-   widest line first, then shift.
+5. **Apply alignment.** Against a bounded `maxWidth`, shift each line by the slack.
+   Against an infinite one there is nothing to align to yet, so compute the widest
+   line first and then shift.
 
 6. **Fill in the metrics.** `size` is the widest line by the total height;
    `firstBaseline` and `lastBaseline` are what a future baseline-aligned flex
@@ -142,7 +142,7 @@ available as `kNullParagraph`.
 ## Where to get the numbers
 
 Ascent should come from the font, not from a constant. Most rasterisers expose
-enough to derive it — with raylib, the bottom of a capital `H` is where the
+enough to derive it. With raylib, the bottom of a capital `H` is where the
 baseline sits:
 
 ```cpp
@@ -166,8 +166,8 @@ case fltr::PaintOp::DrawParagraph:
   break;
 ```
 
-Adding a `draw` method to your own service — outside the interface — keeps every
-notion of glyphs and runs inside it, and the backend never learns what a run is.
+Adding a `draw` method to your own service, outside the interface, keeps every
+notion of glyphs and runs inside it and the backend never learns what a run is.
 Multiply the command's tint with your per-run colours so that an `Opacity` above a
 `Text` reaches the glyphs.
 
@@ -181,12 +181,11 @@ but not:
 - **cluster boundaries**, for moving a cursor a grapheme at a time.
 
 None of these can be faked convincingly, and text editing is impossible without
-them. Adding them to the interface is cheap now and a breaking change later, so
-they are owed whenever the interface is next touched.
+them. Adding them is cheap now and a breaking change later, so they are owed
+whenever the interface is next touched.
 
 <Aside type="caution" title="Ellipsis is expressible and easy to skip">
 `TextOverflow::Ellipsis` and `ParagraphMetrics::didEllipsize` exist in the
-interface. Implementing them means trimming the last run to fit an ellipsis
-glyph and reporting that you did — the walkthrough's service does not, and says
-so. Decide deliberately rather than by omission.
+interface. Implementing them means trimming the last run to fit an ellipsis glyph
+and reporting that you did. The walkthrough's service does not, and says so.
 </Aside>
