@@ -30,6 +30,9 @@ void Window::open(int width, int height, const char* title, const GraphicsSettin
   SetConfigFlags(flags);
   SetTraceLogLevel(LOG_WARNING);
   InitWindow(width, height, title);
+  // raylib closes the window on Escape unless told otherwise, which would take
+  // the key the UI navigates with and turn it into "quit".
+  SetExitKey(KEY_NULL);
   open_ = true;
 
   settings_ = GraphicsSettings{.fullscreen = false, .vsync = settings.vsync, .maxFps = -1};

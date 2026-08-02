@@ -65,9 +65,7 @@ WidgetRef buildRoot(App& app) {
               .shortcuts =
                   {
                       {.stroke = KeyStroke{.key = LogicalKey::Escape},
-                       .onInvoke = [&app] { app.togglePause(); }},
-                      {.stroke = KeyStroke{.key = LogicalKey::Backspace},
-                       .onInvoke = [&app] { app.goTo(Screen::MainMenu); }},
+                       .onInvoke = [&app] { app.back(); }},
                   },
               // Nothing creates an overlay for you. One here, directly under the
               // root, is what the pause panel is inserted into.

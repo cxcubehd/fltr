@@ -68,6 +68,19 @@ WidgetRef menuButton(const Theme& theme, const MenuButtonSpec& spec) {
                }));
 }
 
+WidgetRef backButton(const Theme& theme, fltr::Callback<void()> onPressed) {
+  return fltr::ConstrainedBox::make({
+      .constraints = {.maxWidth = 128.0f},
+      .child = menuButton(theme,
+                          {
+                              .key = fltr::Key::of("nav.back"),
+                              .label = "Back",
+                              .trailing = "ESC",
+                              .onPressed = onPressed,
+                          }),
+  });
+}
+
 WidgetRef listCard(const Theme& theme, const MenuButtonSpec& spec, std::string_view blurb) {
   TextStyle trailing = labelStyle(theme);
   if (!spec.enabled) trailing.color = theme.textFaint;

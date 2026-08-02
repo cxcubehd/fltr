@@ -3,6 +3,7 @@
 #include "fltr/widgets/basic.hpp"
 #include "fltr/widgets/reactive.hpp"
 #include "app/app.hh"
+#include "ui/widgets/menu_button.hh"
 #include "ui/widgets/panel.hh"
 #include "ui/widgets/slider_row.hh"
 #include "ui/widgets/toggle_row.hh"
@@ -98,7 +99,7 @@ WidgetRef settingsScreen(App& app, const Theme& theme) {
               {
                   Row::make({
                       .children = {title(theme, "Settings"), spacer(),
-                                   label(theme, "BACKSPACE TO GO BACK")},
+                                   backButton(theme, [&app] { app.back(); })},
                   }),
                   divider(theme),
                   // Only this subtree is rebuilt when a setting changes: the

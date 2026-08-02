@@ -27,4 +27,8 @@ fltr::WidgetRef menuButton(const Theme& theme, const MenuButtonSpec& spec);
 /// The same behaviour with a taller, two-line body, used by level select.
 fltr::WidgetRef listCard(const Theme& theme, const MenuButtonSpec& spec, std::string_view blurb);
 
+/// The header control every screen below the main menu carries: the same action
+/// Escape performs, so the way back is visible and not only remembered.
+fltr::WidgetRef backButton(const Theme& theme, fltr::Callback<void()> onPressed);
+
 }  // namespace demo

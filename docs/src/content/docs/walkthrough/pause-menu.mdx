@@ -180,20 +180,25 @@ with a different headline and a different verb on one button. Nothing else chang
 ## The Escape key
 
 ```cpp title="docs/demo/src/app/app.cc"
-void App::togglePause() {
+void App::back() {
   if (screen_.value() != Screen::Playing) {
-    // Escape outside gameplay means "back", not "pause".
-    goTo(screen_.value() == Screen::MainMenu ? Screen::MainMenu : Screen::MainMenu);
+    goTo(Screen::MainMenu);
     return;
   }
-  // A finished run cannot be un-paused: its panel is the result screen.
-  if (session_.outcome.value() != Outcome::Flying) return;
-  setPaused(!paused_.value());
+  // A run that is over has no state left to return to, so its panel leads back
+  // to the level list rather than into a paused field.
+  if (session_.outcome.value() != Outcome::Flying) {
+    abandonRun();
+    goTo(Screen::LevelSelect);
+    return;
+  }
+  togglePause();
 }
 ```
 
 One registration at the root, meaning resolved from app state. A finished run's
-panel is the result screen, so Escape does not dismiss it.
+panel is the result screen rather than a paused field, so Escape leaves for the
+level list instead of resuming.
 
 ## Stopping the world behind it
 

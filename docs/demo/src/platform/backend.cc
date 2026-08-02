@@ -22,14 +22,79 @@ Rectangle toRectangle(Rect r) noexcept {
   return Rectangle{r.left, r.top, r.width(), r.height()};
 }
 
-/// raylib takes one roundness for the whole rectangle, as a fraction of half its
-/// shorter side, while fltr carries four corners with independent x and y radii.
-/// The top-left x radius is used for all four; the demo never asks for more, and
-/// the mismatch is recorded rather than hidden.
-float roundnessFor(const BorderRadius& radius, Rect bounds) noexcept {
-  const float half = std::min(bounds.width(), bounds.height()) * 0.5f;
-  if (half <= 0.0f) return 0.0f;
-  return std::clamp(radius.topLeft.x / half, 0.0f, 1.0f);
+/// The four corner radii actually drawable inside `bounds`.
+///
+/// fltr carries independent x and y radii per corner and this backend draws
+/// circular arcs, so the x radius is the one that survives. Neighbouring corners
+/// that would overlap are scaled down together, the way CSS does it, so an
+/// oversized radius never turns an edge inside out.
+struct Corners {
+  float topLeft = 0.0f;
+  float topRight = 0.0f;
+  float bottomRight = 0.0f;
+  float bottomLeft = 0.0f;
+};
+
+Corners cornersFor(const BorderRadius& radius, Rect bounds) noexcept {
+  Corners corners{radius.topLeft.x, radius.topRight.x, radius.bottomRight.x, radius.bottomLeft.x};
+
+  float scale = 1.0f;
+  const auto fit = [&scale](float sum, float extent) {
+    if (sum > extent) scale = std::min(scale, extent / sum);
+  };
+  fit(corners.topLeft + corners.topRight, bounds.width());
+  fit(corners.bottomLeft + corners.bottomRight, bounds.width());
+  fit(corners.topLeft + corners.bottomLeft, bounds.height());
+  fit(corners.topRight + corners.bottomRight, bounds.height());
+
+  return {std::max(0.0f, corners.topLeft * scale), std::max(0.0f, corners.topRight * scale),
+          std::max(0.0f, corners.bottomRight * scale), std::max(0.0f, corners.bottomLeft * scale)};
+}
+
+Corners inset(Corners corners, float amount) noexcept {
+  const auto shrink = [amount](float radius) { return std::max(0.0f, radius - amount); };
+  return {shrink(corners.topLeft), shrink(corners.topRight), shrink(corners.bottomRight),
+          shrink(corners.bottomLeft)};
+}
+
+float largest(Corners corners) noexcept {
+  return std::max(std::max(corners.topLeft, corners.topRight),
+                  std::max(corners.bottomRight, corners.bottomLeft));
+}
+
+/// Points along one 90-degree corner. The same count is used for every corner of
+/// an outline so that an outer and an inner outline pair up vertex for vertex.
+int arcSteps(float radius) noexcept {
+  return std::clamp(static_cast<int>(std::ceil(radius * 0.9f)), 3, 20);
+}
+
+/// Wound the way raylib winds its own shapes -- down the left side, along the
+/// bottom, up the right -- because backface culling is on and the batch does not
+/// care which of the two triangles it is looking at.
+void buildOutline(std::vector<Vector2>& out, Rect bounds, Corners corners, int steps) {
+  struct Arc {
+    float cx, cy, radius, startDegrees;
+  };
+  const Arc arcs[4] = {
+      {bounds.left + corners.topLeft, bounds.top + corners.topLeft, corners.topLeft, 270.0f},
+      {bounds.left + corners.bottomLeft, bounds.bottom - corners.bottomLeft, corners.bottomLeft,
+       180.0f},
+      {bounds.right - corners.bottomRight, bounds.bottom - corners.bottomRight,
+       corners.bottomRight, 90.0f},
+      {bounds.right - corners.topRight, bounds.top + corners.topRight, corners.topRight, 360.0f},
+  };
+
+  const float step = 90.0f / static_cast<float>(steps);
+
+  out.clear();
+  out.reserve(static_cast<std::size_t>(4 * (steps + 1)));
+  for (const Arc& arc : arcs) {
+    for (int i = 0; i <= steps; ++i) {
+      const float radians = (arc.startDegrees - step * static_cast<float>(i)) * DEG2RAD;
+      out.push_back(Vector2{arc.cx + std::cos(radians) * arc.radius,
+                            arc.cy + std::sin(radians) * arc.radius});
+    }
+  }
 }
 
 }  // namespace
@@ -84,6 +149,36 @@ void Backend::pushClip(Rect rect) {
 void Backend::popClip() {
   clips_.pop_back();
   applyClip();
+}
+
+void Backend::fillRounded(Rect bounds, const BorderRadius& radius, ::Color color) {
+  const Corners corners = cornersFor(radius, bounds);
+  buildOutline(outline_, bounds, corners, arcSteps(largest(corners)));
+  DrawTriangleFan(outline_.data(), static_cast<int>(outline_.size()), color);
+}
+
+void Backend::strokeRounded(Rect bounds, const BorderRadius& radius, float width, ::Color color) {
+  const Corners corners = cornersFor(radius, bounds);
+  const float thickness = std::min(width, std::min(bounds.width(), bounds.height()) * 0.5f);
+  const int steps = arcSteps(largest(corners));
+
+  buildOutline(outline_, bounds, corners, steps);
+  buildOutline(innerOutline_,
+               Rect::fromLTRB(bounds.left + thickness, bounds.top + thickness,
+                              bounds.right - thickness, bounds.bottom - thickness),
+               inset(corners, thickness), steps);
+
+  // One closed strip rather than four arcs and four edges: the ring has no seam
+  // to leave a gap or a double-blended overlap at.
+  ring_.clear();
+  ring_.reserve(outline_.size() * 2u + 2u);
+  for (std::size_t i = 0; i < outline_.size(); ++i) {
+    ring_.push_back(innerOutline_[i]);
+    ring_.push_back(outline_[i]);
+  }
+  ring_.push_back(innerOutline_.front());
+  ring_.push_back(outline_.front());
+  DrawTriangleStrip(ring_.data(), static_cast<int>(ring_.size()), color);
 }
 
 void Backend::submit(const Scene& scene) {
@@ -144,21 +239,23 @@ void Backend::run(const DisplayList& list, Offset origin) {
 
       case PaintOp::DrawRRect: {
         const Rect bounds = cmd.drawRRect.rect;
-        const Rectangle rec = toRectangle(bounds);
-        const float roundness = roundnessFor(cmd.drawRRect.radius, bounds);
+        if (bounds.isEmpty()) break;
+        const bool rounded = !cmd.drawRRect.radius.isZero();
+
         if (cmd.drawRRect.fill.a > 0) {
-          if (roundness <= 0.0f) {
-            DrawRectangleRec(rec, tinted(cmd.drawRRect.fill));
+          if (rounded) {
+            fillRounded(bounds, cmd.drawRRect.radius, tinted(cmd.drawRRect.fill));
           } else {
-            DrawRectangleRounded(rec, roundness, 8, tinted(cmd.drawRRect.fill));
+            DrawRectangleRec(toRectangle(bounds), tinted(cmd.drawRRect.fill));
           }
         }
         if (cmd.drawRRect.borderWidth > 0.0f && cmd.drawRRect.border.a > 0) {
-          if (roundness <= 0.0f) {
-            DrawRectangleLinesEx(rec, cmd.drawRRect.borderWidth, tinted(cmd.drawRRect.border));
+          if (rounded) {
+            strokeRounded(bounds, cmd.drawRRect.radius, cmd.drawRRect.borderWidth,
+                          tinted(cmd.drawRRect.border));
           } else {
-            DrawRectangleRoundedLinesEx(rec, roundness, 8, cmd.drawRRect.borderWidth,
-                                        tinted(cmd.drawRRect.border));
+            DrawRectangleLinesEx(toRectangle(bounds), cmd.drawRRect.borderWidth,
+                                 tinted(cmd.drawRRect.border));
           }
         }
         break;

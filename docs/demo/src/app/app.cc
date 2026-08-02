@@ -12,14 +12,21 @@ namespace demo {
 
 namespace {
 
-/// Tried in order. The bundled asset first, then two monospace faces that ship
-/// with most Linux distributions, then raylib's built-in font -- so the demo
-/// looks right on a machine that has none of them, without a binary in the repo.
+/// Tried in order: an override dropped into `assets/`, the JetBrains Mono the
+/// build fetched, then monospace faces common enough to be worth a look on a
+/// machine building without a network. `RaylibTextService` falls back to
+/// raylib's built-in font if none of them exists.
 constexpr const char* kFontPaths[] = {
     DEMO_ASSET_DIR "/JetBrainsMono-Regular.ttf",
+    DEMO_FONT_FILE,
     "/usr/share/fonts/truetype/jetbrains-mono/JetBrainsMono-Regular.ttf",
+    "/usr/share/fonts/jetbrains-mono-fonts/JetBrainsMono-Regular.ttf",
     "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+    "/usr/share/fonts/dejavu-sans-mono-fonts/DejaVuSansMono.ttf",
     "/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf",
+    "/usr/share/fonts/liberation-mono/LiberationMono-Regular.ttf",
+    "/System/Library/Fonts/Menlo.ttc",
+    "C:/Windows/Fonts/consola.ttf",
 };
 
 }  // namespace
@@ -90,14 +97,25 @@ void App::setPaused(bool paused) {
 }
 
 void App::togglePause() {
-  if (screen_.value() != Screen::Playing) {
-    // Escape outside gameplay means "back", not "pause".
-    goTo(screen_.value() == Screen::MainMenu ? Screen::MainMenu : Screen::MainMenu);
-    return;
-  }
+  if (screen_.value() != Screen::Playing) return;
   // A finished run cannot be un-paused: its panel is the result screen.
   if (session_.outcome.value() != Outcome::Flying) return;
   setPaused(!paused_.value());
+}
+
+void App::back() {
+  if (screen_.value() != Screen::Playing) {
+    goTo(Screen::MainMenu);
+    return;
+  }
+  // A run that is over has no state left to return to, so its panel leads back
+  // to the level list rather than into a paused field.
+  if (session_.outcome.value() != Outcome::Flying) {
+    abandonRun();
+    goTo(Screen::LevelSelect);
+    return;
+  }
+  togglePause();
 }
 
 void App::applyGraphics(const GraphicsSettings& settings) {
@@ -130,6 +148,16 @@ void App::refreshDebugText() {
                 backend_->lastCommandCount());
 }
 
+void App::scrollLevelList() {
+  const fltr::Size surface = window_.surface();
+  const fltr::Offset centre{surface.width * 0.5f, surface.height * 0.5f};
+  binding_->dispatchSignal(fltr::PointerSignalEvent{.kind = fltr::PointerSignalKind::Scroll,
+                                                    .pointer = 1,
+                                                    .position = centre,
+                                                    .localPosition = centre,
+                                                    .delta = {0.0f, 96.0f}});
+}
+
 void App::runScript(int frame) {
   // A fixed sequence through every screen, so the smoke run exercises the same
   // code a player would and does it the same way every time.
@@ -138,9 +166,16 @@ void App::runScript(int frame) {
     case 10: goTo(Screen::Settings); break;
     case 30: applyGraphics({.fullscreen = false, .vsync = false, .maxFps = 60}); break;
     case 45: goTo(Screen::LevelSelect); break;
+    case 55: scrollLevelList(); break;
+    case 68:
+      // Sampled while the list is still mounted: its controller lets go of the
+      // position the moment the screen changes.
+      scrolled_ = levelScroll_.positionOrNull() != nullptr ? levelScroll_.positionOrNull()->pixels()
+                                                           : 0.0f;
+      break;
     case 70: startLevel(0); break;
-    case 200: togglePause(); break;
-    case 240: togglePause(); break;
+    case 200: back(); break;
+    case 240: back(); break;
     case 270: abandonRun(); goTo(Screen::MainMenu); break;
     default: break;
   }
@@ -204,6 +239,11 @@ int App::run() {
 
   if (worstPasses > 1) {
     std::printf("FAIL: layout did not converge in one pass (worst = %d)\n", worstPasses);
+    ok = false;
+  }
+
+  if (scrolled_ <= 0.0f) {
+    std::printf("FAIL: a wheel notch over the level list moved it nowhere\n");
     ok = false;
   }
 

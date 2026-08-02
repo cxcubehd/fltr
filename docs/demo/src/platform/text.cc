@@ -29,6 +29,13 @@ struct Token {
 
 bool isSpace(char c) noexcept { return c == ' ' || c == '\t'; }
 
+/// Rasterisation sizes are clamped so that a nonsense style cannot ask for a
+/// gigabyte of atlas, and the baseline ratio is read from a size in the middle
+/// of that range where the hinting is representative.
+constexpr int kMinSize = 6;
+constexpr int kMaxSize = 128;
+constexpr float kReferenceSize = 32.0f;
+
 /// A run under construction: which span it came from and how much of it is on
 /// the current line so far.
 struct PendingRun {
@@ -40,31 +47,52 @@ struct PendingRun {
 
 }  // namespace
 
-RaylibTextService::RaylibTextService(std::span<const char* const> fontPaths, int atlasSize) {
+RaylibTextService::RaylibTextService(std::span<const char* const> fontPaths) {
   for (const char* path : fontPaths) {
-    if (path == nullptr || !FileExists(path)) continue;
-    font_ = LoadFontEx(path, atlasSize, nullptr, 0);
-    ownsFont_ = font_.glyphCount > 0;
-    if (ownsFont_) break;
+    if (path != nullptr && FileExists(path)) {
+      fontFile_ = path;
+      break;
+    }
   }
-  if (!ownsFont_) font_ = GetFontDefault();
 
   // The baseline is derived from the font rather than guessed: raylib places a
   // glyph at `offsetY` below the line top, so the bottom of a capital letter is
   // where the baseline sits. fltr's placeholder service hardcodes this ratio and
   // says so; a real one should not.
-  const int index = GetGlyphIndex(font_, 'H');
-  if (index >= 0 && index < font_.glyphCount && font_.baseSize > 0) {
-    const float top = static_cast<float>(font_.glyphs[index].offsetY);
-    const float height = font_.recs[index].height;
-    ascentRatio_ = (top + height) / static_cast<float>(font_.baseSize);
+  const Font reference = fontFor(kReferenceSize);
+  const int index = GetGlyphIndex(reference, 'H');
+  if (index >= 0 && index < reference.glyphCount && reference.baseSize > 0) {
+    const float top = static_cast<float>(reference.glyphs[index].offsetY);
+    const float height = reference.recs[index].height;
+    ascentRatio_ = (top + height) / static_cast<float>(reference.baseSize);
   }
 
   slots_.reserve(64);
 }
 
 RaylibTextService::~RaylibTextService() {
-  if (ownsFont_) UnloadFont(font_);
+  for (const Atlas& atlas : atlases_) {
+    if (atlas.owned) UnloadFont(atlas.font);
+  }
+}
+
+Font RaylibTextService::fontFor(float size) const {
+  const int pixels = std::clamp(static_cast<int>(std::lround(size)), kMinSize, kMaxSize);
+  for (const Atlas& atlas : atlases_) {
+    if (atlas.pixels == pixels) return atlas.font;
+  }
+
+  Atlas atlas{.pixels = pixels, .font = {}, .owned = !fontFile_.empty()};
+  if (atlas.owned) atlas.font = LoadFontEx(fontFile_.c_str(), pixels, nullptr, 0);
+  if (atlas.font.glyphCount <= 0) {
+    atlas.font = GetFontDefault();
+    atlas.owned = false;
+  }
+  // Glyphs are drawn at the size they were rasterised at, so this only matters
+  // for the built-in fallback and for a style that lands between two sizes --
+  // but when resampling does happen, smooth beats blocky.
+  SetTextureFilter(atlas.font.texture, TEXTURE_FILTER_BILINEAR);
+  return atlases_.emplace_back(atlas).font;
 }
 
 float RaylibTextService::ascent(const TextStyle& style) const noexcept {
@@ -75,7 +103,8 @@ float RaylibTextService::measure(const TextStyle& style, const char* text,
                                  std::size_t length) const {
   if (length == 0) return 0.0f;
   scratch_.assign(text, length);
-  const Vector2 size = MeasureTextEx(font_, scratch_.c_str(), style.size, style.letterSpacing);
+  const Vector2 size =
+      MeasureTextEx(fontFor(style.size), scratch_.c_str(), style.size, style.letterSpacing);
   return size.x;
 }
 
@@ -330,9 +359,10 @@ void RaylibTextService::draw(ParagraphHandle handle, Offset origin, Color tint) 
 
     // raylib positions text by the top-left of its line box, which is exactly
     // what a `PositionedRun` offset is, so no baseline arithmetic is needed here.
-    DrawTextEx(font_, scratch_.c_str(),
-               Vector2{origin.dx + run.offset.dx, origin.dy + run.offset.dy}, style.size,
-               style.letterSpacing, colour);
+    // Rounding to whole pixels keeps a glyph on the texel grid it was rasterised
+    // on, which is the difference between a crisp stem and a grey one.
+    const Vector2 at{std::round(origin.dx + run.offset.dx), std::round(origin.dy + run.offset.dy)};
+    DrawTextEx(fontFor(style.size), scratch_.c_str(), at, style.size, style.letterSpacing, colour);
   }
 }
 

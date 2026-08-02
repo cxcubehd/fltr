@@ -20,9 +20,16 @@ void App::runScript(int frame) {
     case 10: goTo(Screen::Settings); break;
     case 30: applyGraphics({.fullscreen = false, .vsync = false, .maxFps = 60}); break;
     case 45: goTo(Screen::LevelSelect); break;
+    case 55: scrollLevelList(); break;
+    case 68:
+      // Sampled while the list is still mounted: its controller lets go of the
+      // position the moment the screen changes.
+      scrolled_ = levelScroll_.positionOrNull() != nullptr ? levelScroll_.positionOrNull()->pixels()
+                                                           : 0.0f;
+      break;
     case 70: startLevel(0); break;
-    case 200: togglePause(); break;
-    case 240: togglePause(); break;
+    case 200: back(); break;
+    case 240: back(); break;
     case 270: abandonRun(); goTo(Screen::MainMenu); break;
     default: break;
   }
@@ -36,7 +43,8 @@ void App::runScript(int frame) {
 ```
 
 Every screen, both page-transition directions, a settings change that reaches the
-window, a real flight with thrust and shooting, a pause and an un-pause.
+window, a wheel notch that has to move the level list, a real flight with thrust
+and shooting, a pause and an un-pause.
 
 It is deterministic because of one line from [step 1](/fltr/walkthrough/skeleton/):
 

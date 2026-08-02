@@ -103,8 +103,7 @@ Flutter's `SingleActivator` follows.
 ```cpp
 Shortcuts::make({
   .shortcuts = {
-    {.stroke = KeyStroke{.key = LogicalKey::Escape},    .onInvoke = [&] { app.togglePause(); }},
-    {.stroke = KeyStroke{.key = LogicalKey::Backspace}, .onInvoke = [&] { app.goBack(); }},
+    {.stroke = KeyStroke{.key = LogicalKey::Escape}, .onInvoke = [&] { app.back(); }},
   },
   .child = screen,
 })

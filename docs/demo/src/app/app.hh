@@ -71,6 +71,11 @@ public:
   void abandonRun();
   void setPaused(bool paused);
   void togglePause();
+
+  /// Escape, everywhere. Gameplay pauses, a pause panel closes, any other screen
+  /// returns to the one that opened it, and the main menu is the floor -- the
+  /// demo is never left by pressing a navigation key.
+  void back();
   void quit() noexcept { quitting_ = true; }
   bool quitting() const noexcept { return quitting_; }
 
@@ -94,6 +99,9 @@ private:
   void attachUi();
   void formatMaxFps();
   void runScript(int frame);
+  /// A synthetic wheel notch over the level list, so the smoke run proves the
+  /// list scrolls rather than merely showing a scrollbar.
+  void scrollLevelList();
   bool verifyIdleCostsNothing();
 
   Options options_;
@@ -118,6 +126,7 @@ private:
 
   bool quitting_ = false;
   ShipInput scripted_;
+  float scrolled_ = 0.0f;
   char maxFpsText_[16] = "144";
   char debugText_[96] = "";
 };

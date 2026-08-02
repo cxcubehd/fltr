@@ -22,16 +22,17 @@ namespace demo {
 /// glyph metrics. It is not a shaper -- no bidi, no clusters, no ellipsis -- and
 /// the places where it stops are exactly the places the interface says a real
 /// implementation would keep going.
+///
+/// Glyphs are rasterised once per pixel size that the UI asks for, rather than
+/// once at some atlas size and scaled: a downscaled atlas is the difference
+/// between text that is legible at 12px and text that is a smear.
 class RaylibTextService final : public fltr::TextService {
 public:
-  /// `atlasSize` is the pixel size the glyph atlas is rasterised at; text drawn
-  /// much larger than it will look soft.
-  ///
   /// The paths are tried in order and the first that loads wins, ending with
   /// raylib's built-in bitmap font. Falling back rather than failing is the
   /// point of the boundary: nothing above `TextService` can tell which font it
   /// got, or whether one was found at all.
-  explicit RaylibTextService(std::span<const char* const> fontPaths, int atlasSize = 48);
+  explicit RaylibTextService(std::span<const char* const> fontPaths);
   ~RaylibTextService() override;
 
   RaylibTextService(const RaylibTextService&) = delete;
@@ -61,13 +62,24 @@ private:
     fltr::ParagraphMetrics metrics;
   };
 
+  /// A glyph atlas rasterised for one pixel size. `owned` is false for raylib's
+  /// built-in font, which belongs to raylib and must not be unloaded here.
+  struct Atlas {
+    int pixels = 0;
+    Font font{};
+    bool owned = false;
+  };
+
+  /// The atlas for a style, rasterised on first use and kept for the lifetime of
+  /// the service. A UI asks for a handful of sizes, so the cache stays small.
+  Font fontFor(float size) const;
   float measure(const fltr::TextStyle& style, const char* text, std::size_t length) const;
   float ascent(const fltr::TextStyle& style) const noexcept;
   Slot& slotFor(fltr::ParagraphHandle handle);
   const Slot& slotFor(fltr::ParagraphHandle handle) const;
 
-  Font font_{};
-  bool ownsFont_ = false;
+  std::string fontFile_;
+  mutable std::vector<Atlas> atlases_;
   float ascentRatio_ = 0.78f;
   std::size_t live_ = 0;
   std::vector<Slot> slots_;

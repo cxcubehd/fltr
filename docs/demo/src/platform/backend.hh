@@ -40,6 +40,13 @@ private:
   void popClip();
   void applyClip() const;
 
+  /// raylib's own rounded rectangles take a single roundness for all four
+  /// corners and leave a seam where the border ring meets itself, so the
+  /// geometry is built here instead: one outline, four independent radii.
+  void fillRounded(fltr::Rect bounds, const fltr::BorderRadius& radius, ::Color color);
+  void strokeRounded(fltr::Rect bounds, const fltr::BorderRadius& radius, float width,
+                     ::Color color);
+
   ::Color tinted(fltr::Color color) const noexcept;
 
   RaylibTextService& text_;
@@ -56,6 +63,11 @@ private:
   fltr::Transform2D transform_;
   std::vector<fltr::Transform2D> transforms_;
   std::vector<Group> groups_;
+
+  /// Reused every frame so that a rounded rectangle costs no allocation.
+  std::vector<Vector2> outline_;
+  std::vector<Vector2> innerOutline_;
+  std::vector<Vector2> ring_;
 
   std::size_t commands_ = 0;
 };

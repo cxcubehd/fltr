@@ -13,6 +13,9 @@ constexpr LevelDef kLevels[] = {
     {"Trojan Gap", "Eight rocks on crossing courses.", 8, 68.0f, 700},
     {"The Scatter", "Ten rocks, no room to coast.", 10, 88.0f, 1600},
     {"Perihelion", "Twelve rocks at speed.", 12, 112.0f, 3000},
+    {"Oort Drift", "Fourteen rocks and a long fall.", 14, 128.0f, 4800},
+    {"Roche Limit", "Sixteen rocks, tightly packed.", 16, 146.0f, 7000},
+    {"Terminator", "Eighteen rocks. Nothing forgiving.", 18, 168.0f, 9500},
 };
 
 }  // namespace
