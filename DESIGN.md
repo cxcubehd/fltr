@@ -2219,3 +2219,258 @@ wants its own hover trips it rather than losing it.
 Verified on GCC 13.3 and Clang 18.1 with zero warnings under `-Wall -Wextra
 -Wpedantic -Wshadow -Wnon-virtual-dtor`, and under ASan + UBSan: 344 tests,
 1945 checks. The library also compiles clean with `FLTR_ENABLE_CHECKS=OFF`.
+
+## Milestone 13 — overlay and portals
+
+An `Overlay` is a base subtree with entries drawn above it: tooltips, dropdowns,
+context menus, and the ghost drag-and-drop will want. Entries are inserted from
+anywhere below, painted after the base and — because hit testing walks children
+in reverse — offered the pointer before it.
+
+### The base decides the layout, and nothing else does
+
+`RenderOverlay` is deliberately not a `RenderStack`. Child zero is the base and
+alone decides the size; entries are laid out inside that size and never
+measured, so however large an entry is, the tree it covers is laid out exactly
+as it would have been without the overlay. A stack would size to the union of
+its children, which for an overlay is the wrong answer in the one case it
+matters: a menu opening must not move the screen behind it.
+
+The stated consequence of laying entries out against the base's size rather
+than the incoming constraints: an entry can be as large as the overlay and no
+larger. For an overlay at the root — where every one of them belongs — that is
+the surface, which is what a full-screen menu wants anyway.
+
+The positioned-child arithmetic is shared with the stack rather than copied:
+`Positioned` means the same thing inside both, and only the question of what
+decides the container's own size differs.
+
+### An entry is consumer-owned, and both teardown orders are safe
+
+An `OverlayEntry` follows the rule every controller in this framework follows:
+it belongs to whatever decided to show something — usually a `State` — and is
+named by pointer. What is new is that the pointer goes both ways, because the
+overlay has to hold a list of them. So the link is symmetric and each end
+clears the other: destroying an inserted entry removes it from the overlay, and
+an overlay unmounting lets go of every entry it held. Both directions were
+confirmed by reverting the clearing and watching ASan report the use-after-free.
+
+The subscription-as-liveness-token used for focus nodes and scroll positions
+would not have helped here: list membership needs the list either way, and once
+there is a list, the back-pointer that keeps it honest is the whole mechanism.
+
+An entry gets a fresh identity on each insertion, so one taken out and put back
+builds a new subtree rather than resuming the State it had — which is what
+removal means everywhere else in this framework.
+
+### Inserting costs the overlay a build and nothing else
+
+The overlay rebuilds when an entry is inserted, and re-emits the same child ref
+it emitted before. By then that ref is *stale*: the arena that made it has been
+released. `updateChild` already treats a stale ref as "the configuration this
+child already holds, so skip the subtree entirely", so showing a menu does not
+rebuild, reconcile or otherwise disturb the tree underneath it.
+
+That property was designed in phase one for a different reason — an element
+that rebuilds alone re-emits the child ref it stored — and it turns out to be
+exactly what an overlay needs. M14 rests on the same sentence.
+
+Each entry builds behind its own element, so an entry asking to rebuild
+rebuilds itself and nothing else: one dirty element, measured as one.
+
+### A host names its entry by id, not by pointer
+
+The obvious shape -- the host widget holds an `OverlayEntry*` -- has a
+use-after-free in it, and finding it is what this milestone paid for.
+
+The base is child zero and is reconciled before the entries. If whatever owns an
+entry lives in the base and is removed, its `State` is disposed *and destroyed*
+part way through `ChildList::update`, and reconciliation then walks on to that
+entry's host and rebuilds it. The host would call `build` on an entry that died
+moments earlier in the same build. Nobody broke a rule to get there: the widget
+was created while the entry was alive.
+
+So the host names an id and looks it up in the overlay each time. An id cannot
+dangle, the overlay is an ancestor and therefore outlives every host below it,
+and an entry that has gone simply is not found -- the host builds a zero-sized
+placeholder for the rest of that frame, because a container's child still owes
+it a render object, and the overlay's own rebuild (already scheduled by the
+removal) discards it later in the same frame. The test that found this reports a
+heap-use-after-free under ASan against the pointer-shaped version.
+
+`WidgetList::generate` is the one addition the framework needed. A braced list
+cannot express "one child per entry", and both this milestone and the next want
+a list whose length is decided at build time. It reserves its array in the
+arena before filling it, which a bump allocator makes safe.
+
+### Nothing creates an overlay for you
+
+A tree with no `Overlay` in it holds no entries, no scope and no extra render
+object, exactly as a tree with no `FocusScope` holds no focus nodes. `Overlay::
+of` is null there, and a widget written to show something works — showing
+nothing — in a tree that has nowhere to show it.
+
+### Anchoring: size at layout, position at paint
+
+`AnchorLink` is one more consumer-owned object shared by two subtrees: the
+`Anchor` marking a target and the `Anchored` entry hanging from it.
+
+The interesting decision is *when* the entry's position is resolved.
+`RenderAnchored` fills the overlay, gives its child a size during layout, and
+computes where that child goes during **paint**. Paint is the only phase in
+which every ancestor offset between the entry and the root is final — during
+layout a parent has not yet placed the box currently laying itself out, so a
+position resolved there can be one frame stale. The cost of the choice, stated:
+the child's size cannot depend on where it lands, so "fit the dropdown into the
+space below the anchor" is not expressible. Nothing needs it yet.
+
+### DIVERGENCE: an anchored entry follows a repaint, not a movement
+
+Flutter's `CompositedTransformFollower` tracks its leader through the layer
+tree, so it follows anything — including a leader that moved because something
+scrolled. We deliberately have no compositing layer tree (workstream L), so an
+entry re-places itself when it repaints, and what makes it repaint is either
+its own boundary re-recording or the link saying it moved. `RenderAnchor` says
+so whenever it lays out, which covers a menu opening, a control resizing, and
+the surface changing.
+
+What it does not cover is an anchor that moved *without* laying out: scrolling
+moves by painting, and an ancestor can re-place a child whose own constraints
+did not change. `AnchorLink::markMoved` is the whole remedy, costs one repaint,
+and is one line in a scroll listener. The test asserts both halves — that the
+entry stays put, and that saying so puts it right — rather than pretending the
+gap is not there.
+
+`keepOnScreen` is on by default, because a menu opened near an edge hanging
+half off it is never what was wanted.
+
+### What is verified
+
+`tests/test_overlay.cpp`, 20 tests:
+
+- An entry paints after the base and is offered the pointer before it, while
+  the base still answers everywhere the entry is not.
+- An entry larger than the base leaves the base's size alone — confirmed by
+  giving the overlay stack semantics and watching the test catch it.
+- Entries stack in insertion order, and re-inserting one puts it on top.
+- A `Positioned` entry is placed by its insets, which is the same arithmetic a
+  stack does and the same code.
+- With no overlay above, the lookup is null and no scope is in the tree.
+- Inserting an entry rebuilds neither the tree below nor the other entries, and
+  an entry asking to rebuild is exactly one dirty element.
+- A steady frame with an overlay builds nothing, records nothing and allocates
+  nothing.
+- Removing an entry disposes its subtree; destroying an inserted entry removes
+  it; an entry outliving its overlay is let go of rather than left naming a
+  State that is gone.
+- An anchored entry hangs from its anchor's rectangle, is placed by whichever
+  sides it was given, and is clamped back on screen.
+- An anchor inside its own repaint boundary still reports where it is —
+  confirmed by removing the notification and watching this one test fail.
+- An anchor moved without laying out leaves its entry where it was, and
+  `markMoved` puts it right.
+- An entry with a focus scope of its own keeps the keyboard to itself, and
+  hands it back to the screen's scope when it closes -- M11's answer, reached
+  from an overlay.
+- An entry destroyed part way through the build that would have rebuilt it is
+  not called into -- the test that found the pointer-shaped host's
+  use-after-free, and still the one that would find it again.
+- A link destroyed under a live anchor and a live entry is read by neither.
+
+## Milestone 14 — exit animations
+
+The item `INSTRUCTIONS.md` warned about by name: "the element tree retains a
+removed subtree, still ticking, until its animation completes, which
+complicates reconciliation meaningfully."
+
+It complicated reconciliation not at all, and the reason is worth recording.
+
+### The mechanism was already there
+
+A `WidgetRef` carries its type and key by value and outlives the arena that
+made it. `updateChild` matches a stale ref against the element that already
+holds that configuration and skips the subtree entirely. That sentence *is*
+retention: `AnimatedSwitcher` keeps the ref of every subtree still on its way
+out, re-emits it in every build, and lets go only when that subtree's driver
+reaches zero. In between, the subtree is mounted, holds its `State`, holds its
+render objects, keeps its subscriptions, and keeps ticking — and is never
+rebuilt, because a stale ref means "unchanged".
+
+What makes it safe is the key. A stale ref that reached `inflate` would be a
+contract violation — the configuration behind it is gone and cannot be
+recovered — so every presence carries its own unique key, and reconciliation
+matches by key even when subtrees are added, removed or reordered around it.
+Reverting that single decision breaks seven tests, which is the right amount of
+noise for a load-bearing one.
+
+### DIVERGENCE: the element is retained, not the widget
+
+Flutter's `AnimatedSwitcher` retains the outgoing *widget* and rebuilds it
+inside the stack, which works because Dart widgets are garbage-collected and
+can be held indefinitely. Widget configurations here are arena scratch and
+cannot be held past the build that made them, so what is retained is the
+element, and the ref naming it is the handle. Same visible behaviour; the
+memory model forced the cheaper answer.
+
+### A subtree on its way out is inert
+
+A leaving subtree takes no pointer input, and nothing inside it can hold the
+focus. Both are corrections to Flutter, which leaves an outgoing child fully
+interactive: a button that can still be pressed while it fades, or a slider the
+arrows still reach, is the same family of bug as M12's disabled control that
+leaks a click.
+
+Both guards are always present and only their flag moves — M12's lesson,
+reused, and here it is not merely tidiness: inserting a guard at the moment a
+subtree starts leaving would change the shape of the tree, the stale ref would
+reach `inflate`, and the retention would trap instead of animating. The
+always-present guard is what makes exit animation possible at all.
+
+The focus half costs one `Focus` node per presence, which in a tree with no
+scope above costs nothing at all — M11's property, collected again.
+
+### Interruption re-enters rather than duplicating
+
+Coming back to a subtree that is still leaving re-enters *that* subtree, from
+wherever it had faded to, and moves it back on top. The alternative — a second
+subtree beside the first — would mean a panel toggled twice quickly has two
+copies of its State. Interruption is the common case, not an edge case, and
+`AnimationDriver::animateTo` already retargets from the current position, so
+this is one flag and a rotate.
+
+### Letting go happens in the build
+
+A driver settling at zero notifies from inside its own notification, with the
+subtree still mounted around the value that notified. So the presence is
+*marked* finished there and dropped at the top of the next build, where the
+same build then emits a list without it and reconciliation discards the
+subtree. Nothing paints or hit tests in between.
+
+The first child is simply there — a panel does not fade in because the screen
+it sits on appeared — which is Flutter's rule too. A muted subtree holds still:
+`TickerMode` mutes every live driver, so a hidden switcher keeps whatever it
+was showing and resumes when it is shown again.
+
+### What is verified
+
+`tests/test_switcher.cpp`, 12 tests:
+
+- The first child appears without animating and holds no ticker.
+- A swap retains the outgoing subtree at full presence, fades both, and
+  disposes the old one exactly when its animation reaches zero.
+- The retained subtree keeps ticking — a number it accumulated on its own after
+  it was removed — and stops when it is finally discarded.
+- The retained subtree is never rebuilt: the same State, one build, and zero
+  dirty elements per frame of the exit.
+- The same child newly configured is an update, not a swap.
+- A null child animates the last one out and leaves nothing.
+- Coming back halfway out re-enters the same subtree and reaches one again.
+- A leaving subtree takes no pointer — the tap lands on what is behind it — and
+  cannot hold the focus. Both confirmed by unsetting each guard in turn.
+- The transition belongs to the call site.
+- A muted switcher holds still and lets go of nothing.
+- A frame of exit animation builds nothing and allocates nothing.
+
+Verified on GCC 13.3 and Clang 18.1 with zero warnings under `-Wall -Wextra
+-Wpedantic -Wshadow -Wnon-virtual-dtor`, and under ASan + UBSan: 376 tests,
+2077 checks. The library also compiles clean with `FLTR_ENABLE_CHECKS=OFF`.

@@ -4,6 +4,47 @@
 
 namespace fltr {
 
+Offset layoutPositionedChild(RenderBox& child, const StackChildData& data, Size size,
+                             Alignment alignment) {
+  // Derive constraints from whichever edges were given.
+  float minW = 0.0f, maxW = kInf, minH = 0.0f, maxH = kInf;
+  if (data.left && data.right) {
+    minW = maxW = std::max(0.0f, size.width - *data.left - *data.right);
+  } else if (data.width) {
+    minW = maxW = std::max(0.0f, *data.width);
+  } else {
+    maxW = size.width;
+  }
+  if (data.top && data.bottom) {
+    minH = maxH = std::max(0.0f, size.height - *data.top - *data.bottom);
+  } else if (data.height) {
+    minH = maxH = std::max(0.0f, *data.height);
+  } else {
+    maxH = size.height;
+  }
+
+  child.layout(BoxConstraints{minW, maxW, minH, maxH}, true);
+  const Size childSize = child.size();
+
+  float x;
+  if (data.left) {
+    x = *data.left;
+  } else if (data.right) {
+    x = size.width - *data.right - childSize.width;
+  } else {
+    x = alignment.inscribe(childSize, size).dx;
+  }
+  float y;
+  if (data.top) {
+    y = *data.top;
+  } else if (data.bottom) {
+    y = size.height - *data.bottom - childSize.height;
+  } else {
+    y = alignment.inscribe(childSize, size).dy;
+  }
+  return {x, y};
+}
+
 void RenderStack::performResize() {
   FLTR_EXPECTS(constraints_.hasBoundedWidth() && constraints_.hasBoundedHeight(),
                "StackFit::Expand requires bounded constraints; there is nothing to expand into");
@@ -47,50 +88,10 @@ void RenderStack::performLayout() {
   for (std::size_t i = 0; i < n; ++i) {
     const StackChildData& d = children_[i].data;
     RenderBox& child = *children_[i].child;
-
-    if (!d.positioned) {
-      // Both branches above measured every non-positioned child, so the size is
-      // readable here.
-      setChildOffset(i, alignment_.inscribe(child.size(), size_));
-      continue;
-    }
-
-    // Positioned: derive constraints from whichever edges were given.
-    float minW = 0.0f, maxW = kInf, minH = 0.0f, maxH = kInf;
-    if (d.left && d.right) {
-      minW = maxW = std::max(0.0f, size_.width - *d.left - *d.right);
-    } else if (d.width) {
-      minW = maxW = std::max(0.0f, *d.width);
-    } else {
-      maxW = size_.width;
-    }
-    if (d.top && d.bottom) {
-      minH = maxH = std::max(0.0f, size_.height - *d.top - *d.bottom);
-    } else if (d.height) {
-      minH = maxH = std::max(0.0f, *d.height);
-    } else {
-      maxH = size_.height;
-    }
-
-    const Size childSize = layoutChildForSize(child, BoxConstraints{minW, maxW, minH, maxH});
-
-    float x;
-    if (d.left) {
-      x = *d.left;
-    } else if (d.right) {
-      x = size_.width - *d.right - childSize.width;
-    } else {
-      x = alignment_.inscribe(childSize, size_).dx;
-    }
-    float y;
-    if (d.top) {
-      y = *d.top;
-    } else if (d.bottom) {
-      y = size_.height - *d.bottom - childSize.height;
-    } else {
-      y = alignment_.inscribe(childSize, size_).dy;
-    }
-    setChildOffset(i, {x, y});
+    // Both branches above measured every non-positioned child, so its size is
+    // readable here.
+    setChildOffset(i, d.positioned ? layoutPositionedChild(child, d, size_, alignment_)
+                                   : alignment_.inscribe(child.size(), size_));
   }
 }
 

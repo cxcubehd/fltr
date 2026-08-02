@@ -87,6 +87,13 @@ public:
   /// and render object; anything else discards it and inflates afresh.
   bool canUpdate(const Widget& existing) const noexcept;
 
+  /// The same question between two refs, which is the one a ref held across
+  /// builds can still answer: the configuration behind it is gone, but the type
+  /// and key that decide reconciliation travelled with the ref.
+  bool canUpdate(WidgetRef other) const noexcept {
+    return other.type_ == type_ && other.key_ == key_;
+  }
+
   const Widget* get() const;
   const Widget* operator->() const { return get(); }
   const Widget& operator*() const { return *get(); }
@@ -112,6 +119,11 @@ class WidgetList {
 public:
   WidgetList() = default;
   WidgetList(std::initializer_list<WidgetRef> widgets);
+
+  /// The same list where the call site cannot spell its length -- an overlay's
+  /// entries, a switcher's live subtrees. `item` runs once per index and its
+  /// results are copied into the build arena, exactly as a braced list is.
+  static WidgetList generate(std::size_t count, FunctionRef<WidgetRef(std::size_t)> item);
 
   std::size_t size() const noexcept { return size_; }
   bool empty() const noexcept { return size_ == 0; }

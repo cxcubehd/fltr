@@ -29,6 +29,12 @@ struct StackChildData {
 
 static_assert(std::is_trivially_destructible_v<StackChildData>);
 
+/// Lays out and places one positioned child within a container of `size`.
+/// Shared by the stack and the overlay, which agree about what `Positioned`
+/// means and differ only in what decides their own size.
+Offset layoutPositionedChild(RenderBox& child, const StackChildData& data, Size size,
+                             Alignment alignment);
+
 class RenderStack final : public RenderBoxContainer<StackChildData> {
 public:
   explicit RenderStack(Alignment alignment = Alignment::topLeft(), StackFit fit = StackFit::Loose)
