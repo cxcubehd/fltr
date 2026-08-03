@@ -394,6 +394,26 @@ void setFullscreen(bool enter) {
 }
 ```
 
+It is also where Escape is claimed. A browser leaves fullscreen on Escape, and
+this interface goes back a screen on it; only one of them can have the key, and
+while the page *is* the screen it should be the interface. The Keyboard Lock API
+is what asks for it -- Chromium is the only engine that offers it, and the way
+out stays what the browser advertises, holding the key:
+
+```cpp title="docs/demo/src/platform/window.cc"
+EM_JS(void, holdEscape, (bool hold), {
+  if (!navigator.keyboard?.lock) return;
+  if (hold) {
+    navigator.keyboard.lock(['Escape']).catch(() => {});
+  } else {
+    navigator.keyboard.unlock();
+  }
+});
+```
+
+Held on the way in and released on the way out, from the same handler that tracks
+the flag -- so a fullscreen the demo never asked for releases the key too.
+
 Nothing there reports success, which is why `refresh` exists. It is called at the
 end of `apply` and again by the loop every frame, and it answers three questions
 the demo cannot infer: how large the drawing buffer should be, whether the

@@ -120,6 +120,30 @@ platform with a real event queue would dispatch from its callback and never touc
 this step.
 </Aside>
 
+Polling is also the step's one hazard, and a press is where it shows. raylib
+samples the mouse button once a frame and reports the edge it finds between two
+samples, so a press and a release that both land inside one frame cancel out and
+the click is never seen. A click is over in a few tens of milliseconds, which is
+about as long as a frame, so the browser's events are queued as they arrive and
+drained here instead:
+
+```cpp title="docs/demo/src/platform/input.cc"
+EM_BOOL accumulateButton(int type, const EmscriptenMouseEvent* event, void*) {
+  if (event->button != 0) return EM_FALSE;
+  const float ratio = static_cast<float>(emscripten_get_device_pixel_ratio());
+  buttons.push_back(
+      {.phase = type == EMSCRIPTEN_EVENT_MOUSEDOWN ? PointerPhase::Down : PointerPhase::Up,
+       .position = {static_cast<float>(event->targetX) * ratio,
+                    static_cast<float>(event->targetY) * ratio}});
+  return EM_FALSE;
+}
+```
+
+The position travels with the event because a click is long over by the frame
+that reports it. On a desktop the queue is filled from raylib's own edges, which
+a window redrawing in a millisecond does not miss -- the difference is one
+function, and `pumpPointer` above it dispatches a list either way.
+
 ### `stepSimulation`
 
 ```cpp title="docs/demo/src/app/loop.cc"

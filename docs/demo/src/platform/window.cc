@@ -5,6 +5,7 @@
 #include "raylib.h"
 
 #ifdef __EMSCRIPTEN__
+#include <emscripten/em_js.h>
 #include <emscripten/html5.h>
 #endif
 
@@ -21,8 +22,24 @@ namespace {
 /// taken from the event rather than inferred from what was last requested.
 bool canvasFullscreen = false;
 
+/// Escape is how a browser leaves fullscreen, and how this interface goes back a
+/// screen. Only one of them can have the key, and while the page is the whole
+/// screen it should be the interface: the way out is holding Escape, which the
+/// browser says so itself, or the entry that asked for fullscreen in the first
+/// place. Chromium is the only engine that offers the key at all; elsewhere the
+/// call is missing and Escape keeps meaning what the browser wants.
+EM_JS(void, holdEscape, (bool hold), {
+  if (!navigator.keyboard?.lock) return;
+  if (hold) {
+    navigator.keyboard.lock(['Escape']).catch(() => {});
+  } else {
+    navigator.keyboard.unlock();
+  }
+});
+
 EM_BOOL trackFullscreen(int, const EmscriptenFullscreenChangeEvent* event, void*) {
   canvasFullscreen = event->isFullscreen;
+  holdEscape(canvasFullscreen);
   return EM_FALSE;
 }
 

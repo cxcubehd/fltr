@@ -1,5 +1,7 @@
 #include "platform/input.hh"
 
+#include <vector>
+
 #include "raylib.h"
 
 #ifdef __EMSCRIPTEN__
@@ -59,7 +61,44 @@ constexpr KeyPair kKeys[] = {
     {KEY_Q, PhysicalKey::KeyQ, LogicalKey::KeyQ},
 };
 
+/// A press or a release, and where the pointer was when it happened. The
+/// position travels with the event because a click is over long before the frame
+/// that reports it, and by then the pointer may be somewhere else.
+struct ButtonEvent {
+  PointerPhase phase;
+  Offset position;
+};
+
+/// Everything the left button did since the last frame, oldest first.
+std::vector<ButtonEvent> buttons;
+
 #ifdef __EMSCRIPTEN__
+
+/// Presses and releases are taken from the browser rather than from raylib.
+///
+/// raylib samples the button once a frame and reports the edge it finds between
+/// two samples, so a press and a release that both land inside one frame cancel
+/// out: the click is never seen at all. A frame is however long the last one
+/// took, and a click -- a trackpad tap especially -- is over in a few tens of
+/// milliseconds, so that is not a rare case but a common one.
+EM_BOOL accumulateButton(int type, const EmscriptenMouseEvent* event, void*) {
+  // The left button is the only one the interface uses; the rest belong to the
+  // page, which is why nothing here reports the event as consumed.
+  if (event->button != 0) return EM_FALSE;
+
+  // `targetX` is measured in the page's pixels, from the corner of the canvas.
+  // The surface is measured in the display's, so it is the same conversion the
+  // wheel needs.
+  const float ratio = static_cast<float>(emscripten_get_device_pixel_ratio());
+  buttons.push_back(
+      {.phase = type == EMSCRIPTEN_EVENT_MOUSEDOWN ? PointerPhase::Down : PointerPhase::Up,
+       .position = {static_cast<float>(event->targetX) * ratio,
+                    static_cast<float>(event->targetY) * ratio}});
+  return EM_FALSE;
+}
+
+/// The browser filled the queue as the events arrived.
+void collectButtons(Offset) {}
 
 /// What the browser measured since the last frame took it, in CSS pixels.
 ///
@@ -98,6 +137,17 @@ Offset takeWheelDelta() {
 
 #else
 
+/// A desktop window redraws faster than a button can be pressed and released, so
+/// the edges raylib reports between two frames are the whole story.
+void collectButtons(Offset position) {
+  if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+    buttons.push_back({.phase = PointerPhase::Down, .position = position});
+  }
+  if (IsMouseButtonReleased(MOUSE_BUTTON_LEFT)) {
+    buttons.push_back({.phase = PointerPhase::Up, .position = position});
+  }
+}
+
 /// One notch, in the logical pixels the surface is measured in. Notches are all a
 /// desktop reports -- a trackpad's gesture has been resolved into them, fractions
 /// included, long before raylib sees it.
@@ -131,6 +181,8 @@ KeyModifiers currentModifiers() {
 Input::Input() {
 #ifdef __EMSCRIPTEN__
   emscripten_set_wheel_callback(EMSCRIPTEN_EVENT_TARGET_WINDOW, nullptr, EM_FALSE, accumulateWheel);
+  emscripten_set_mousedown_callback("#canvas", nullptr, EM_FALSE, accumulateButton);
+  emscripten_set_mouseup_callback("#canvas", nullptr, EM_FALSE, accumulateButton);
 #endif
 }
 
@@ -152,34 +204,35 @@ void Input::pumpPointer(fltr::WidgetBinding& binding) {
   const Vector2 mouse = GetMousePosition();
   const Offset position{mouse.x, mouse.y};
   const bool moved = position != lastPointer_;
+  const KeyModifiers modifiers = currentModifiers();
 
-  if (moved || IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) keyboardMode_.set(false);
+  collectButtons(position);
+  if (moved || !buttons.empty()) keyboardMode_.set(false);
 
-  if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
-    pointerDown_ = true;
-    binding.dispatchPointer(PointerEvent{.phase = PointerPhase::Down,
-                                         .pointer = 1,
-                                         .kind = PointerDeviceKind::Mouse,
-                                         .position = position,
-                                         .modifiers = currentModifiers()});
-  } else if (IsMouseButtonReleased(MOUSE_BUTTON_LEFT)) {
-    pointerDown_ = false;
-    binding.dispatchPointer(PointerEvent{.phase = PointerPhase::Up,
-                                         .pointer = 1,
-                                         .kind = PointerDeviceKind::Mouse,
-                                         .position = position,
-                                         .modifiers = currentModifiers()});
-  } else if (moved) {
-    // Hover and Move are different events, not the same one with a flag: hover
-    // drives enter/exit, and a move during a press is routed to whatever
-    // recognizer won the arena.
+  // The motion first, because it is what carried the pointer to wherever it was
+  // pressed. Hover and Move are different events, not the same one with a flag:
+  // hover drives enter/exit, and a move during a press is routed to whatever
+  // recognizer won the arena.
+  if (moved) {
     binding.dispatchPointer(
         PointerEvent{.phase = pointerDown_ ? PointerPhase::Move : PointerPhase::Hover,
                      .pointer = 1,
                      .kind = PointerDeviceKind::Mouse,
                      .position = position,
-                     .modifiers = currentModifiers()});
+                     .modifiers = modifiers});
   }
+
+  // Every press and release, rather than whichever one a frame happened to catch
+  // -- a click that begins and ends inside one frame is still a click.
+  for (const ButtonEvent& button : buttons) {
+    pointerDown_ = button.phase == PointerPhase::Down;
+    binding.dispatchPointer(PointerEvent{.phase = button.phase,
+                                         .pointer = 1,
+                                         .kind = PointerDeviceKind::Mouse,
+                                         .position = button.position,
+                                         .modifiers = modifiers});
+  }
+  buttons.clear();
 
   lastPointer_ = position;
 }
