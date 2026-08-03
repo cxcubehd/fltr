@@ -109,7 +109,7 @@ compile time.
       .onChanged = spec.onChanged,
       // The value maps across the track less the thumb, so both ends stay
       // reachable -- the same number the visual uses for its travel.
-      .thumbExtent = 14.0f,
+      .thumbExtent = theme.px(14.0f),
       .enabled = spec.enabled,
       .child = ...
   });
@@ -144,7 +144,7 @@ slider moves.
 ```cpp title="docs/demo/src/ui/widgets/slider_row.cc"
                   Align::make({
                       .child = ClipRect::make({
-                          .radius = BorderRadius::all(kTrackThickness * 0.5f),
+                          .radius = BorderRadius::all(args.thickness * 0.5f),
                           .child = fltr::Transform::make({
                               .animation = &fill_,
                               .origin = Alignment::centerLeft(),
@@ -165,9 +165,10 @@ lays out.
 ```
 
 The travel has to be a number at build time. There is no way to ask "how wide did I
-end up?" from a builder, so the width is hardcoded and `RawSlider::thumbExtent`
-is given the matching number by hand. Two constants that must agree, with nothing
-enforcing it.
+end up?" from a builder, so the width is passed in as `theme.px(180.0f)` and
+`RawSlider::thumbExtent` is given the matching number by hand. Two constants that
+must agree, with nothing enforcing it -- and both of them have to be scaled by
+the same theme, which is one more place for them to disagree.
 
 This is the most concrete missing capability the demo found. On the
 [gaps list](/fltr/project/gaps-and-rework/).
@@ -234,6 +235,47 @@ This is the case where a rebuild is genuinely the right answer: the labels chang
                             }),
 ```
 
+## Scaling the whole interface
+
+The second panel is one more `sliderRow`, and what it changes is the theme
+itself:
+
+```cpp title="docs/demo/src/ui/screens/settings.cc"
+  return panel(theme, EdgeInsets::all(theme.unit * 0.75f),
+               sliderRow(theme, {
+                                    .key = Key::of("settings.scale"),
+                                    .label = "Interface scale",
+                                    .valueText = app.uiScaleText(),
+                                    .value = app.uiScale().value(),
+                                    .min = 0.75f,
+                                    .max = 2.0f,
+                                    // Six stops, a quarter apart.
+                                    .divisions = 5,
+                                    .onChanged = [&app](float value) { app.setUiScale(value); },
+                                }));
+```
+
+```cpp title="docs/demo/src/ui/root.cc"
+WidgetRef buildRoot(App& app) {
+  return Watch<float>::make({
+      .value = &app.uiScale(),
+      .builder = [&app](BuildContext&, const float& scale) -> WidgetRef {
+        return themedTree(app, scale);
+      },
+  });
+}
+```
+
+This is the one thing in the demo that rebuilds everything, and it should:
+`scaledTheme` multiplies the size tokens, so every size in the tree is a
+different number afterwards. Doing it here rather than by drawing the finished
+frame through a scaling matrix is what keeps text sharp -- the text service
+rasterises an atlas per pixel size asked for, so a scaled theme asks for a
+bigger one instead of stretching the one it has.
+
+Note that this row is *not* wrapped in a `Watch`, unlike the graphics panel: the
+value it displays is the one that just rebuilt the tree it is part of.
+
 ## The round trip
 
 ```cpp title="docs/demo/src/app/app.cc"
@@ -258,6 +300,7 @@ void Window::apply(const GraphicsSettings& next) {
     ToggleFullscreen();
   }
 
+#ifndef __EMSCRIPTEN__
   if (next.vsync != settings_.vsync) {
     if (next.vsync) {
       SetWindowState(FLAG_VSYNC_HINT);
@@ -267,11 +310,26 @@ void Window::apply(const GraphicsSettings& next) {
   }
 
   if (next.maxFps != settings_.maxFps) SetTargetFPS(next.maxFps);
+#endif
 
   settings_ = next;
   settings_.fullscreen = IsWindowFullscreen();
+
+#ifdef __EMSCRIPTEN__
+  // A browser paces the frame itself, through the callback it drives the loop
+  // with, and raylib's own wait is a suspend this build has no asyncify for.
+  // Neither knob exists here, so neither is reported as having taken effect.
+  settings_.vsync = true;
+  settings_.maxFps = 0;
+#endif
 }
 ```
+
+The web build is the case this design was waiting for. A browser will not be told
+what to do with the frame rate, so on that platform the two knobs are simply not
+applied -- and because the observable is fed from what the window ended up in,
+the [demo running in a page](/fltr/demo/) shows vertical sync on and its frame
+cap disabled without a single branch in the UI.
 
 <Aside type="tip" title="The switch shows reality, not intent">
 A compositor may refuse fullscreen. Because the observable is fed from what the
@@ -290,7 +348,11 @@ pushes the same value the toggle already showed and notifies nobody.
 ```cpp title="docs/demo/src/app/app.cc"
 void App::formatMaxFps() {
   const int cap = graphics_.value().maxFps;
-  std::snprintf(maxFpsText_, sizeof(maxFpsText_), "%d", cap);
+  if (cap > 0) {
+    std::snprintf(maxFpsText_, sizeof(maxFpsText_), "%d", cap);
+  } else {
+    std::snprintf(maxFpsText_, sizeof(maxFpsText_), "AUTO");
+  }
 }
 ```
 

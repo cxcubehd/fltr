@@ -79,12 +79,21 @@ struct Theme {
   float radius = 6.0f;
   float hairline = 1.0f;
   float unit = 8.0f;
-  float fontSize = 14.0f;
+  float fontSize = 16.0f;
+
+  /// The factor the four sizes above have already been multiplied by, kept so
+  /// that the one-off dimensions a widget spells out can scale with them.
+  float scale = 1.0f;
+
+  constexpr float px(float logical) const noexcept { return logical * scale; }
 
   friend constexpr bool operator==(const Theme&, const Theme&) noexcept = default;
 };
 
 using ThemeScope = fltr::Ambient<Theme>;
+
+/// The theme at a chosen interface scale.
+Theme scaledTheme(float scale, fltr::ValueListenable<bool>* keyboardMode);
 ```
 
 One struct rather than a dozen ambient values, so a theme change notifies once.
@@ -117,9 +126,17 @@ TextStyle styled(float size, Color color, float tracking) {
 }
 
 TextStyle bodyStyle(const Theme& theme)  { return styled(theme.fontSize, theme.text, 0.0f); }
-TextStyle labelStyle(const Theme& theme) { return styled(theme.fontSize - 2.0f, theme.textDim, 0.6f); }
-TextStyle titleStyle(const Theme& theme) { return styled(theme.fontSize + 4.0f, theme.text, 0.0f); }
+TextStyle labelStyle(const Theme& theme) { return styled(theme.fontSize * 0.8f, theme.textDim, 0.6f); }
+TextStyle titleStyle(const Theme& theme) { return styled(theme.fontSize * 1.3f, theme.text, 0.0f); }
 ```
+
+The steps are ratios rather than offsets, and `scaledTheme` multiplies the four
+size tokens, so the whole interface follows one number without any of it losing
+its proportions. That is the entire implementation of the settings screen's
+interface scale: sizes are scaled where they are decided, not by drawing the
+finished frame through a matrix, so every glyph is still rasterised at the size
+it is drawn at.
+
 
 <Aside type="caution" title="There is no DefaultTextStyle">
 Every `Text` call site takes a complete `TextStyle`. Six helper functions cover it,
