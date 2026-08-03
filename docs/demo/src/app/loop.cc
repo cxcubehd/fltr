@@ -51,7 +51,13 @@ void drawField(const Session& session, fltr::Size surface) {
 float advanceClock(App& app) { return app.clock().advance(); }
 
 void pumpWindowEvents(App& app) {
-  // Pushing the same size again is a no-op, so this is unconditional.
+  // The window can move without being asked to -- a page resized, a display
+  // swapped, fullscreen left by pressing Escape -- so what it is actually doing
+  // is read back first. Pushing an unchanged value is a no-op, so all of this is
+  // unconditional.
+  app.window().refresh();
+  app.syncGraphics();
+
   const fltr::Size surface = app.window().surface();
   app.binding().setSurface(surface);
   app.session().setBounds(surface);

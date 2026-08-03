@@ -1,5 +1,7 @@
 #include "platform/window.hh"
 
+#include <cmath>
+
 #include "raylib.h"
 
 #ifdef __EMSCRIPTEN__
@@ -14,23 +16,86 @@ namespace {
 
 #ifdef __EMSCRIPTEN__
 
-/// The canvas fills the page, so its drawing buffer is the CSS box times the
-/// device pixel ratio. Anything smaller is a buffer the browser has to stretch,
-/// which is the blur this whole scaling path exists to avoid.
-fltr::Size canvasPixels() {
+/// Whether the document is showing the canvas full-screen. A browser grants and
+/// revokes that on its own -- Escape leaves without asking anyone -- so it is
+/// taken from the event rather than inferred from what was last requested.
+bool canvasFullscreen = false;
+
+EM_BOOL trackFullscreen(int, const EmscriptenFullscreenChangeEvent* event, void*) {
+  canvasFullscreen = event->isFullscreen;
+  return EM_FALSE;
+}
+
+void adoptCanvas() {
+  // raylib sizes the drawing buffer to the page in CSS pixels, which on a dense
+  // display is a buffer the browser has to stretch -- the blur this whole
+  // scaling path exists to avoid. Registering a handler adds a listener rather
+  // than replacing one, so raylib's is removed rather than merely outnumbered.
+  emscripten_set_resize_callback(EMSCRIPTEN_EVENT_TARGET_WINDOW, nullptr, EM_FALSE, nullptr);
+  emscripten_set_fullscreenchange_callback(EMSCRIPTEN_EVENT_TARGET_WINDOW, nullptr, EM_FALSE,
+                                           trackFullscreen);
+}
+
+fltr::Size drawingBuffer() {
+  int width = 0;
+  int height = 0;
+  emscripten_get_canvas_element_size("#canvas", &width, &height);
+  return {static_cast<float>(width), static_cast<float>(height)};
+}
+
+/// The canvas fills the page, so the buffer that keeps it crisp is its CSS box
+/// times the device pixel ratio.
+fltr::Size pageSize() {
   double width = 0.0;
   double height = 0.0;
   emscripten_get_element_css_size("#canvas", &width, &height);
   const double ratio = emscripten_get_device_pixel_ratio();
-  return {static_cast<float>(width * ratio), static_cast<float>(height * ratio)};
+  return {static_cast<float>(std::round(width * ratio)),
+          static_cast<float>(std::round(height * ratio))};
 }
 
-/// Registered after `InitWindow`, which replaces raylib's own handler: that one
-/// sizes the buffer in CSS pixels and knows nothing about the ratio.
-bool trackCanvasSize(int, const EmscriptenUiEvent*, void*) {
-  const fltr::Size pixels = canvasPixels();
-  SetWindowSize(static_cast<int>(pixels.width), static_cast<int>(pixels.height));
-  return true;
+void refreshSurface() {
+  const fltr::Size wanted = pageSize();
+  if (wanted.isEmpty() || wanted == drawingBuffer()) return;
+  // Through raylib rather than around it: `SetWindowSize` resizes the buffer,
+  // the viewport and the projection together, and it is also what tells GLFW the
+  // pixels a mouse position is measured in -- a browser reports one in the
+  // page's, and GLFW scales it by the ratio between the two. Compared against
+  // the buffer rather than against the last request, because GLFW answers the
+  // first resize made inside fullscreen with the screen's CSS pixels; asking
+  // again on the next frame is what settles it.
+  SetWindowSize(static_cast<int>(wanted.width), static_cast<int>(wanted.height));
+}
+
+bool fullscreenNow() { return canvasFullscreen; }
+
+float displayScale() { return static_cast<float>(emscripten_get_device_pixel_ratio()); }
+
+/// A browser grants fullscreen to a gesture rather than to a frame, so a request
+/// made from the loop is deferred to the event that follows the click that asked
+/// for it -- and answered by the document afterwards rather than here.
+void setFullscreen(bool enter) {
+  if (enter) {
+    emscripten_request_fullscreen("#canvas", EM_TRUE);
+  } else {
+    emscripten_exit_fullscreen();
+  }
+}
+
+#else
+
+void adoptCanvas() {}
+
+/// raylib's own window callbacks keep a desktop window's buffer and viewport in
+/// step with the window, so there is nothing here to reconcile.
+void refreshSurface() {}
+
+bool fullscreenNow() { return IsWindowFullscreen(); }
+
+float displayScale() { return 1.0f; }
+
+void setFullscreen(bool enter) {
+  if (enter != IsWindowFullscreen()) ToggleFullscreen();
 }
 
 #endif
@@ -57,23 +122,16 @@ void Window::open(int width, int height, const char* title, const GraphicsSettin
   SetConfigFlags(flags);
   SetTraceLogLevel(LOG_WARNING);
 
-#ifdef __EMSCRIPTEN__
-  const fltr::Size pixels = canvasPixels();
-  width = static_cast<int>(pixels.width);
-  height = static_cast<int>(pixels.height);
-#endif
-
   InitWindow(width, height, title);
-
-#ifdef __EMSCRIPTEN__
-  emscripten_set_resize_callback(EMSCRIPTEN_EVENT_TARGET_WINDOW, nullptr, false, trackCanvasSize);
-#endif
+  adoptCanvas();
 
   // raylib closes the window on Escape unless told otherwise, which would take
   // the key the UI navigates with and turn it into "quit".
   SetExitKey(KEY_NULL);
   open_ = true;
 
+  // A frame cap of -1 is not one anything can ask for, which is what makes the
+  // first `apply` unconditional -- and with it the first `refresh`.
   settings_ = GraphicsSettings{.fullscreen = false, .vsync = settings.vsync, .maxFps = -1};
   apply(settings);
 }
@@ -82,6 +140,13 @@ void Window::close() {
   if (!open_) return;
   CloseWindow();
   open_ = false;
+}
+
+void Window::refresh() {
+  if (!open_) return;
+  refreshSurface();
+  settings_.fullscreen = fullscreenNow();
+  contentScale_.set(displayScale());
 }
 
 bool Window::shouldClose() const {
@@ -99,23 +164,10 @@ fltr::Size Window::surface() const {
   return {static_cast<float>(GetScreenWidth()), static_cast<float>(GetScreenHeight())};
 }
 
-float Window::contentScale() const {
-#ifdef __EMSCRIPTEN__
-  return static_cast<float>(emscripten_get_device_pixel_ratio());
-#else
-  return 1.0f;
-#endif
-}
-
 void Window::apply(const GraphicsSettings& next) {
   if (!open_ || next == settings_) return;
 
-  if (next.fullscreen != settings_.fullscreen) {
-    // raylib reports the state it is actually in, which is not always the state
-    // that was asked for -- a compositor may refuse. The settings screen shows
-    // what happened rather than what was requested.
-    ToggleFullscreen();
-  }
+  if (next.fullscreen != settings_.fullscreen) setFullscreen(next.fullscreen);
 
 #ifndef __EMSCRIPTEN__
   if (next.vsync != settings_.vsync) {
@@ -130,7 +182,6 @@ void Window::apply(const GraphicsSettings& next) {
 #endif
 
   settings_ = next;
-  settings_.fullscreen = IsWindowFullscreen();
 
 #ifdef __EMSCRIPTEN__
   // A browser paces the frame itself, through the callback it drives the loop
@@ -139,6 +190,11 @@ void Window::apply(const GraphicsSettings& next) {
   settings_.vsync = true;
   settings_.maxFps = 0;
 #endif
+
+  // A fullscreen request is one a compositor may refuse and a browser answers
+  // later, so the settings screen shows what happened rather than what was asked
+  // for. `refresh` is what keeps showing it.
+  refresh();
 }
 
 void Window::applyCursor(MouseCursor cursor) {
