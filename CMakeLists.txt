@@ -24,12 +24,21 @@ if(FLTR_ENABLE_CHECKS)
   target_compile_definitions(fltr PUBLIC FLTR_CHECKS=1)
 endif()
 
-set(FLTR_WARNINGS
-  -Wall -Wextra -Wpedantic -Wshadow -Wnon-virtual-dtor
-  # Designated initialisers with omitted trailing fields are the authoring
-  # style; the omitted fields take their in-class defaults by design.
-  -Wno-missing-field-initializers
-)
+if(MSVC)
+  # Conformance, not taste: without these MSVC reports C++98 in `__cplusplus`,
+  # keeps its non-conforming preprocessor, and reads the sources as the active
+  # code page rather than as UTF-8. They are PUBLIC because a consumer compiling
+  # fltr's headers needs the same language, not just the same warnings.
+  target_compile_options(fltr PUBLIC /permissive- /Zc:__cplusplus /Zc:preprocessor /utf-8 /bigobj)
+  set(FLTR_WARNINGS /W4)
+else()
+  set(FLTR_WARNINGS
+    -Wall -Wextra -Wpedantic -Wshadow -Wnon-virtual-dtor
+    # Designated initialisers with omitted trailing fields are the authoring
+    # style; the omitted fields take their in-class defaults by design.
+    -Wno-missing-field-initializers
+  )
+endif()
 target_compile_options(fltr PRIVATE ${FLTR_WARNINGS})
 
 if(FLTR_BUILD_TESTS)

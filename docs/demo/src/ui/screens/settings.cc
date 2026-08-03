@@ -86,11 +86,28 @@ WidgetRef graphicsPanel(App& app, const Theme& theme, const GraphicsSettings& cu
       }));
 }
 
+/// Not wrapped in a `Watch`: the scale rebuilds the whole tree by definition, so
+/// this row is rebuilt with a fresh theme every time it moves.
+WidgetRef interfacePanel(App& app, const Theme& theme) {
+  return panel(theme, EdgeInsets::all(theme.unit * 0.75f),
+               sliderRow(theme, {
+                                    .key = Key::of("settings.scale"),
+                                    .label = "Interface scale",
+                                    .valueText = app.uiScaleText(),
+                                    .value = app.uiScale().value(),
+                                    .min = 0.75f,
+                                    .max = 2.0f,
+                                    // Six stops, a quarter apart.
+                                    .divisions = 5,
+                                    .onChanged = [&app](float value) { app.setUiScale(value); },
+                                }));
+}
+
 }  // namespace
 
 WidgetRef settingsScreen(App& app, const Theme& theme) {
   return sheet(
-      Key::of("screen.settings"), theme, 560.0f,
+      Key::of("screen.settings"), theme, theme.px(560.0f),
       Column::make({
           .crossAxisAlignment = CrossAxisAlignment::Stretch,
           .mainAxisSize = MainAxisSize::Min,
@@ -111,8 +128,11 @@ WidgetRef settingsScreen(App& app, const Theme& theme) {
                         return graphicsPanel(app, ThemeScope::of(context), current);
                       },
                   }),
+                  interfacePanel(app, theme),
                   label(theme, "THE FRAME CAP IS APPLIED TO THE WINDOW, NOT TO THE UI: FLTR "
-                               "DOES NO WORK IN A FRAME WHERE NOTHING CHANGED."),
+                               "DOES NO WORK IN A FRAME WHERE NOTHING CHANGED. THE INTERFACE "
+                               "SCALE IS APPLIED TO THE SIZES THEMSELVES, SO TEXT IS "
+                               "RASTERISED AT THE SIZE IT IS DRAWN AT."),
               },
       }));
 }

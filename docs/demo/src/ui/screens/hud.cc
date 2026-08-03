@@ -149,7 +149,7 @@ WidgetRef hudScreen(App& app, const Theme& theme) {
                   Positioned::make({
                       .left = inset,
                       .bottom = inset,
-                      .width = 240.0f,
+                      .width = theme.px(240.0f),
                       .child = gauges(app, theme),
                   }),
                   Positioned::make({

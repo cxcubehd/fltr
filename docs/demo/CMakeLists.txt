@@ -53,6 +53,12 @@ set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 set(CUSTOMIZE_BUILD ON CACHE BOOL "" FORCE)
 set(SUPPORT_MODULE_RAUDIO OFF CACHE BOOL "" FORCE)
 
+# raylib picks its backend from this, and only this: `emcmake cmake` sets
+# EMSCRIPTEN, and the rest of the web build follows from the same branch below.
+if(EMSCRIPTEN)
+  set(PLATFORM Web CACHE STRING "" FORCE)
+endif()
+
 FetchContent_MakeAvailable(fltr raylib)
 
 add_executable(demo
@@ -93,9 +99,36 @@ target_include_directories(demo PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 # fltr exports no namespaced alias, so this is the bare target name.
 target_link_libraries(demo PRIVATE fltr raylib)
 
-target_compile_definitions(demo PRIVATE
-  DEMO_ASSET_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets"
-  DEMO_FONT_FILE="${jetbrains_mono_SOURCE_DIR}/fonts/ttf/JetBrainsMono-Regular.ttf"
-)
+set(DEMO_FONT "${jetbrains_mono_SOURCE_DIR}/fonts/ttf/JetBrainsMono-Regular.ttf")
 
-target_compile_options(demo PRIVATE -Wall -Wextra -Wpedantic -Wno-missing-field-initializers)
+if(EMSCRIPTEN)
+  # There is no host filesystem to fall back to, so the font is packaged into
+  # the module's virtual one and the app opens it at the path it was mounted at.
+  target_compile_definitions(demo PRIVATE
+    DEMO_ASSET_DIR="/assets"
+    DEMO_FONT_FILE="/JetBrainsMono-Regular.ttf"
+  )
+  # Named for where it is served from rather than for the target: the page is
+  # published as a directory, not as a file with a name in it.
+  set_target_properties(demo PROPERTIES OUTPUT_NAME index SUFFIX ".html")
+  target_link_options(demo PRIVATE
+    -sUSE_GLFW=3
+    -sALLOW_MEMORY_GROWTH=1
+    -sGL_ENABLE_GET_PROC_ADDRESS=1
+    -sSTACK_SIZE=1mb
+    -sEXPORTED_RUNTIME_METHODS=['requestFullscreen']
+    --shell-file "${CMAKE_CURRENT_SOURCE_DIR}/web/shell.html"
+    --preload-file "${DEMO_FONT}@/JetBrainsMono-Regular.ttf"
+  )
+else()
+  target_compile_definitions(demo PRIVATE
+    DEMO_ASSET_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets"
+    DEMO_FONT_FILE="${DEMO_FONT}"
+  )
+endif()
+
+if(MSVC)
+  target_compile_options(demo PRIVATE /W4)
+else()
+  target_compile_options(demo PRIVATE -Wall -Wextra -Wpedantic -Wno-missing-field-initializers)
+endif()

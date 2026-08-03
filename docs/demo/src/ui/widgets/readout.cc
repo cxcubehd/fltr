@@ -142,7 +142,12 @@ WidgetRef gauge(const Theme& theme, std::string_view name, fltr::ValueListenable
       .children =
           {
               label(theme, name),
-              Meter::make({.fraction = fraction, .fill = fill, .track = theme.surfaceRaised}),
+              Meter::make({
+                  .fraction = fraction,
+                  .fill = fill,
+                  .track = theme.surfaceRaised,
+                  .height = theme.px(6.0f),
+              }),
           },
   });
 }

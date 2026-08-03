@@ -2,11 +2,38 @@
 
 #include "raylib.h"
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten/html5.h>
+#endif
+
 namespace demo {
 
 using fltr::MouseCursor;
 
 namespace {
+
+#ifdef __EMSCRIPTEN__
+
+/// The canvas fills the page, so its drawing buffer is the CSS box times the
+/// device pixel ratio. Anything smaller is a buffer the browser has to stretch,
+/// which is the blur this whole scaling path exists to avoid.
+fltr::Size canvasPixels() {
+  double width = 0.0;
+  double height = 0.0;
+  emscripten_get_element_css_size("#canvas", &width, &height);
+  const double ratio = emscripten_get_device_pixel_ratio();
+  return {static_cast<float>(width * ratio), static_cast<float>(height * ratio)};
+}
+
+/// Registered after `InitWindow`, which replaces raylib's own handler: that one
+/// sizes the buffer in CSS pixels and knows nothing about the ratio.
+bool trackCanvasSize(int, const EmscriptenUiEvent*, void*) {
+  const fltr::Size pixels = canvasPixels();
+  SetWindowSize(static_cast<int>(pixels.width), static_cast<int>(pixels.height));
+  return true;
+}
+
+#endif
 
 int raylibCursorFor(MouseCursor cursor) noexcept {
   switch (cursor) {
@@ -29,7 +56,19 @@ void Window::open(int width, int height, const char* title, const GraphicsSettin
   if (settings.vsync) flags |= FLAG_VSYNC_HINT;
   SetConfigFlags(flags);
   SetTraceLogLevel(LOG_WARNING);
+
+#ifdef __EMSCRIPTEN__
+  const fltr::Size pixels = canvasPixels();
+  width = static_cast<int>(pixels.width);
+  height = static_cast<int>(pixels.height);
+#endif
+
   InitWindow(width, height, title);
+
+#ifdef __EMSCRIPTEN__
+  emscripten_set_resize_callback(EMSCRIPTEN_EVENT_TARGET_WINDOW, nullptr, false, trackCanvasSize);
+#endif
+
   // raylib closes the window on Escape unless told otherwise, which would take
   // the key the UI navigates with and turn it into "quit".
   SetExitKey(KEY_NULL);
@@ -50,6 +89,14 @@ bool Window::shouldClose() const { return !open_ || WindowShouldClose(); }
 fltr::Size Window::surface() const {
   if (!open_) return {};
   return {static_cast<float>(GetScreenWidth()), static_cast<float>(GetScreenHeight())};
+}
+
+float Window::contentScale() const {
+#ifdef __EMSCRIPTEN__
+  return static_cast<float>(emscripten_get_device_pixel_ratio());
+#else
+  return 1.0f;
+#endif
 }
 
 void Window::apply(const GraphicsSettings& next) {

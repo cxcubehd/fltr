@@ -34,6 +34,7 @@ public:
     fltr::Key key;
     float width = 180.0f;
     float thumbSize = 14.0f;
+    float thickness = 4.0f;
     fltr::Color fill;
     fltr::Color track;
     fltr::Color thumb;

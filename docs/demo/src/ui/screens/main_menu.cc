@@ -71,7 +71,7 @@ WidgetRef mainMenuScreen(App& app, const Theme& theme) {
                .onInvoke = [&app] { app.goTo(Screen::Settings); }},
               {.stroke = KeyStroke{.key = LogicalKey::KeyQ}, .onInvoke = [&app] { app.quit(); }},
           },
-      .child = sheet(Key::of("screen.menu"), theme, 460.0f,
+      .child = sheet(Key::of("screen.menu"), theme, theme.px(460.0f),
                      Column::make({
                          .crossAxisAlignment = CrossAxisAlignment::Stretch,
                          .mainAxisSize = MainAxisSize::Min,

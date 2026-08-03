@@ -28,6 +28,11 @@ public:
   bool shouldClose() const;
   fltr::Size surface() const;
 
+  /// Physical pixels per logical pixel on the surface being drawn to, and so the
+  /// interface scale a fresh window starts at. One everywhere the demo has no
+  /// way to ask; in a browser the device pixel ratio is exactly this number.
+  float contentScale() const;
+
   /// Applies whatever differs from what is already applied.
   void apply(const GraphicsSettings& settings);
   const GraphicsSettings& settings() const noexcept { return settings_; }

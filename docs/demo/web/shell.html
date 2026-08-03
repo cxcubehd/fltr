@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
+    <title>fltr // drift</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        overflow: hidden;
+        background: #0a0a0c;
+        color: #8b8b99;
+        font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+      canvas {
+        display: block;
+        width: 100vw;
+        height: 100vh;
+        outline: none;
+      }
+      #status {
+        position: absolute;
+        inset: 0;
+        display: grid;
+        place-content: center;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        pointer-events: none;
+        transition: opacity 0.3s;
+      }
+      #status[hidden] {
+        opacity: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="canvas" tabindex="0" oncontextmenu="event.preventDefault()"></canvas>
+    <div id="status">loading</div>
+    <script>
+      const canvas = document.getElementById('canvas');
+      const status = document.getElementById('status');
+
+      // The canvas has to hold the keyboard for the demo to be playable, and the
+      // keys it plays with are the ones a browser scrolls the page with.
+      canvas.addEventListener('mousedown', () => canvas.focus());
+      window.addEventListener('keydown', (event) => {
+        if ([' ', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.key)) {
+          event.preventDefault();
+        }
+      });
+
+      var Module = {
+        canvas,
+        print: (text) => console.log(text),
+        printErr: (text) => console.error(text),
+        onRuntimeInitialized: () => {
+          status.hidden = true;
+          canvas.focus();
+        },
+      };
+    </script>
+    {{{ SCRIPT }}}
+  </body>
+</html>
