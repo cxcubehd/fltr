@@ -74,6 +74,26 @@ std::vector<ButtonEvent> buttons;
 
 #ifdef __EMSCRIPTEN__
 
+/// Where the browser last put the pointer, and whether it is still over the
+/// page. One source for the position, so a hover, a press and a wheel notch
+/// cannot disagree about what is under the cursor.
+Offset trackedPointer;
+bool pointerLeft = false;
+
+/// `targetX` is measured in the page's pixels, from the corner of the canvas.
+/// The surface is measured in the display's, so it is the same conversion the
+/// wheel needs.
+Offset devicePixels(const EmscriptenMouseEvent& event) {
+  const float ratio = static_cast<float>(emscripten_get_device_pixel_ratio());
+  return {static_cast<float>(event.targetX) * ratio, static_cast<float>(event.targetY) * ratio};
+}
+
+EM_BOOL trackPointer(int type, const EmscriptenMouseEvent* event, void*) {
+  pointerLeft = type == EMSCRIPTEN_EVENT_MOUSELEAVE;
+  if (!pointerLeft) trackedPointer = devicePixels(*event);
+  return EM_FALSE;
+}
+
 /// Presses and releases are taken from the browser rather than from raylib.
 ///
 /// raylib samples the button once a frame and reports the edge it finds between
@@ -86,19 +106,30 @@ EM_BOOL accumulateButton(int type, const EmscriptenMouseEvent* event, void*) {
   // page, which is why nothing here reports the event as consumed.
   if (event->button != 0) return EM_FALSE;
 
-  // `targetX` is measured in the page's pixels, from the corner of the canvas.
-  // The surface is measured in the display's, so it is the same conversion the
-  // wheel needs.
-  const float ratio = static_cast<float>(emscripten_get_device_pixel_ratio());
+  trackedPointer = devicePixels(*event);
+  pointerLeft = false;
   buttons.push_back(
       {.phase = type == EMSCRIPTEN_EVENT_MOUSEDOWN ? PointerPhase::Down : PointerPhase::Up,
-       .position = {static_cast<float>(event->targetX) * ratio,
-                    static_cast<float>(event->targetY) * ratio}});
+       .position = trackedPointer});
   return EM_FALSE;
 }
 
 /// The browser filled the queue as the events arrived.
 void collectButtons(Offset) {}
+
+/// Where the pointer is, in the pixels the surface is measured in.
+///
+/// raylib's own answer goes through emscripten's GLFW shim, which scales it by
+/// the ratio between the window size it was last told about and the canvas box
+/// -- a second opinion about a number the page already knows exactly, and one
+/// that disagrees for a frame whenever the canvas is resized. A pointer that
+/// left the page is hovering nothing, which nothing else will say either; one
+/// dragging something keeps its position, because letting go is the gesture's
+/// business rather than the cursor's.
+Offset pointerPosition(bool pressed) {
+  if (pointerLeft && !pressed) return {-1.0f, -1.0f};
+  return trackedPointer;
+}
 
 /// What the browser measured since the last frame took it, in CSS pixels.
 ///
@@ -136,6 +167,11 @@ Offset takeWheelDelta() {
 }
 
 #else
+
+Offset pointerPosition(bool) {
+  const Vector2 mouse = GetMousePosition();
+  return {mouse.x, mouse.y};
+}
 
 /// A desktop window redraws faster than a button can be pressed and released, so
 /// the edges raylib reports between two frames are the whole story.
@@ -183,6 +219,8 @@ Input::Input() {
   emscripten_set_wheel_callback(EMSCRIPTEN_EVENT_TARGET_WINDOW, nullptr, EM_FALSE, accumulateWheel);
   emscripten_set_mousedown_callback("#canvas", nullptr, EM_FALSE, accumulateButton);
   emscripten_set_mouseup_callback("#canvas", nullptr, EM_FALSE, accumulateButton);
+  emscripten_set_mousemove_callback("#canvas", nullptr, EM_FALSE, trackPointer);
+  emscripten_set_mouseleave_callback("#canvas", nullptr, EM_FALSE, trackPointer);
 #endif
 }
 
@@ -201,8 +239,7 @@ LogicalKey logicalKeyFor(int raylibKey) noexcept {
 }
 
 void Input::pumpPointer(fltr::WidgetBinding& binding) {
-  const Vector2 mouse = GetMousePosition();
-  const Offset position{mouse.x, mouse.y};
+  const Offset position = pointerPosition(pointerDown_);
   const bool moved = position != lastPointer_;
   const KeyModifiers modifiers = currentModifiers();
 
@@ -243,11 +280,13 @@ void Input::pumpSignals(fltr::WidgetBinding& binding) {
   const Offset wheel = takeWheelDelta();
   if (wheel == Offset{}) return;
 
-  const Vector2 mouse = GetMousePosition();
+  // The same position the hover is dispatched at, because the notch belongs to
+  // whatever the cursor is over.
+  const Offset position = pointerPosition(true);
   binding.dispatchSignal(PointerSignalEvent{.kind = PointerSignalKind::Scroll,
                                             .pointer = 1,
-                                            .position = {mouse.x, mouse.y},
-                                            .localPosition = {mouse.x, mouse.y},
+                                            .position = position,
+                                            .localPosition = position,
                                             .delta = wheel,
                                             .modifiers = currentModifiers()});
 }

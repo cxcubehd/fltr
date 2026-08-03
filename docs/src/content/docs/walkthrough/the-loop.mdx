@@ -130,11 +130,12 @@ drained here instead:
 ```cpp title="docs/demo/src/platform/input.cc"
 EM_BOOL accumulateButton(int type, const EmscriptenMouseEvent* event, void*) {
   if (event->button != 0) return EM_FALSE;
-  const float ratio = static_cast<float>(emscripten_get_device_pixel_ratio());
+
+  trackedPointer = devicePixels(*event);
+  pointerLeft = false;
   buttons.push_back(
       {.phase = type == EMSCRIPTEN_EVENT_MOUSEDOWN ? PointerPhase::Down : PointerPhase::Up,
-       .position = {static_cast<float>(event->targetX) * ratio,
-                    static_cast<float>(event->targetY) * ratio}});
+       .position = trackedPointer});
   return EM_FALSE;
 }
 ```
@@ -143,6 +144,15 @@ The position travels with the event because a click is long over by the frame
 that reports it. On a desktop the queue is filled from raylib's own edges, which
 a window redrawing in a millisecond does not miss -- the difference is one
 function, and `pumpPointer` above it dispatches a list either way.
+
+`trackedPointer` is the same field a `mousemove` writes, which is the point: the
+hover, the press and the wheel notch all read one position, taken from the page
+in the pixels the surface is measured in. raylib's own answer arrives through
+emscripten's GLFW shim, which scales it by the ratio between the window size it
+was last told about and the canvas box -- a second opinion about a number the
+page already knows exactly, and one that disagrees for a frame whenever the
+canvas is resized. `mouseleave` is on the same handler, because a pointer that
+left the page is hovering nothing and nothing else will say so.
 
 ### `stepSimulation`
 
