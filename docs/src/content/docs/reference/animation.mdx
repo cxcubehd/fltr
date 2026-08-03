@@ -196,7 +196,9 @@ The new interval begins **where the last one had actually reached**, so the valu
 never jumps and repeated interruption accumulates no error. Retargeting to the
 current value stops the driver instead of running a zero-length interval.
 
-The driver is restarted, so one shared by several values retargets all of them.
+The driver is restarted from zero, which replays every other value on it from the
+start of an interval it may have already left. Values that retarget independently
+want a driver each.
 </Aside>
 
 ## Simulations
