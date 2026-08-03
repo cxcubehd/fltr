@@ -32,6 +32,14 @@ it a *switch* is one number.
 one means a drag of that distance moves the position end to end, and letting go
 past halfway reports the toggle.
 
+That distance is about twenty pixels, which is the whole reason a switch is where
+a drag's slop shows up first. A finger's slop is eighteen, so holding a mouse to
+it would leave the thumb still until the pointer had passed the far end -- and the
+component starts its drag where the drag was *recognized* rather than where the
+pointer went down, so the travel the arena swallowed is never replayed as a jump.
+Both are what Flutter's `Switch` does, and it is a switch that makes the reasons
+visible.
+
 ### The thumb
 
 The component publishes a 0..1 fraction. `MappedValue` turns it into a translation.

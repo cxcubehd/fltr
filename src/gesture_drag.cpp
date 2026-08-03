@@ -4,10 +4,13 @@
 
 namespace fltr {
 
+/// Flutter's `computeHitSlop` and `computePanSlop`, which every one of its drag
+/// recognizers asks before accepting: the axis picks the pair, and the device
+/// picks which of the two it is held to.
 float DragGestureRecognizer::slop() const noexcept {
   const bool precise = kind_ == PointerDeviceKind::Mouse;
-  if (axis == DragAxis::Pan) return precise ? kPrecisePanSlop : kPanSlop;
-  return precise ? kPreciseSlop : kTouchSlop;
+  if (axis == DragAxis::Pan) return precise ? kPrecisePointerPanSlop : kPanSlop;
+  return precise ? kPrecisePointerSlop : kTouchSlop;
 }
 
 float DragGestureRecognizer::primaryOf(Offset value) const noexcept {

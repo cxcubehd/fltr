@@ -719,6 +719,37 @@ TEST(components_a_radio_is_a_toggle_its_own_press_cannot_clear) {
   CHECK_EQ(reports, 1);
 }
 
+/// A switch travels about as far as a finger's slop, so what it does over the
+/// first few pixels of a mouse drag is the whole feel of it: holding a mouse to
+/// the finger's figure would leave the thumb still until the pointer had passed
+/// the far end, and then throw it the whole way at once.
+TEST(components_a_switch_follows_a_mouse_from_the_first_pixels) {
+  Harness h;
+  ToggleValue value = ToggleValue::Off;
+  ValueListenable<float>* position = nullptr;
+  ScriptedRoot root(h, [&] {
+    return screen({placed(kBox, RawToggle::make({
+                                    .value = value,
+                                    .onChanged = [](ToggleValue) {},
+                                    .dragExtent = 40.0f,
+                                    .child = Probe::make({.fraction = &position, .child = fill()}),
+                                }))});
+  });
+  h.frame();
+
+  h.binding().dispatchPointer(mouse(PointerPhase::Down, {30, 30}));
+  // Two pixels is already a drag for a mouse, and what it cost to be recognized
+  // is what the thumb stays behind by -- not what it jumps by.
+  h.binding().dispatchPointer(mouse(PointerPhase::Move, {32, 30}));
+  CHECK_EQ(position->value(), 0.0f);
+
+  h.binding().dispatchPointer(mouse(PointerPhase::Move, {42, 30}));
+  CHECK_EQ(position->value(), 0.25f);
+
+  h.binding().dispatchPointer(mouse(PointerPhase::Move, {52, 30}));
+  CHECK_EQ(position->value(), 0.5f);
+}
+
 TEST(components_a_switch_settles_to_the_side_the_drag_left_it_on) {
   Harness h;
   ToggleValue value = ToggleValue::Off;
@@ -738,7 +769,10 @@ TEST(components_a_switch_settles_to_the_side_the_drag_left_it_on) {
 
   h.binding().dispatchPointer(mouse(PointerPhase::Down, {30, 30}));
   h.binding().dispatchPointer(mouse(PointerPhase::Move, {60, 30}));
-  // The thumb keeps up with the finger, slop included.
+  // One move this large is past the tap's slop as well, so the tap gives it up
+  // and the arena has awarded the drag before the drag itself sees the event:
+  // there is no travel left over for the start behaviour to swallow, and the
+  // thumb lands under the finger.
   CHECK(states.has(WidgetState::Dragged));
   CHECK_EQ(position->value(), 0.75f);
 

@@ -130,10 +130,11 @@ wants one. A hover-only region holds zero, and the test suite asserts on
 | `DragGestureRecognizer` | `onDragStart` and friends | one class with a `DragAxis`, not three |
 
 Slop and timing constants live in `gestures/constants.hpp`: `kTouchSlop = 18`,
-`kPanSlop = 36`, `kPreciseSlop = 1`, `kPrecisePanSlop = 2`, `kLongPressTimeout =
-0.5`, `kDoubleTapTimeout = 0.3`, `kDoubleTapSlop = 100`. A drag picks between the
-two pairs by the pointer's device kind; everything else holds every pointer to
-the finger's figure.
+`kPanSlop = 36`, `kPrecisePointerSlop = 1`, `kPrecisePointerPanSlop = 2`,
+`kLongPressTimeout = 0.5`, `kDoubleTapTimeout = 0.3`, `kDoubleTapSlop = 100`. A
+drag picks between the two pairs by the pointer's device kind, as Flutter's
+`computeHitSlop` does; everything else holds every pointer to the finger's
+figure, which is what keeps a click that wobbles a click.
 
 ### Velocity is fitted, not differenced
 

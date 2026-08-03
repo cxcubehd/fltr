@@ -11,9 +11,11 @@ inline constexpr float kPanSlop = kTouchSlop * 2.0f;
 /// The same two, for a pointer that reports where it is to the pixel. A finger
 /// earns the wider figure -- it is broad, and it rolls as it presses -- and a
 /// mouse does not: eighteen pixels of one is a deliberate gesture, and a control
-/// whose whole travel is shorter than that could never be dragged at all.
-inline constexpr float kPreciseSlop = 1.0f;
-inline constexpr float kPrecisePanSlop = 2.0f;
+/// whose whole travel is shorter than that could never be dragged at all. The
+/// names and the numbers are Flutter's `kPrecisePointerHitSlop` and
+/// `kPrecisePointerPanSlop`.
+inline constexpr float kPrecisePointerSlop = 1.0f;
+inline constexpr float kPrecisePointerPanSlop = kPrecisePointerSlop * 2.0f;
 
 /// How long a press must be held, in seconds, before it is a long press.
 inline constexpr float kLongPressTimeout = 0.5f;

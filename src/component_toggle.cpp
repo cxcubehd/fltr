@@ -130,9 +130,12 @@ WidgetRef RawToggleState::build(BuildContext&) {
   };
   if (args.dragExtent > 0.0f) {
     pointer.dragAxis = DragAxis::Horizontal;
-    // The thumb keeps up with the finger exactly, slop included: a switch whose
-    // thumb lagged the first eighteen pixels of every drag would feel stuck.
-    pointer.dragStartBehavior = DragStartBehavior::Down;
+    // What Flutter's `Switch` does, and for the reason it is worth stating: a
+    // switch travels about as far as a finger's slop, so replaying the slop the
+    // arena swallowed would throw the thumb most of the way across in one frame
+    // rather than hand it to the finger. Starting where the drag was recognized
+    // costs the thumb that distance behind the pointer and nothing else.
+    pointer.dragStartBehavior = DragStartBehavior::Start;
     pointer.onDragStart = [this](const DragStartDetails&) {
       // The thumb is the finger's from here, so whatever the driver was doing
       // with it stops rather than fighting for the same value.
