@@ -96,7 +96,11 @@ WidgetRef SliderTrackState::build(BuildContext& context) {
 WidgetRef sliderRow(const Theme& theme, const SliderRowSpec& spec) {
   fltr::TextStyle value = monoStyle(theme, spec.enabled ? theme.text : theme.textFaint);
 
-  return RawSlider::make({
+  // The slider is the track and nothing else. A value read off where the pointer
+  // is has to be read across the thing the player is aiming at: wrapping the
+  // whole row would spread the range over the label and the readout as well, so
+  // the visible track would only be worth the last third of it.
+  WidgetRef track = RawSlider::make({
       .key = spec.key,
       .value = spec.value,
       .min = spec.min,
@@ -107,26 +111,28 @@ WidgetRef sliderRow(const Theme& theme, const SliderRowSpec& spec) {
       // reachable -- the same number the visual uses for its travel.
       .thumbExtent = theme.px(14.0f),
       .enabled = spec.enabled,
-      .child = Padding::make({
-          .padding = EdgeInsets::symmetric(theme.unit * 1.75f, theme.unit * 1.25f),
-          .child = Row::make({
-              .crossAxisAlignment = CrossAxisAlignment::Center,
-              .children =
-                  {
-                      body(theme, spec.label),
-                      spacer(),
-                      Text::make({.text = spec.valueText, .style = value}),
-                      gap(theme.unit * 1.5f),
-                      SliderTrack::make({
-                          .width = theme.px(180.0f),
-                          .thumbSize = theme.px(14.0f),
-                          .thickness = theme.px(4.0f),
-                          .fill = spec.enabled ? theme.accent : theme.border,
-                          .track = theme.surfaceRaised,
-                          .thumb = spec.enabled ? theme.text : theme.textFaint,
-                      }),
-                  },
-          }),
+      .child = SliderTrack::make({
+          .width = theme.px(180.0f),
+          .thumbSize = theme.px(14.0f),
+          .thickness = theme.px(4.0f),
+          .fill = spec.enabled ? theme.accent : theme.border,
+          .track = theme.surfaceRaised,
+          .thumb = spec.enabled ? theme.text : theme.textFaint,
+      }),
+  });
+
+  return Padding::make({
+      .padding = EdgeInsets::symmetric(theme.unit * 1.75f, theme.unit * 1.25f),
+      .child = Row::make({
+          .crossAxisAlignment = CrossAxisAlignment::Center,
+          .children =
+              {
+                  body(theme, spec.label),
+                  spacer(),
+                  Text::make({.text = spec.valueText, .style = value}),
+                  gap(theme.unit * 1.5f),
+                  track,
+              },
       }),
   });
 }

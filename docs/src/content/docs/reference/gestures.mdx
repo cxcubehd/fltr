@@ -301,6 +301,8 @@ rather than at an arbitrary instant, the same bargain the ticker makes.
 ```cpp
 inline constexpr float kTouchSlop        = 18.0f;
 inline constexpr float kPanSlop          = kTouchSlop * 2.0f;
+inline constexpr float kPreciseSlop      = 1.0f;
+inline constexpr float kPrecisePanSlop   = 2.0f;
 inline constexpr float kLongPressTimeout = 0.5f;
 inline constexpr float kDoubleTapTimeout = 0.3f;
 inline constexpr float kDoubleTapSlop    = 100.0f;
@@ -311,6 +313,14 @@ inline constexpr float kMaxFlingVelocity = 8000.0f;
 A drag with no axis clears a wider threshold, since travel in any direction counts
 towards it. The double-tap slop is wider than the touch slop because the hand
 lifts and returns between the two taps rather than staying on the surface.
+
+The precise pair is what a drag holds a **mouse** to, matching Flutter's
+`computeHitSlop`. A finger earns the wider figure -- it is broad, and it rolls as
+it presses -- and a mouse does not. Applying a finger's slop to a mouse makes any
+control whose whole travel is shorter than eighteen pixels impossible to drag: it
+sits still until the pointer has passed the far end, then jumps the whole way at
+once. A tap keeps `kTouchSlop` whatever the device, so a click that wobbles is
+still a click wherever nothing is competing for the pointer.
 
 ### `TapGestureRecognizer`
 

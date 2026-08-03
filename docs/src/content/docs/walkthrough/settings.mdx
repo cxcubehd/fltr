@@ -100,7 +100,7 @@ compile time.
 ## The slider
 
 ```cpp title="docs/demo/src/ui/widgets/slider_row.cc"
-  return RawSlider::make({
+  WidgetRef track = RawSlider::make({
       .key = spec.key,
       .value = spec.value,
       .min = spec.min,
@@ -111,9 +111,15 @@ compile time.
       // reachable -- the same number the visual uses for its travel.
       .thumbExtent = theme.px(14.0f),
       .enabled = spec.enabled,
-      .child = ...
+      .child = SliderTrack::make({ ... }),
   });
 ```
+
+The slider is the track and nothing else, and the label and the readout are
+siblings of it rather than children. `RawSlider` reads the value off *where the
+pointer is* inside its own box, so its box has to be the thing the player is
+aiming at: wrapping the whole row would spread the range across the label and the
+readout as well, leaving the visible track worth only the last third of it.
 
 ### Two views of one fraction
 

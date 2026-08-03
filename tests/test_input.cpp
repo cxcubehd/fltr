@@ -241,6 +241,41 @@ TEST(input_a_contested_drag_is_not_recognized_until_it_has_cleared_the_slop) {
   CHECK_EQ(tally.travelled, (Offset{35, 0}));
 }
 
+/// PARALLEL TO FLUTTER's `computeHitSlop`: the slop above is a finger's, and a
+/// mouse is held to a far smaller one. Anything else makes a control whose whole
+/// travel is shorter than eighteen pixels -- a switch, say -- impossible to drag
+/// with a mouse: it would sit still until the pointer had passed the far end,
+/// then jump the whole way at once.
+TEST(input_a_mouse_drag_clears_a_slop_its_own_size) {
+  Harness h;
+  DragTally tally;
+  ScriptedRoot root(h, [&] {
+    return screen({placed(kBox, draggable(tally, DragAxis::Horizontal))});
+  });
+  h.frame();
+
+  h.binding().dispatchPointer(mouse(PointerPhase::Down, {50, 30}));
+  CHECK_EQ(tally.start, 0);
+
+  h.binding().dispatchPointer(mouse(PointerPhase::Move, {52, 30}));
+  CHECK_EQ(tally.start, 1);
+
+  h.binding().dispatchPointer(mouse(PointerPhase::Move, {57, 30}));
+  CHECK_EQ(tally.travelled, (Offset{5, 0}));
+
+  // The same two pixels from a finger are still nothing at all.
+  DragTally finger;
+  Harness touched;
+  ScriptedRoot touchRoot(touched, [&] {
+    return screen({placed(kBox, draggable(finger, DragAxis::Horizontal))});
+  });
+  touched.frame();
+
+  touched.binding().dispatchPointer(touch(PointerPhase::Down, {50, 30}));
+  touched.binding().dispatchPointer(touch(PointerPhase::Move, {52, 30}));
+  CHECK_EQ(finger.start, 0);
+}
+
 TEST(input_a_drag_measured_from_the_down_delivers_the_slop_it_swallowed) {
   Harness h;
   DragTally tally;

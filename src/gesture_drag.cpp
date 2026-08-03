@@ -4,6 +4,12 @@
 
 namespace fltr {
 
+float DragGestureRecognizer::slop() const noexcept {
+  const bool precise = kind_ == PointerDeviceKind::Mouse;
+  if (axis == DragAxis::Pan) return precise ? kPrecisePanSlop : kPanSlop;
+  return precise ? kPreciseSlop : kTouchSlop;
+}
+
 float DragGestureRecognizer::primaryOf(Offset value) const noexcept {
   switch (axis) {
     case DragAxis::Horizontal:
@@ -43,6 +49,7 @@ void DragGestureRecognizer::handleEvent(const PointerEvent& event) {
     }
     tracking_ = true;
     primary_ = event.pointer;
+    kind_ = event.kind;
     downPosition_ = event.position;
     lastPosition_ = event.position;
     velocity_.reset();

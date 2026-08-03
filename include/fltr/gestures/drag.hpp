@@ -77,7 +77,9 @@ public:
   void rejectGesture(PointerId pointer) override;
 
 private:
-  float slop() const noexcept { return axis == DragAxis::Pan ? kPanSlop : kTouchSlop; }
+  /// How far this pointer has to travel to be a drag, which is a question about
+  /// the device as much as about the axis.
+  float slop() const noexcept;
   /// The component of an offset this recognizer measures: the whole magnitude
   /// for a pan, and only the axis for a constrained drag.
   float primaryOf(Offset value) const noexcept;
@@ -91,6 +93,7 @@ private:
   VelocityTracker velocity_;
   Offset downPosition_;
   Offset lastPosition_;
+  PointerDeviceKind kind_ = PointerDeviceKind::Touch;
   PointerId primary_ = 0;
   bool tracking_ = false;
   bool started_ = false;
