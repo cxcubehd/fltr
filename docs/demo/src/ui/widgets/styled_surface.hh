@@ -37,8 +37,11 @@ struct SurfaceStyle {
 /// a focused *and* hovered control still looks hovered.
 fltr::BoxDecoration resolveSurface(const SurfaceStyle& style, fltr::WidgetStates states) noexcept;
 
-/// Whether a focus ring should be drawn at all right now.
+/// Which of the two highlights the current modality allows. Exactly one of them
+/// answers "where is the player", so the cursor's does not linger on one control
+/// while the keyboard rings another.
 bool focusVisible(const SurfaceStyle& style) noexcept;
+bool hoverVisible(const SurfaceStyle& style) noexcept;
 
 SurfaceStyle buttonStyle(const Theme& theme);
 SurfaceStyle listItemStyle(const Theme& theme);
@@ -59,12 +62,16 @@ private:
   /// button rebuilds nothing at all -- it repaints one node.
   void onStatesChanged();
   void retarget();
+  void adoptTiming();
 
-  /// One driver for both properties: they are retargeted from the same callback
-  /// at the same instant, so sharing it keeps them exactly in step.
-  fltr::AnimationDriver driver_;
-  fltr::AnimatedValue<fltr::BoxDecoration> decoration_{driver_, {}};
-  fltr::AnimatedValue<fltr::Transform2D> scale_{driver_, {}};
+  /// A driver each. Retargeting restarts the driver it runs on, and a restart
+  /// replays whatever else is on that driver from the start of an interval it had
+  /// already left -- which is how a press that ends off the button leaves the
+  /// surface holding the shrink it was told to let go of.
+  fltr::AnimationDriver decorationDriver_;
+  fltr::AnimationDriver pressDriver_;
+  fltr::AnimatedValue<fltr::BoxDecoration> decoration_{decorationDriver_, {}};
+  fltr::AnimatedValue<fltr::Transform2D> scale_{pressDriver_, {}};
   fltr::Subscription states_;
   /// The surface repaints when the input modality flips, so a ring appears on
   /// whatever is already focused the moment a key is pressed.

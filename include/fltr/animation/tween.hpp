@@ -62,8 +62,9 @@ public:
   /// Re-basing the interval here rather than retargeting the driver is what
   /// makes an interruption continuous: the new interval begins where the last
   /// one had actually reached, so the value never jumps and repeated
-  /// interruption accumulates no error. The driver is restarted, so one shared
-  /// by several values retargets all of them.
+  /// interruption accumulates no error. The driver is restarted from zero, which
+  /// replays every other value on it from the start of an interval it may have
+  /// already left -- so values that retarget independently want a driver each.
   void retarget(T to) {
     if (to == value_) {
       driver_->stop();

@@ -93,8 +93,9 @@ public:
 
   void applyGraphics(const GraphicsSettings& settings);
 
-  /// Every size in the UI is a multiple of this, so the whole interface grows
-  /// with it -- text included, rasterised at the size it ends up being drawn.
+  /// What the player asked the interface to be, where 1 is the size it was
+  /// designed at. The display's own pixel ratio is a separate factor the platform
+  /// layer knows and this does not, so a fresh window always reads 100%.
   void setUiScale(float scale);
 
   std::string_view maxFpsText() const noexcept { return maxFpsText_; }

@@ -61,9 +61,6 @@ void App::openWindow() {
   // leave reading the number nobody honoured.
   graphics_.set(window_.settings());
   formatMaxFps();
-  // A dense display starts scaled up rather than microscopic; the slider in the
-  // settings screen is what the player adjusts from there.
-  setUiScale(window_.contentScale());
 }
 
 void App::attachUi() {
@@ -197,9 +194,8 @@ void App::check(bool condition, const char* what) {
 }
 
 void App::pressEscape() {
-  // The rule the platform layer applies to a real keypress: the keyboard becomes
-  // the modality, the UI is offered the key, and what it declines is the app's.
-  input_.keyboardMode().set(true);
+  // The rule the platform layer applies to a real keypress: the UI is offered
+  // the key, and what it declines is the app's.
   const fltr::KeyEvent event{.type = fltr::KeyEventType::Down,
                              .physical = fltr::PhysicalKey::Escape,
                              .logical = fltr::LogicalKey::Escape};

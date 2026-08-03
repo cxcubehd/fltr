@@ -54,7 +54,7 @@ struct SurfaceStyle {
 BoxDecoration resolveSurface(const SurfaceStyle& style, WidgetStates states) noexcept {
   BoxDecoration decoration = style.rest;
   if (states.has(WidgetState::Selected)) decoration = style.selected;
-  if (states.has(WidgetState::Hovered)) decoration = style.hovered;
+  if (states.has(WidgetState::Hovered) && hoverVisible(style)) decoration = style.hovered;
   if (states.has(WidgetState::Pressed)) decoration = style.pressed;
   if (states.has(WidgetState::Disabled)) decoration = style.disabled;
 
@@ -70,22 +70,31 @@ BoxDecoration resolveSurface(const SurfaceStyle& style, WidgetStates states) noe
 Most specific last. Focus composes rather than replaces: it recolours the border
 of whichever surface won, so a focused and hovered control still looks hovered.
 
-`focusVisible` is the demo's own `:focus-visible`. Something is always focused --
+The two guards are the demo's own `:focus-visible`. Something is always focused --
 every screen autofocuses a control, so Tab and Enter have somewhere to start --
 but a window that has only ever seen a mouse should not be wearing keyboard
-affordances. The input layer publishes which device is driving, the theme carries
-it, and the ring is shown only while it says keyboard:
+affordances, and a keyboard walking the focus should not leave a second control
+lit under a cursor nobody has moved. The input layer publishes which device is
+driving, the theme carries it, and exactly one of the two highlights answers:
 
 ```cpp title="docs/demo/src/ui/widgets/styled_surface.cc"
 bool focusVisible(const SurfaceStyle& style) noexcept {
   return style.keyboardMode == nullptr || style.keyboardMode->value();
 }
+
+bool hoverVisible(const SurfaceStyle& style) noexcept {
+  return style.keyboardMode == nullptr || !style.keyboardMode->value();
+}
 ```
+
+Tab is what asks for the keyboard, and the only key that does: Escape, the arrows
+and an activator all mean something on their own, so none of them is read as a
+request to start walking the focus.
 
 ```cpp title="docs/demo/src/platform/input.cc"
 if (moved || IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) keyboardMode_.set(false);
 // ... and in pumpKeys:
-keyboardMode_.set(true);
+if (pair.logical == LogicalKey::Tab) keyboardMode_.set(true);
 ```
 
 Nothing rebuilds when it flips: `StyledSurfaceState` subscribes to the same
@@ -126,12 +135,16 @@ private:
   /// button rebuilds nothing at all -- it repaints one node.
   void onStatesChanged();
   void retarget();
+  void adoptTiming();
 
-  /// One driver for both properties: they are retargeted from the same callback
-  /// at the same instant, so sharing it keeps them exactly in step.
-  fltr::AnimationDriver driver_;
-  fltr::AnimatedValue<fltr::BoxDecoration> decoration_{driver_, {}};
-  fltr::AnimatedValue<fltr::Transform2D> scale_{driver_, {}};
+  /// A driver each. Retargeting restarts the driver it runs on, and a restart
+  /// replays whatever else is on that driver from the start of an interval it had
+  /// already left -- which is how a press that ends off the button leaves the
+  /// surface holding the shrink it was told to let go of.
+  fltr::AnimationDriver decorationDriver_;
+  fltr::AnimationDriver pressDriver_;
+  fltr::AnimatedValue<fltr::BoxDecoration> decoration_{decorationDriver_, {}};
+  fltr::AnimatedValue<fltr::Transform2D> scale_{pressDriver_, {}};
   fltr::Subscription states_;
   fltr::WidgetStatesController* controller_ = nullptr;
 };

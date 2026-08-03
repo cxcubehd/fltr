@@ -30,16 +30,18 @@ if(MSVC)
   # code page rather than as UTF-8. They are PUBLIC because a consumer compiling
   # fltr's headers needs the same language, not just the same warnings.
   target_compile_options(fltr PUBLIC /permissive- /Zc:__cplusplus /Zc:preprocessor /utf-8 /bigobj)
-  set(FLTR_WARNINGS /W4)
+  # MSBuild parallelises across projects but not across the sources inside one,
+  # so without this the test suite compiles a file at a time.
+  set(FLTR_COMPILE_OPTIONS /W4 /MP)
 else()
-  set(FLTR_WARNINGS
+  set(FLTR_COMPILE_OPTIONS
     -Wall -Wextra -Wpedantic -Wshadow -Wnon-virtual-dtor
     # Designated initialisers with omitted trailing fields are the authoring
     # style; the omitted fields take their in-class defaults by design.
     -Wno-missing-field-initializers
   )
 endif()
-target_compile_options(fltr PRIVATE ${FLTR_WARNINGS})
+target_compile_options(fltr PRIVATE ${FLTR_COMPILE_OPTIONS})
 
 if(FLTR_BUILD_TESTS)
   enable_testing()
@@ -47,7 +49,7 @@ if(FLTR_BUILD_TESTS)
   add_executable(fltr_tests ${FLTR_TEST_SOURCES})
   target_link_libraries(fltr_tests PRIVATE fltr)
   target_include_directories(fltr_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
-  target_compile_options(fltr_tests PRIVATE ${FLTR_WARNINGS})
+  target_compile_options(fltr_tests PRIVATE ${FLTR_COMPILE_OPTIONS})
   add_test(NAME fltr_tests COMMAND fltr_tests)
 endif()
 
@@ -56,6 +58,6 @@ if(FLTR_BUILD_EXAMPLES)
   if(FLTR_EXAMPLE_SOURCES)
     add_executable(fltr_hud ${FLTR_EXAMPLE_SOURCES})
     target_link_libraries(fltr_hud PRIVATE fltr)
-    target_compile_options(fltr_hud PRIVATE ${FLTR_WARNINGS})
+    target_compile_options(fltr_hud PRIVATE ${FLTR_COMPILE_OPTIONS})
   endif()
 endif()

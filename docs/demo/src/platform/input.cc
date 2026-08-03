@@ -143,7 +143,10 @@ void Input::pumpKeys(fltr::WidgetBinding& binding) {
   for (const KeyPair& pair : kKeys) {
     if (pair.flies && gameHasFocus_) continue;
     if (IsKeyPressed(pair.raylib)) {
-      keyboardMode_.set(true);
+      // Tab is what asks for the keyboard, and the only key that does. Escape,
+      // the arrows and an activator all mean something on their own, and none of
+      // them is a request to start walking the focus.
+      if (pair.logical == LogicalKey::Tab) keyboardMode_.set(true);
       const bool taken = binding.dispatchKey(KeyEvent{.type = KeyEventType::Down,
                                                       .physical = pair.physical,
                                                       .logical = pair.logical,

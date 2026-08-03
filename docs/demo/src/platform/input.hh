@@ -33,11 +33,11 @@ public:
   /// though raylib still reports them as down.
   void setGameHasFocus(bool value) noexcept { gameHasFocus_ = value; }
 
-  /// Whether the player is currently driving with the keyboard. A key turns it
-  /// on, the mouse turns it off, and the UI shows focus rings only while it is
-  /// on -- so a fresh window is not covered in keyboard affordances nobody asked
-  /// for. Focus itself is unaffected: this is what the focus *looks* like, which
-  /// is the consumer's half of the bargain, not the framework's.
+  /// Whether the player is currently driving with the keyboard. Tab turns it on,
+  /// the mouse turns it off, and the UI shows focus rings only while it is on --
+  /// so a fresh window is not covered in keyboard affordances nobody asked for.
+  /// Focus itself is unaffected: this is what the focus *looks* like, which is
+  /// the consumer's half of the bargain, not the framework's.
   fltr::Observable<bool>& keyboardMode() noexcept { return keyboardMode_; }
 
 private:
