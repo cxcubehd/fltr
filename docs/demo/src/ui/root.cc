@@ -53,7 +53,9 @@ fltr::Key keyFor(Screen screen) {
 
 WidgetRef buildRoot(App& app) {
   return ThemeScope::make({
-      .value = Theme{},
+      // The theme carries the one thing the surfaces cannot work out for
+      // themselves: whether the keyboard is what is driving the focus.
+      .value = Theme{.keyboardMode = &app.input().keyboardMode()},
       // A focus scope is what brings the focus subsystem into existence at all:
       // a tree without one holds no focus nodes and no key handlers. It is also
       // the traversal group, so tab and the arrow keys work inside it.

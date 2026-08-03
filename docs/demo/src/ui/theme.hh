@@ -31,6 +31,11 @@ struct Theme {
   float unit = 8.0f;
   float fontSize = 14.0f;
 
+  /// Whether the player is driving with the keyboard, which is the only thing
+  /// focus rings are shown for. Null means "always show them", which is what a
+  /// consumer that does not track input modality gets.
+  fltr::ValueListenable<bool>* keyboardMode = nullptr;
+
   friend constexpr bool operator==(const Theme&, const Theme&) noexcept = default;
 };
 

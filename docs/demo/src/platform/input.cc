@@ -90,6 +90,8 @@ void Input::pumpPointer(fltr::WidgetBinding& binding) {
   const Offset position{mouse.x, mouse.y};
   const bool moved = position != lastPointer_;
 
+  if (moved || IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) keyboardMode_.set(false);
+
   if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
     pointerDown_ = true;
     binding.dispatchPointer(PointerEvent{.phase = PointerPhase::Down,
@@ -141,6 +143,7 @@ void Input::pumpKeys(fltr::WidgetBinding& binding) {
   for (const KeyPair& pair : kKeys) {
     if (pair.flies && gameHasFocus_) continue;
     if (IsKeyPressed(pair.raylib)) {
+      keyboardMode_.set(true);
       const bool taken = binding.dispatchKey(KeyEvent{.type = KeyEventType::Down,
                                                       .physical = pair.physical,
                                                       .logical = pair.logical,

@@ -59,7 +59,7 @@ BoxDecoration resolveSurface(const SurfaceStyle& style, WidgetStates states) noe
   if (states.has(WidgetState::Disabled)) decoration = style.disabled;
 
   if (states.has(WidgetState::Focused) && !states.has(WidgetState::Disabled) &&
-      style.focusRing.a > 0) {
+      style.focusRing.a > 0 && focusVisible(style)) {
     decoration.borderColor = style.focusRing;
     decoration.borderWidth = std::max(decoration.borderWidth, 1.0f);
   }
@@ -69,6 +69,27 @@ BoxDecoration resolveSurface(const SurfaceStyle& style, WidgetStates states) noe
 
 Most specific last. Focus composes rather than replaces: it recolours the border
 of whichever surface won, so a focused and hovered control still looks hovered.
+
+`focusVisible` is the demo's own `:focus-visible`. Something is always focused --
+every screen autofocuses a control, so Tab and Enter have somewhere to start --
+but a window that has only ever seen a mouse should not be wearing keyboard
+affordances. The input layer publishes which device is driving, the theme carries
+it, and the ring is shown only while it says keyboard:
+
+```cpp title="docs/demo/src/ui/widgets/styled_surface.cc"
+bool focusVisible(const SurfaceStyle& style) noexcept {
+  return style.keyboardMode == nullptr || style.keyboardMode->value();
+}
+```
+
+```cpp title="docs/demo/src/platform/input.cc"
+if (moved || IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) keyboardMode_.set(false);
+// ... and in pumpKeys:
+keyboardMode_.set(true);
+```
+
+Nothing rebuilds when it flips: `StyledSurfaceState` subscribes to the same
+observable it subscribes to the component's states with, and retargets.
 
 Three presets cover the whole demo:
 

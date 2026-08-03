@@ -270,6 +270,7 @@ public:
     observeForPaint(subscription_, source);
     markNeedsPaint();
   }
+  Alignment origin() const noexcept { return origin_; }
   void setOrigin(Alignment a) {
     if (a == origin_) return;
     origin_ = a;
