@@ -145,6 +145,7 @@ screen's model, defined here because the window is what enforces it.
 #pragma once
 
 #include "fltr/core/geometry.hpp"
+#include "fltr/core/observable.hpp"
 #include "fltr/gestures/events.hpp"
 
 namespace demo {
@@ -169,8 +170,23 @@ public:
   void open(int width, int height, const char* title, const GraphicsSettings& settings);
   void close();
 
+  /// Reads back what the platform is actually doing, once a frame. A browser
+  /// resizes the page, changes the pixel ratio and leaves fullscreen without
+  /// asking, and a compositor can refuse a request outright, so none of it can
+  /// be inferred from what was last applied.
+  void refresh();
+
   bool shouldClose() const;
+
+  /// The drawing buffer, in the pixels it is drawn with. Not the window: on a
+  /// dense display the two differ by the content scale, and it is the buffer the
+  /// interface is laid out in so that a pixel of layout is a pixel on screen.
   fltr::Size surface() const;
+
+  /// Physical pixels per logical pixel on the surface being drawn to. Observable
+  /// because a display can change its mind -- a window dragged to another
+  /// monitor, a page zoomed -- and the tree is measured in it.
+  fltr::Observable<float>& contentScale() noexcept { return contentScale_; }
 
   /// Applies whatever differs from what is already applied.
   void apply(const GraphicsSettings& settings);
@@ -180,6 +196,7 @@ public:
 
 private:
   GraphicsSettings settings_;
+  fltr::Observable<float> contentScale_{1.0f};
   fltr::MouseCursor cursor_ = fltr::MouseCursor::Basic;
   bool open_ = false;
 };
@@ -194,8 +211,11 @@ void Window::open(int width, int height, const char* title, const GraphicsSettin
   SetConfigFlags(flags);
   SetTraceLogLevel(LOG_WARNING);
   InitWindow(width, height, title);
+  adoptCanvas();
   open_ = true;
 
+  // A frame cap of -1 is not one anything can ask for, which is what makes the
+  // first `apply` unconditional -- and with it the first `refresh`.
   settings_ = GraphicsSettings{.fullscreen = false, .vsync = settings.vsync, .maxFps = -1};
   apply(settings);
 }
@@ -209,6 +229,11 @@ fltr::Size Window::surface() const {
 Opening with `maxFps = -1` and immediately calling `apply` sends the real
 `SetTargetFPS` through the same code path the settings screen will use later, so
 there is only one place the frame cap changes.
+
+`adoptCanvas` is the web build's only line here, and it removes a listener rather
+than adding one: raylib sizes a canvas in CSS pixels, which on a dense display is
+a drawing buffer the browser has to stretch. What replaces it is in
+[step 10](/fltr/walkthrough/settings/).
 
 We come back to `apply` and `applyCursor` in
 [step 10](/fltr/walkthrough/settings/).

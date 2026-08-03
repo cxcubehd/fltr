@@ -273,8 +273,13 @@ itself:
 WidgetRef buildRoot(App& app) {
   return Watch<float>::make({
       .value = &app.uiScale(),
-      .builder = [&app](BuildContext&, const float& scale) -> WidgetRef {
-        return themedTree(app, scale * app.window().contentScale());
+      .builder = [&app](BuildContext&, const float& requested) -> WidgetRef {
+        return Watch<float>::make({
+            .value = &app.window().contentScale(),
+            .builder = [&app, requested](BuildContext&, const float& density) -> WidgetRef {
+              return themedTree(app, requested * density);
+            },
+        });
       },
   });
 }
@@ -282,7 +287,10 @@ WidgetRef buildRoot(App& app) {
 
 What the player asked for is a factor on top of what the display demands, which
 is why the slider reads 100% on a fresh window however dense the screen is: a
-device pixel ratio is the platform's business, not a setting.
+device pixel ratio is the platform's business, not a setting. It is watched
+rather than read because a display changes its mind -- a window dragged to
+another monitor, a page zoomed -- and a tree measured in a ratio that moved is a
+tree drawn at the wrong size.
 
 This is the one thing in the demo that rebuilds everything, and it should:
 `scaledTheme` multiplies the size tokens, so every size in the tree is a
@@ -299,24 +307,29 @@ value it displays is the one that just rebuilt the tree it is part of.
 ```cpp title="docs/demo/src/app/app.cc"
 void App::applyGraphics(const GraphicsSettings& settings) {
   window_.apply(settings);
+  syncGraphics();
+}
+
+void App::syncGraphics() {
+  // Whatever the window actually did is what the settings screen shows -- the
+  // readout included, which a platform that refuses a frame cap would otherwise
+  // leave reading the number nobody honoured.
+  if (window_.settings() == graphics_.value()) return;
   graphics_.set(window_.settings());
   formatMaxFps();
 }
 ```
 
-Three lines, and the middle one is the important one. The observable is set from
-**`window_.settings()`**, not from the requested value.
+The observable is set from **`window_.settings()`**, not from the requested
+value. `syncGraphics` is also called once a frame by the loop, because the answer
+can arrive later than the request: a browser grants fullscreen to the gesture
+that follows, and takes it back on Escape without telling anyone.
 
 ```cpp title="docs/demo/src/platform/window.cc"
 void Window::apply(const GraphicsSettings& next) {
   if (!open_ || next == settings_) return;
 
-  if (next.fullscreen != settings_.fullscreen) {
-    // raylib reports the state it is actually in, which is not always the state
-    // that was asked for -- a compositor may refuse. The settings screen shows
-    // what happened rather than what was requested.
-    ToggleFullscreen();
-  }
+  if (next.fullscreen != settings_.fullscreen) setFullscreen(next.fullscreen);
 
 #ifndef __EMSCRIPTEN__
   if (next.vsync != settings_.vsync) {
@@ -331,7 +344,6 @@ void Window::apply(const GraphicsSettings& next) {
 #endif
 
   settings_ = next;
-  settings_.fullscreen = IsWindowFullscreen();
 
 #ifdef __EMSCRIPTEN__
   // A browser paces the frame itself, through the callback it drives the loop
@@ -340,6 +352,11 @@ void Window::apply(const GraphicsSettings& next) {
   settings_.vsync = true;
   settings_.maxFps = 0;
 #endif
+
+  // A fullscreen request is one a compositor may refuse and a browser answers
+  // later, so the settings screen shows what happened rather than what was asked
+  // for. `refresh` is what keeps showing it.
+  refresh();
 }
 ```
 
@@ -360,6 +377,68 @@ pushes the same value the toggle already showed and notifies nobody.
 
 `apply` only touches what actually changed, because window calls are not free.
 `GraphicsSettings` being equality-comparable is what makes that one line.
+
+## The surface a page owns
+
+`setFullscreen` is where the two platforms stop agreeing. A desktop window is
+toggled and answers immediately; a browser is *asked*, grants fullscreen to a
+gesture rather than to a frame, and revokes it on Escape without telling anybody.
+
+```cpp title="docs/demo/src/platform/window.cc"
+void setFullscreen(bool enter) {
+  if (enter) {
+    emscripten_request_fullscreen("#canvas", EM_TRUE);
+  } else {
+    emscripten_exit_fullscreen();
+  }
+}
+```
+
+Nothing there reports success, which is why `refresh` exists. It is called at the
+end of `apply` and again by the loop every frame, and it answers three questions
+the demo cannot infer: how large the drawing buffer should be, whether the
+document is showing it full-screen, and how many of its pixels go into one of the
+interface's.
+
+```cpp title="docs/demo/src/platform/window.cc"
+void Window::refresh() {
+  if (!open_) return;
+  refreshSurface();
+  settings_.fullscreen = fullscreenNow();
+  contentScale_.set(displayScale());
+}
+```
+
+On a desktop `refreshSurface` is empty -- raylib's own window callbacks already
+keep the buffer and the viewport in step. In a page it is the whole fix:
+
+```cpp title="docs/demo/src/platform/window.cc"
+void refreshSurface() {
+  const fltr::Size wanted = pageSize();          // the CSS box times the pixel ratio
+  if (wanted.isEmpty() || wanted == drawingBuffer()) return;
+  SetWindowSize(static_cast<int>(wanted.width), static_cast<int>(wanted.height));
+}
+```
+
+`SetWindowSize` rather than `emscripten_set_canvas_element_size`, because the
+buffer is not the only thing that has to move with it: the same call resizes the
+viewport and the projection, and it is what tells GLFW the pixels a mouse
+position is measured in. A browser reports one in the page's pixels and GLFW
+scales it by the ratio between the two, so a buffer resized behind its back is a
+pointer that lands somewhere other than where it looks.
+
+The comparison is against the buffer rather than against the last request for the
+one case that needs it: GLFW answers the first resize made inside fullscreen with
+the screen's CSS pixels, and asking again on the next frame is what settles it.
+
+<Aside type="caution" title="raylib sizes a canvas in CSS pixels">
+`InitWindow` leaves a resize handler behind that sets the drawing buffer to
+`window.innerWidth` -- no pixel ratio anywhere in it. On a 2x display that is a
+buffer the browser stretches to twice its size, which is a blurry page at 100%
+and a UI drawn twice as large as its own settings claim. Registering another
+handler does not help, because emscripten *adds* listeners rather than replacing
+them; `adoptCanvas` removes raylib's, and the measurement above takes its place.
+</Aside>
 
 ## The formatted value
 

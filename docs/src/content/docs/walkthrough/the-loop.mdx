@@ -84,15 +84,22 @@ float advanceClock(App& app) { return app.clock().advance(); }
 
 ```cpp title="docs/demo/src/app/loop.cc"
 void pumpWindowEvents(App& app) {
-  // Pushing the same size again is a no-op, so this is unconditional.
+  // The window can move without being asked to -- a page resized, a display
+  // swapped, fullscreen left by pressing Escape -- so what it is actually doing
+  // is read back first. Pushing an unchanged value is a no-op, so all of this is
+  // unconditional.
+  app.window().refresh();
+  app.syncGraphics();
+
   const fltr::Size surface = app.window().surface();
   app.binding().setSurface(surface);
   app.session().setBounds(surface);
 }
 ```
 
-Unconditional. `setSurface` compares before it invalidates, so a frame in which
-the window did not move costs one `Size` comparison.
+Unconditional. `refresh` measures, `setSurface` compares before it invalidates,
+and `syncGraphics` only publishes what changed, so a frame in which the window
+did not move costs two comparisons.
 
 ### `pumpInput`
 

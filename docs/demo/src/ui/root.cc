@@ -101,13 +101,19 @@ WidgetRef themedTree(App& app, float scale) {
 WidgetRef buildRoot(App& app) {
   // The interface scale is the one value the whole tree is measured in, so it is
   // watched at the very top: changing it is the only thing that rebuilds
-  // everything, and it happens when a player drags a slider. What the player
-  // asked for is a factor on top of what the display demands, so a dense screen
-  // is served without the setting reading anything other than 100%.
+  // everything. What the player asked for is a factor on top of what the display
+  // demands, so a dense screen is served without the setting reading anything
+  // other than 100% -- and the display is watched too, because a window dragged
+  // to another monitor changes what it demands without asking anyone.
   return Watch<float>::make({
       .value = &app.uiScale(),
-      .builder = [&app](BuildContext&, const float& scale) -> WidgetRef {
-        return themedTree(app, scale * app.window().contentScale());
+      .builder = [&app](BuildContext&, const float& requested) -> WidgetRef {
+        return Watch<float>::make({
+            .value = &app.window().contentScale(),
+            .builder = [&app, requested](BuildContext&, const float& density) -> WidgetRef {
+              return themedTree(app, requested * density);
+            },
+        });
       },
   });
 }

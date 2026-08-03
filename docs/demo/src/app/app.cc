@@ -56,11 +56,7 @@ App::~App() {
 
 void App::openWindow() {
   window_.open(options_.width, options_.height, "fltr // drift", graphics_.value());
-  // Whatever the window actually did is what the settings screen shows -- the
-  // readout included, which a platform that refuses a frame cap would otherwise
-  // leave reading the number nobody honoured.
-  graphics_.set(window_.settings());
-  formatMaxFps();
+  syncGraphics();
 }
 
 void App::attachUi() {
@@ -147,6 +143,14 @@ void App::leave() {
 
 void App::applyGraphics(const GraphicsSettings& settings) {
   window_.apply(settings);
+  syncGraphics();
+}
+
+void App::syncGraphics() {
+  // Whatever the window actually did is what the settings screen shows -- the
+  // readout included, which a platform that refuses a frame cap would otherwise
+  // leave reading the number nobody honoured.
+  if (window_.settings() == graphics_.value()) return;
   graphics_.set(window_.settings());
   formatMaxFps();
 }

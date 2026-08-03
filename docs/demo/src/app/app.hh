@@ -93,6 +93,11 @@ public:
 
   void applyGraphics(const GraphicsSettings& settings);
 
+  /// Republishes what the window is actually doing, which the loop calls every
+  /// frame: fullscreen can be left without the demo being told, and a request
+  /// a browser deferred lands frames after it was made.
+  void syncGraphics();
+
   /// What the player asked the interface to be, where 1 is the size it was
   /// designed at. The display's own pixel ratio is a separate factor the platform
   /// layer knows and this does not, so a fresh window always reads 100%.
