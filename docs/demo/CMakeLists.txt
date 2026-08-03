@@ -127,7 +127,7 @@ else()
 endif()
 
 if(MSVC)
-  target_compile_options(demo PRIVATE /W4)
+  target_compile_options(demo PRIVATE /W4 /MP)
 else()
   target_compile_options(demo PRIVATE -Wall -Wextra -Wpedantic -Wno-missing-field-initializers)
 endif()
