@@ -92,7 +92,7 @@ and an activator all mean something on their own, so none of them is read as a
 request to start walking the focus.
 
 ```cpp title="docs/demo/src/platform/input.cc"
-if (moved || IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) keyboardMode_.set(false);
+if (moved || !buttons.empty()) keyboardMode_.set(false);
 // ... and in pumpKeys:
 if (pair.logical == LogicalKey::Tab) keyboardMode_.set(true);
 ```
