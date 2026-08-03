@@ -77,7 +77,18 @@ public:
   /// returns to the one that opened it, and the main menu is the floor -- the
   /// demo is never left by pressing a navigation key.
   void back();
-  void quit() noexcept { quitting_ = true; }
+
+  /// What the last menu entry does, and what it is called. A desktop window can
+  /// be closed; a page cannot -- stopping the loop there would leave a frozen
+  /// canvas in someone else's document -- so in a browser the same entry fills
+  /// the screen instead, which is what a demo embedded in a page actually wants.
+  static constexpr std::string_view kLeaveLabel =
+#ifdef __EMSCRIPTEN__
+      "Fullscreen";
+#else
+      "Quit";
+#endif
+  void leave();
   bool quitting() const noexcept { return quitting_; }
 
   void applyGraphics(const GraphicsSettings& settings);

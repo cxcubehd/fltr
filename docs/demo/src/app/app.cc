@@ -56,8 +56,11 @@ App::~App() {
 
 void App::openWindow() {
   window_.open(options_.width, options_.height, "fltr // drift", graphics_.value());
-  // Whatever the window actually did is what the settings screen shows.
+  // Whatever the window actually did is what the settings screen shows -- the
+  // readout included, which a platform that refuses a frame cap would otherwise
+  // leave reading the number nobody honoured.
   graphics_.set(window_.settings());
+  formatMaxFps();
   // A dense display starts scaled up rather than microscopic; the slider in the
   // settings screen is what the player adjusts from there.
   setUiScale(window_.contentScale());
@@ -135,6 +138,16 @@ void App::back() {
   togglePause();
 }
 
+void App::leave() {
+#ifdef __EMSCRIPTEN__
+  GraphicsSettings next = graphics_.value();
+  next.fullscreen = !next.fullscreen;
+  applyGraphics(next);
+#else
+  quitting_ = true;
+#endif
+}
+
 void App::applyGraphics(const GraphicsSettings& settings) {
   window_.apply(settings);
   graphics_.set(window_.settings());
@@ -143,7 +156,11 @@ void App::applyGraphics(const GraphicsSettings& settings) {
 
 void App::formatMaxFps() {
   const int cap = graphics_.value().maxFps;
-  std::snprintf(maxFpsText_, sizeof(maxFpsText_), "%d", cap);
+  if (cap > 0) {
+    std::snprintf(maxFpsText_, sizeof(maxFpsText_), "%d", cap);
+  } else {
+    std::snprintf(maxFpsText_, sizeof(maxFpsText_), "AUTO");
+  }
 }
 
 void App::setUiScale(float scale) {

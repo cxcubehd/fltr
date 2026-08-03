@@ -116,7 +116,6 @@ if(EMSCRIPTEN)
     -sALLOW_MEMORY_GROWTH=1
     -sGL_ENABLE_GET_PROC_ADDRESS=1
     -sSTACK_SIZE=1mb
-    -sEXPORTED_RUNTIME_METHODS=['requestFullscreen']
     --shell-file "${CMAKE_CURRENT_SOURCE_DIR}/web/shell.html"
     --preload-file "${DEMO_FONT}@/JetBrainsMono-Regular.ttf"
   )

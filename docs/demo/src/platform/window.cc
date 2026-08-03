@@ -84,7 +84,15 @@ void Window::close() {
   open_ = false;
 }
 
-bool Window::shouldClose() const { return !open_ || WindowShouldClose(); }
+bool Window::shouldClose() const {
+#ifdef __EMSCRIPTEN__
+  // A page is closed, not a window. raylib's own answer is always "no" anyway,
+  // and it arrives by way of a suspend only an asyncify build could make.
+  return !open_;
+#else
+  return !open_ || WindowShouldClose();
+#endif
+}
 
 fltr::Size Window::surface() const {
   if (!open_) return {};
@@ -109,6 +117,7 @@ void Window::apply(const GraphicsSettings& next) {
     ToggleFullscreen();
   }
 
+#ifndef __EMSCRIPTEN__
   if (next.vsync != settings_.vsync) {
     if (next.vsync) {
       SetWindowState(FLAG_VSYNC_HINT);
@@ -118,9 +127,18 @@ void Window::apply(const GraphicsSettings& next) {
   }
 
   if (next.maxFps != settings_.maxFps) SetTargetFPS(next.maxFps);
+#endif
 
   settings_ = next;
   settings_.fullscreen = IsWindowFullscreen();
+
+#ifdef __EMSCRIPTEN__
+  // A browser paces the frame itself, through the callback it drives the loop
+  // with, and raylib's own wait is a suspend this build has no asyncify for.
+  // Neither knob exists here, so neither is reported as having taken effect.
+  settings_.vsync = true;
+  settings_.maxFps = 0;
+#endif
 }
 
 void Window::applyCursor(MouseCursor cursor) {
