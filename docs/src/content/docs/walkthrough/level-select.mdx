@@ -205,18 +205,46 @@ shows it.
 
 ```cpp title="docs/demo/src/platform/input.cc"
 void Input::pumpSignals(fltr::WidgetBinding& binding) {
-  const float wheel = GetMouseWheelMove();
-  if (wheel == 0.0f) return;
+  // The conversion to the pixels the surface is measured in belongs to the
+  // platform, so it happens here rather than inside the framework.
+  const Offset wheel = takeWheelDelta();
+  if (wheel == Offset{}) return;
 
   const Vector2 mouse = GetMousePosition();
-  // The notch size belongs to the platform, so the conversion to logical pixels
-  // happens here rather than inside the framework.
   binding.dispatchSignal(PointerSignalEvent{.kind = PointerSignalKind::Scroll,
                                             .pointer = 1,
                                             .position = {mouse.x, mouse.y},
                                             .localPosition = {mouse.x, mouse.y},
-                                            .delta = {0.0f, -wheel * 48.0f},
+                                            .delta = wheel,
                                             .modifiers = currentModifiers()});
+}
+```
+
+Where `takeWheelDelta` comes from is the platform's business, and the two
+platforms do not agree on what a wheel even is. A desktop reports notches, and
+reading them per axis is enough:
+
+```cpp title="docs/demo/src/platform/input.cc"
+Offset takeWheelDelta() {
+  // Per axis, rather than `GetMouseWheelMove`, which answers with whichever of
+  // the two is larger and so lets a sideways drift steer a vertical list.
+  const Vector2 wheel = GetMouseWheelMoveV();
+  return {-wheel.x * kWheelNotch, -wheel.y * kWheelNotch};
+}
+```
+
+A browser reports what the device measured, in CSS pixels, and raylib does not
+pass that on: its web backend reads the wheel through emscripten's GLFW shim,
+which quantizes every event to at least a whole notch and hands the horizontal
+delta over unscaled beside it. A trackpad reports a few pixels at a time, so
+through that shim a gentle swipe arrives as a notch a frame. The DOM event is
+listened for directly instead, and drained once a frame:
+
+```cpp title="docs/demo/src/platform/input.cc"
+EM_BOOL accumulateWheel(int, const EmscriptenWheelEvent* event, void*) {
+  pendingWheel.dx += wheelPixels(event->deltaX, event->deltaMode);
+  pendingWheel.dy += wheelPixels(event->deltaY, event->deltaMode);
+  return EM_TRUE;
 }
 ```
 

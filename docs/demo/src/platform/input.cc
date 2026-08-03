@@ -2,6 +2,10 @@
 
 #include "raylib.h"
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten/html5.h>
+#endif
+
 namespace demo {
 
 using fltr::KeyEvent;
@@ -55,6 +59,59 @@ constexpr KeyPair kKeys[] = {
     {KEY_Q, PhysicalKey::KeyQ, LogicalKey::KeyQ},
 };
 
+#ifdef __EMSCRIPTEN__
+
+/// What the browser measured since the last frame took it, in CSS pixels.
+///
+/// raylib reads the same events through emscripten's GLFW shim, which quantizes
+/// every one of them to at least a whole wheel notch and passes the horizontal
+/// delta through beside it in raw pixels. A trackpad reports a few pixels at a
+/// time, so through that shim a gentle swipe becomes a notch a frame -- in
+/// whichever axis happened to be the larger number.
+Offset pendingWheel;
+
+float wheelPixels(double delta, unsigned int mode) {
+  // Only Firefox reports lines, and page mode is rare enough that a screenful of
+  // the browser's own guess is close enough.
+  switch (mode) {
+    case DOM_DELTA_LINE: return static_cast<float>(delta) * 16.0f;
+    case DOM_DELTA_PAGE: return static_cast<float>(delta) * 800.0f;
+    default: return static_cast<float>(delta);
+  }
+}
+
+EM_BOOL accumulateWheel(int, const EmscriptenWheelEvent* event, void*) {
+  pendingWheel.dx += wheelPixels(event->deltaX, event->deltaMode);
+  pendingWheel.dy += wheelPixels(event->deltaY, event->deltaMode);
+  return EM_TRUE;
+}
+
+/// A browser measures in CSS pixels and the surface is drawn in the device's, so
+/// the same ratio the interface is scaled by converts one to the other. The sign
+/// needs no flipping: the DOM and fltr both count downward scrolling as positive.
+Offset takeWheelDelta() {
+  const float ratio = static_cast<float>(emscripten_get_device_pixel_ratio());
+  const Offset wheel{pendingWheel.dx * ratio, pendingWheel.dy * ratio};
+  pendingWheel = {};
+  return wheel;
+}
+
+#else
+
+/// One notch, in the logical pixels the surface is measured in. Notches are all a
+/// desktop reports -- a trackpad's gesture has been resolved into them, fractions
+/// included, long before raylib sees it.
+constexpr float kWheelNotch = 48.0f;
+
+Offset takeWheelDelta() {
+  // Per axis, rather than `GetMouseWheelMove`, which answers with whichever of
+  // the two is larger and so lets a sideways drift steer a vertical list.
+  const Vector2 wheel = GetMouseWheelMoveV();
+  return {-wheel.x * kWheelNotch, -wheel.y * kWheelNotch};
+}
+
+#endif
+
 KeyModifiers currentModifiers() {
   KeyModifiers modifiers;
   if (IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT)) {
@@ -70,6 +127,12 @@ KeyModifiers currentModifiers() {
 }
 
 }  // namespace
+
+Input::Input() {
+#ifdef __EMSCRIPTEN__
+  emscripten_set_wheel_callback(EMSCRIPTEN_EVENT_TARGET_WINDOW, nullptr, EM_FALSE, accumulateWheel);
+#endif
+}
 
 PhysicalKey physicalKeyFor(int raylibKey) noexcept {
   for (const KeyPair& pair : kKeys) {
@@ -122,17 +185,17 @@ void Input::pumpPointer(fltr::WidgetBinding& binding) {
 }
 
 void Input::pumpSignals(fltr::WidgetBinding& binding) {
-  const float wheel = GetMouseWheelMove();
-  if (wheel == 0.0f) return;
+  // The conversion to the pixels the surface is measured in belongs to the
+  // platform, so it happens here rather than inside the framework.
+  const Offset wheel = takeWheelDelta();
+  if (wheel == Offset{}) return;
 
   const Vector2 mouse = GetMousePosition();
-  // The notch size belongs to the platform, so the conversion to logical pixels
-  // happens here rather than inside the framework.
   binding.dispatchSignal(PointerSignalEvent{.kind = PointerSignalKind::Scroll,
                                             .pointer = 1,
                                             .position = {mouse.x, mouse.y},
                                             .localPosition = {mouse.x, mouse.y},
-                                            .delta = {0.0f, -wheel * 48.0f},
+                                            .delta = wheel,
                                             .modifiers = currentModifiers()});
 }
 

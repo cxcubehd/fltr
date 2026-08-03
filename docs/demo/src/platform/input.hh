@@ -17,6 +17,11 @@ namespace demo {
 /// the game needs to know to avoid fighting a menu for the arrow keys.
 class Input {
 public:
+  /// In a browser the wheel is listened for directly, because what raylib reports
+  /// there has been through a shim that cannot describe a trackpad. Nothing to
+  /// set up on any other platform.
+  Input();
+
   /// Pushes everything raylib saw since the last call.
   void pump(fltr::WidgetBinding& binding);
 
