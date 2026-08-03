@@ -20,10 +20,14 @@ bool focusVisible(const SurfaceStyle& style) noexcept {
   return style.keyboardMode == nullptr || style.keyboardMode->value();
 }
 
+bool hoverVisible(const SurfaceStyle& style) noexcept {
+  return style.keyboardMode == nullptr || !style.keyboardMode->value();
+}
+
 BoxDecoration resolveSurface(const SurfaceStyle& style, WidgetStates states) noexcept {
   BoxDecoration decoration = style.rest;
   if (states.has(WidgetState::Selected)) decoration = style.selected;
-  if (states.has(WidgetState::Hovered)) decoration = style.hovered;
+  if (states.has(WidgetState::Hovered) && hoverVisible(style)) decoration = style.hovered;
   if (states.has(WidgetState::Pressed)) decoration = style.pressed;
   if (states.has(WidgetState::Disabled)) decoration = style.disabled;
 
@@ -75,22 +79,31 @@ SurfaceStyle trackStyle(const Theme& theme) {
 }
 
 void StyledSurfaceState::initState() {
-  driver_.attach(context().tickers());
-  driver_.setConfig({.duration = widget().style().duration, .curve = fltr::Curves::easeOut});
+  decorationDriver_.attach(context().tickers());
+  pressDriver_.attach(context().tickers());
+  adoptTiming();
   const BoxDecoration settled = resolveSurface(widget().style(), {});
   decoration_.setTween({settled, settled});
   scale_.setTween({fltr::Transform2D::identity(), fltr::Transform2D::identity()});
 }
 
 void StyledSurfaceState::didUpdateWidget(const StyledSurface& previous) {
-  driver_.setConfig({.duration = widget().style().duration, .curve = fltr::Curves::easeOut});
+  adoptTiming();
   if (!(widget().style() == previous.style())) retarget();
 }
 
 void StyledSurfaceState::dispose() {
   states_.detach();
   mode_.detach();
-  driver_.detach();
+  decorationDriver_.detach();
+  pressDriver_.detach();
+}
+
+void StyledSurfaceState::adoptTiming() {
+  const fltr::AnimationDriver::Config timing{.duration = widget().style().duration,
+                                             .curve = fltr::Curves::easeOut};
+  decorationDriver_.setConfig(timing);
+  pressDriver_.setConfig(timing);
 }
 
 void StyledSurfaceState::retarget() {

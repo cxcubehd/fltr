@@ -32,8 +32,9 @@ the page has focused.
 
 The settings screen is worth a look. Interface scale multiplies every size the
 theme hands out rather than stretching the finished frame, so text is rasterised
-at the size it is drawn at instead of being an upscaled atlas. On a high-density
-display the demo starts at the browser's own device pixel ratio.
+at the size it is drawn at instead of being an upscaled atlas. It starts at 100%,
+which is the size the demo was designed at: the browser's own device pixel ratio
+is a separate factor applied underneath it, so 100% looks the same everywhere.
 
 <Aside type="caution">
   WebGL 2 and a keyboard. A phone will load it and draw it; flying a spaceship

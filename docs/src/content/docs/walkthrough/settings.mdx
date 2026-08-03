@@ -260,11 +260,15 @@ WidgetRef buildRoot(App& app) {
   return Watch<float>::make({
       .value = &app.uiScale(),
       .builder = [&app](BuildContext&, const float& scale) -> WidgetRef {
-        return themedTree(app, scale);
+        return themedTree(app, scale * app.window().contentScale());
       },
   });
 }
 ```
+
+What the player asked for is a factor on top of what the display demands, which
+is why the slider reads 100% on a fresh window however dense the screen is: a
+device pixel ratio is the platform's business, not a setting.
 
 This is the one thing in the demo that rebuilds everything, and it should:
 `scaledTheme` multiplies the size tokens, so every size in the tree is a
