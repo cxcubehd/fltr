@@ -3,16 +3,8 @@ name: Docs
 on:
   push:
     branches: [main]
-    paths:
-      - 'docs/**'
-      - '.github/workflows/docs.yml'
+  pull_request:
   workflow_dispatch:
-
-# Allow one concurrent deployment; a queued run supersedes an in-progress one
-# rather than racing it.
-concurrency:
-  group: pages
-  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -22,11 +14,31 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: docs
     steps:
       - uses: actions/checkout@v4
+
+      - uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: 3.1.64
+          actions-cache-folder: emsdk-cache
+
+      - uses: actions/cache@v4
+        with:
+          path: docs/demo/build-web/_deps
+          key: demo-deps-web-${{ hashFiles('docs/demo/CMakeLists.txt') }}
+
+      # The demo is part of the site, so it is compiled to WebAssembly and left
+      # in `public/` for Astro to copy into `dist/` like any other static asset.
+      - name: Build the demo for the web
+        run: |
+          emcmake cmake -S docs/demo -B docs/demo/build-web \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DFETCHCONTENT_SOURCE_DIR_FLTR=${{ github.workspace }}
+          cmake --build docs/demo/build-web --parallel
+          mkdir -p docs/public/demo
+          cp docs/demo/build-web/index.html docs/demo/build-web/index.js \
+             docs/demo/build-web/index.wasm docs/demo/build-web/index.data \
+             docs/public/demo/
 
       - uses: actions/setup-node@v4
         with:
@@ -35,10 +47,12 @@ jobs:
           cache-dependency-path: docs/package-lock.json
 
       - run: npm ci
+        working-directory: docs
 
       # `base: '/fltr'` in astro.config.mjs is what makes the built site work
       # under cxcubehd.github.io/fltr rather than at a domain root.
       - run: npm run build
+        working-directory: docs
 
       - uses: actions/configure-pages@v5
 
@@ -46,9 +60,16 @@ jobs:
         with:
           path: docs/dist
 
+  # Only main is published; a pull request builds the same artifact and stops.
   deploy:
+    if: github.ref == 'refs/heads/main'
     needs: build
     runs-on: ubuntu-latest
+    # Allow one concurrent deployment; a queued run supersedes an in-progress
+    # one rather than racing it.
+    concurrency:
+      group: pages
+      cancel-in-progress: false
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

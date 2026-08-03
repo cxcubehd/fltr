@@ -29,6 +29,8 @@ Transform2D slideX(float fraction, float travel) noexcept {
   return Transform2D::translation({fraction * travel, 0.0f});
 }
 
+/// The switch, in unscaled units. Everything here goes through `Theme::px` at
+/// the point of use so the whole control follows the interface scale.
 constexpr float kTrackWidth = 40.0f;
 constexpr float kTrackHeight = 22.0f;
 constexpr float kThumbInset = 3.0f;
@@ -52,11 +54,14 @@ WidgetRef SwitchThumbState::build(BuildContext& context) {
 }
 
 WidgetRef toggleRow(const Theme& theme, const ToggleRowSpec& spec) {
-  const float diameter = kTrackHeight - kThumbInset * 2.0f;
-  const float travel = kTrackWidth - kThumbInset * 2.0f - diameter;
+  const float trackWidth = theme.px(kTrackWidth);
+  const float trackHeight = theme.px(kTrackHeight);
+  const float inset = theme.px(kThumbInset);
+  const float diameter = trackHeight - inset * 2.0f;
+  const float travel = trackWidth - inset * 2.0f - diameter;
 
   SurfaceStyle track = trackStyle(theme);
-  const BorderRadius pill = BorderRadius::all(kTrackHeight * 0.5f);
+  const BorderRadius pill = BorderRadius::all(trackHeight * 0.5f);
   track.rest.radius = pill;
   track.hovered.radius = pill;
   track.pressed.radius = pill;
@@ -99,11 +104,11 @@ WidgetRef toggleRow(const Theme& theme, const ToggleRowSpec& spec) {
                       StyledSurface::make({
                           .style = track,
                           .child = SizedBox::make({
-                              .size = {kTrackWidth, kTrackHeight},
+                              .size = {trackWidth, trackHeight},
                               .child = Align::make({
                                   .alignment = Alignment::centerLeft(),
                                   .child = Padding::make({
-                                      .padding = EdgeInsets::all(kThumbInset),
+                                      .padding = EdgeInsets::all(inset),
                                       .child = SwitchThumb::make({
                                           .travel = travel,
                                           .diameter = diameter,

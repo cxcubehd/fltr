@@ -29,8 +29,6 @@ using fltr::WidgetRef;
 
 namespace {
 
-constexpr float kTrackThickness = 4.0f;
-
 Transform2D scaleX(float fraction, float) noexcept {
   return Transform2D::scaling(std::clamp(fraction, 0.0f, 1.0f), 1.0f);
 }
@@ -39,10 +37,10 @@ Transform2D slideX(float fraction, float travel) noexcept {
   return Transform2D::translation({std::clamp(fraction, 0.0f, 1.0f) * travel, 0.0f});
 }
 
-WidgetRef bar(fltr::Color color) {
+WidgetRef bar(fltr::Color color, float thickness) {
   return DecoratedBox::make({
-      .decoration = {.color = color, .radius = BorderRadius::all(kTrackThickness * 0.5f)},
-      .child = SizedBox::make({.size = {fltr::kInf, kTrackThickness}}),
+      .decoration = {.color = color, .radius = BorderRadius::all(thickness * 0.5f)},
+      .child = SizedBox::make({.size = {fltr::kInf, thickness}}),
   });
 }
 
@@ -62,19 +60,19 @@ WidgetRef SliderTrackState::build(BuildContext& context) {
   thumb_.bind(fraction, &slideX, travel);
 
   return SizedBox::make({
-      .size = {args.width, args.thumbSize + 6.0f},
+      .size = {args.width, args.thumbSize * 1.4f},
       .child = Stack::make({
           .fit = StackFit::Expand,
           .children =
               {
-                  Align::make({.child = bar(args.track)}),
+                  Align::make({.child = bar(args.track, args.thickness)}),
                   Align::make({
                       .child = ClipRect::make({
-                          .radius = BorderRadius::all(kTrackThickness * 0.5f),
+                          .radius = BorderRadius::all(args.thickness * 0.5f),
                           .child = fltr::Transform::make({
                               .animation = &fill_,
                               .origin = Alignment::centerLeft(),
-                              .child = bar(args.fill),
+                              .child = bar(args.fill, args.thickness),
                           }),
                       }),
                   }),
@@ -107,7 +105,7 @@ WidgetRef sliderRow(const Theme& theme, const SliderRowSpec& spec) {
       .onChanged = spec.onChanged,
       // The value maps across the track less the thumb, so both ends stay
       // reachable -- the same number the visual uses for its travel.
-      .thumbExtent = 14.0f,
+      .thumbExtent = theme.px(14.0f),
       .enabled = spec.enabled,
       .child = Padding::make({
           .padding = EdgeInsets::symmetric(theme.unit * 1.75f, theme.unit * 1.25f),
@@ -120,6 +118,9 @@ WidgetRef sliderRow(const Theme& theme, const SliderRowSpec& spec) {
                       Text::make({.text = spec.valueText, .style = value}),
                       gap(theme.unit * 1.5f),
                       SliderTrack::make({
+                          .width = theme.px(180.0f),
+                          .thumbSize = theme.px(14.0f),
+                          .thickness = theme.px(4.0f),
                           .fill = spec.enabled ? theme.accent : theme.border,
                           .track = theme.surfaceRaised,
                           .thumb = spec.enabled ? theme.text : theme.textFaint,

@@ -197,7 +197,7 @@ There is no theme system. `Ambient<T>` is the mechanism and the tokens are yours
 ```cpp
 struct Theme {
   Color background, surface, border, text, accent, danger;
-  float radius = 6.0f, unit = 8.0f, fontSize = 14.0f;
+  float radius = 6.0f, unit = 8.0f, fontSize = 16.0f, scale = 1.0f;
   friend constexpr bool operator==(const Theme&, const Theme&) noexcept = default;
 };
 using ThemeScope = Ambient<Theme>;

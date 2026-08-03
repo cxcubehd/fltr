@@ -1,0 +1,81 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  library:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: Linux / GCC, os: ubuntu-latest }
+          - { name: macOS / Clang, os: macos-latest }
+          - { name: Windows / MSVC, os: windows-latest }
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo
+
+      - name: Build
+        run: cmake --build build --config RelWithDebInfo --parallel
+
+      - name: Test
+        run: ctest --test-dir build --build-config RelWithDebInfo --output-on-failure
+
+  demo:
+    name: Demo / ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: Linux, os: ubuntu-latest }
+          - { name: macOS, os: macos-latest }
+          - { name: Windows, os: windows-latest }
+    steps:
+      - uses: actions/checkout@v4
+
+      # raylib links against these on Linux; the other two runners ship theirs.
+      - name: Install X11 and GL headers
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgl1-mesa-dev libx11-dev libxrandr-dev libxinerama-dev \
+            libxcursor-dev libxi-dev libxkbcommon-dev xvfb
+
+      # raylib and the font are fetched at configure time; keyed on the file
+      # that pins their versions so a bump invalidates it.
+      - uses: actions/cache@v4
+        with:
+          path: docs/demo/build/_deps
+          key: demo-deps-${{ runner.os }}-${{ hashFiles('docs/demo/CMakeLists.txt') }}
+
+      # FETCHCONTENT_SOURCE_DIR_FLTR points the demo at this checkout rather
+      # than at the published tag, which is the whole reason it is an option.
+      - name: Configure
+        run: >
+          cmake -S docs/demo -B docs/demo/build
+          -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          -DFETCHCONTENT_SOURCE_DIR_FLTR=${{ github.workspace }}
+
+      - name: Build
+        run: cmake --build docs/demo/build --config RelWithDebInfo --parallel
+
+      # The smoke run asserts what a screenshot cannot: that layout converged in
+      # one pass, that an idle frame re-recorded nothing, and that no paragraph
+      # outlived the tree that measured it.
+      - name: Smoke
+        if: runner.os == 'Linux'
+        run: xvfb-run -a ./docs/demo/build/demo --smoke 300

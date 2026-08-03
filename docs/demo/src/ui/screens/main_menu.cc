@@ -49,10 +49,10 @@ WidgetRef menu(App& app, const Theme& theme) {
                                       }),
                            menuButton(theme,
                                       {
-                                          .key = Key::of("menu.quit"),
-                                          .label = "Quit",
+                                          .key = Key::of("menu.leave"),
+                                          .label = App::kLeaveLabel,
                                           .trailing = "Q",
-                                          .onPressed = [&app] { app.quit(); },
+                                          .onPressed = [&app] { app.leave(); },
                                       }),
                        },
                }));
@@ -62,16 +62,16 @@ WidgetRef menu(App& app, const Theme& theme) {
 
 WidgetRef mainMenuScreen(App& app, const Theme& theme) {
   // A shortcut fires only while the focus is inside the subtree that declares
-  // it, which is what lets "Q" mean quit here and nothing at all in the middle
+  // it, which is what lets "Q" mean leave here and nothing at all in the middle
   // of a run.
   return Shortcuts::make({
       .shortcuts =
           {
               {.stroke = KeyStroke{.key = LogicalKey::KeyS},
                .onInvoke = [&app] { app.goTo(Screen::Settings); }},
-              {.stroke = KeyStroke{.key = LogicalKey::KeyQ}, .onInvoke = [&app] { app.quit(); }},
+              {.stroke = KeyStroke{.key = LogicalKey::KeyQ}, .onInvoke = [&app] { app.leave(); }},
           },
-      .child = sheet(Key::of("screen.menu"), theme, 460.0f,
+      .child = sheet(Key::of("screen.menu"), theme, theme.px(460.0f),
                      Column::make({
                          .crossAxisAlignment = CrossAxisAlignment::Stretch,
                          .mainAxisSize = MainAxisSize::Min,

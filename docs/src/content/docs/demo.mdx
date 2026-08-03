@@ -1,0 +1,41 @@
+---
+title: Demo
+description: "drift, the walkthrough demo, compiled to WebAssembly and running in this page: menus, a settings screen, a live HUD and a pause overlay, all drawn by fltr."
+---
+
+import { Aside, LinkCard } from '@astrojs/starlight/components';
+
+export const demo = `${import.meta.env.BASE_URL.replace(/\/$/, '')}/demo/`;
+
+This is the same **drift** the [walkthrough](/fltr/walkthrough/) builds, compiled
+to WebAssembly with Emscripten. It is the demo binary, not a re-implementation:
+the identical source builds a native window on Windows, macOS and Linux, and CI
+runs its headless smoke test on every commit.
+
+<iframe
+  src={demo}
+  title="drift, the fltr demo"
+  loading="lazy"
+  allow="fullscreen; autoplay"
+  style="width:100%;aspect-ratio:16/10;border:1px solid var(--sl-color-gray-5);border-radius:0.5rem;background:#0a0a0c"
+></iframe>
+
+<LinkCard
+  title="Open it on its own"
+  description="The demo fills the window, which is where it is meant to be played."
+  href={demo}
+/>
+
+**Arrows** or **WASD** fly, **space** fires, **escape** goes back and pauses, and
+**tab** moves the focus. Click the canvas first: the keyboard goes to whatever
+the page has focused.
+
+The settings screen is worth a look. Interface scale multiplies every size the
+theme hands out rather than stretching the finished frame, so text is rasterised
+at the size it is drawn at instead of being an upscaled atlas. On a high-density
+display the demo starts at the browser's own device pixel ratio.
+
+<Aside type="caution">
+  WebGL 2 and a keyboard. A phone will load it and draw it; flying a spaceship
+  with no keys is another matter.
+</Aside>

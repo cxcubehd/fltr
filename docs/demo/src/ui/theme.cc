@@ -21,20 +21,33 @@ TextStyle styled(float size, Color color, float tracking) {
 
 }  // namespace
 
+Theme scaledTheme(float scale, fltr::ValueListenable<bool>* keyboardMode) {
+  Theme theme;
+  theme.radius *= scale;
+  theme.hairline *= scale;
+  theme.unit *= scale;
+  theme.fontSize *= scale;
+  theme.scale = scale;
+  theme.keyboardMode = keyboardMode;
+  return theme;
+}
+
 TextStyle bodyStyle(const Theme& theme) {
   return styled(theme.fontSize, theme.text, 0.0f);
 }
 
+// The steps are ratios rather than offsets so that a scaled theme keeps its
+// typographic proportions instead of flattening as it grows.
 TextStyle labelStyle(const Theme& theme) {
-  return styled(theme.fontSize - 2.0f, theme.textDim, 0.6f);
+  return styled(theme.fontSize * 0.8f, theme.textDim, 0.6f);
 }
 
 TextStyle titleStyle(const Theme& theme) {
-  return styled(theme.fontSize + 4.0f, theme.text, 0.0f);
+  return styled(theme.fontSize * 1.3f, theme.text, 0.0f);
 }
 
 TextStyle displayStyle(const Theme& theme) {
-  return styled(theme.fontSize + 16.0f, theme.text, -0.4f);
+  return styled(theme.fontSize * 2.0f, theme.text, -0.4f);
 }
 
 TextStyle monoStyle(const Theme& theme, Color color) {
@@ -53,7 +66,7 @@ BoxDecoration panelDecoration(const Theme& theme) {
 BoxDecoration insetDecoration(const Theme& theme) {
   return BoxDecoration{
       .color = theme.background,
-      .radius = BorderRadius::all(theme.radius - 2.0f),
+      .radius = BorderRadius::all(theme.radius - theme.px(2.0f)),
       .borderColor = theme.border,
       .borderWidth = theme.hairline,
   };

@@ -29,17 +29,29 @@ struct Theme {
   float radius = 6.0f;
   float hairline = 1.0f;
   float unit = 8.0f;
-  float fontSize = 14.0f;
+  float fontSize = 16.0f;
+
+  /// The factor the four sizes above have already been multiplied by, kept so
+  /// that the one-off dimensions a widget spells out can scale with them.
+  float scale = 1.0f;
 
   /// Whether the player is driving with the keyboard, which is the only thing
   /// focus rings are shown for. Null means "always show them", which is what a
   /// consumer that does not track input modality gets.
   fltr::ValueListenable<bool>* keyboardMode = nullptr;
 
+  constexpr float px(float logical) const noexcept { return logical * scale; }
+
   friend constexpr bool operator==(const Theme&, const Theme&) noexcept = default;
 };
 
 using ThemeScope = fltr::Ambient<Theme>;
+
+/// The theme at a chosen interface scale. Sizes are scaled here rather than by
+/// drawing the finished UI through a matrix, so that every glyph is rasterised
+/// at the size it is shown at -- an upscaled atlas is a smear, and legibility is
+/// the entire point of the setting.
+Theme scaledTheme(float scale, fltr::ValueListenable<bool>* keyboardMode);
 
 /// Text styles are derived rather than stored: fltr's `Text` takes a full
 /// `TextStyle` at every call site (there is no ambient default), so the theme

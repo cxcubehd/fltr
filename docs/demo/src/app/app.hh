@@ -58,6 +58,7 @@ public:
   fltr::Observable<Screen>& screen() noexcept { return screen_; }
   fltr::Observable<bool>& paused() noexcept { return paused_; }
   fltr::Observable<GraphicsSettings>& graphics() noexcept { return graphics_; }
+  fltr::Observable<float>& uiScale() noexcept { return uiScale_; }
   fltr::ScrollController& levelScroll() noexcept { return levelScroll_; }
   fltr::OverlayEntry& pauseEntry() noexcept { return pauseEntry_; }
 
@@ -76,11 +77,28 @@ public:
   /// returns to the one that opened it, and the main menu is the floor -- the
   /// demo is never left by pressing a navigation key.
   void back();
-  void quit() noexcept { quitting_ = true; }
+
+  /// What the last menu entry does, and what it is called. A desktop window can
+  /// be closed; a page cannot -- stopping the loop there would leave a frozen
+  /// canvas in someone else's document -- so in a browser the same entry fills
+  /// the screen instead, which is what a demo embedded in a page actually wants.
+  static constexpr std::string_view kLeaveLabel =
+#ifdef __EMSCRIPTEN__
+      "Fullscreen";
+#else
+      "Quit";
+#endif
+  void leave();
   bool quitting() const noexcept { return quitting_; }
 
   void applyGraphics(const GraphicsSettings& settings);
+
+  /// Every size in the UI is a multiple of this, so the whole interface grows
+  /// with it -- text included, rasterised at the size it ends up being drawn.
+  void setUiScale(float scale);
+
   std::string_view maxFpsText() const noexcept { return maxFpsText_; }
+  std::string_view uiScaleText() const noexcept { return uiScaleText_; }
   std::string_view debugText() const noexcept { return debugText_; }
 
   /// Whether the ship should be listening to the keyboard: only while the
@@ -97,6 +115,12 @@ public:
 private:
   void openWindow();
   void attachUi();
+  /// One iteration of the loop; false once the run is over. Separate from `run`
+  /// because a browser owns its own loop and calls this back rather than
+  /// letting anything block inside it.
+  bool step();
+  /// What a smoke run is worth: the assertions, and the exit code.
+  int report();
   void formatMaxFps();
   /// A run that ends banks its score and raises its own panel: the outcome is
   /// the game's to decide and the panel is the UI's to show, and this is the one
@@ -125,6 +149,7 @@ private:
   fltr::Observable<Screen> screen_{Screen::MainMenu};
   fltr::Observable<bool> paused_{false};
   fltr::Observable<GraphicsSettings> graphics_{GraphicsSettings{}};
+  fltr::Observable<float> uiScale_{1.0f};
   fltr::ScrollController levelScroll_;
 
   /// Consumer-owned, as every overlay entry is. Inserted while the gameplay
@@ -133,11 +158,14 @@ private:
   fltr::OverlayState* overlay_ = nullptr;
 
   fltr::Subscription outcome_;
+  int frame_ = 0;
+  int worstPasses_ = 0;
   bool quitting_ = false;
   ShipInput scripted_;
   float scrolled_ = 0.0f;
   bool scriptOk_ = true;
   char maxFpsText_[16] = "144";
+  char uiScaleText_[8] = "100%";
   char debugText_[96] = "";
 };
 

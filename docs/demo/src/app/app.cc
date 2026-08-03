@@ -1,6 +1,11 @@
 #include "app/app.hh"
 
+#include <algorithm>
 #include <cstdio>
+
+#ifdef __EMSCRIPTEN__
+#include <emscripten/emscripten.h>
+#endif
 
 #include "fltr/harness.hpp"
 #include "raylib.h"
@@ -51,8 +56,14 @@ App::~App() {
 
 void App::openWindow() {
   window_.open(options_.width, options_.height, "fltr // drift", graphics_.value());
-  // Whatever the window actually did is what the settings screen shows.
+  // Whatever the window actually did is what the settings screen shows -- the
+  // readout included, which a platform that refuses a frame cap would otherwise
+  // leave reading the number nobody honoured.
   graphics_.set(window_.settings());
+  formatMaxFps();
+  // A dense display starts scaled up rather than microscopic; the slider in the
+  // settings screen is what the player adjusts from there.
+  setUiScale(window_.contentScale());
 }
 
 void App::attachUi() {
@@ -127,6 +138,16 @@ void App::back() {
   togglePause();
 }
 
+void App::leave() {
+#ifdef __EMSCRIPTEN__
+  GraphicsSettings next = graphics_.value();
+  next.fullscreen = !next.fullscreen;
+  applyGraphics(next);
+#else
+  quitting_ = true;
+#endif
+}
+
 void App::applyGraphics(const GraphicsSettings& settings) {
   window_.apply(settings);
   graphics_.set(window_.settings());
@@ -135,7 +156,19 @@ void App::applyGraphics(const GraphicsSettings& settings) {
 
 void App::formatMaxFps() {
   const int cap = graphics_.value().maxFps;
-  std::snprintf(maxFpsText_, sizeof(maxFpsText_), "%d", cap);
+  if (cap > 0) {
+    std::snprintf(maxFpsText_, sizeof(maxFpsText_), "%d", cap);
+  } else {
+    std::snprintf(maxFpsText_, sizeof(maxFpsText_), "AUTO");
+  }
+}
+
+void App::setUiScale(float scale) {
+  // Written before the value is published, because the readout beside the
+  // slider is a view onto this buffer rather than a copy of it.
+  std::snprintf(uiScaleText_, sizeof(uiScaleText_), "%d%%",
+                static_cast<int>(scale * 100.0f + 0.5f));
+  uiScale_.set(scale);
 }
 
 bool App::gameHasFocus() const noexcept {
@@ -190,6 +223,11 @@ void App::runScript(int frame) {
   switch (frame) {
     case 10: goTo(Screen::Settings); break;
     case 30: applyGraphics({.fullscreen = false, .vsync = false, .maxFps = 60}); break;
+    // Rebuilding the entire tree at a new scale, and putting it back: whatever
+    // the layout convergence check says about a normal frame, it says about this
+    // one too.
+    case 32: setUiScale(1.5f); break;
+    case 36: setUiScale(1.0f); break;
     case 40: pressEscape(); break;
     case 44: check(screen_.value() == Screen::MainMenu, "escape did not leave the settings"); break;
     case 45: goTo(Screen::LevelSelect); break;
@@ -245,36 +283,49 @@ bool App::verifyIdleCostsNothing() {
   return true;
 }
 
+bool App::step() {
+  if (quitting_ || window_.shouldClose()) return false;
+  if (options_.smoke) runScript(frame_);
+
+  const fltr::Scene scene = runFrame(*this);
+  worstPasses_ = std::max(worstPasses_, binding_->pipeline().stats().layoutPasses);
+
+  if (options_.smoke && frame_ + 1 >= options_.smokeFrames) {
+    if (options_.dump && scene.root != nullptr) {
+      std::printf("%s\n", fltr::dumpDisplayList(*scene.root).c_str());
+    }
+    if (options_.shot != nullptr) TakeScreenshot(options_.shot);
+    return false;
+  }
+  ++frame_;
+  return true;
+}
+
 int App::run() {
   openWindow();
   attachUi();
 
-  int frame = 0;
-  int worstPasses = 0;
-  bool ok = true;
-
-  while (!quitting_ && !window_.shouldClose()) {
-    if (options_.smoke) runScript(frame);
-
-    const fltr::Scene scene = runFrame(*this);
-    worstPasses = std::max(worstPasses, binding_->pipeline().stats().layoutPasses);
-
-    if (options_.smoke && frame + 1 >= options_.smokeFrames) {
-      if (options_.dump && scene.root != nullptr) {
-        std::printf("%s\n", fltr::dumpDisplayList(*scene.root).c_str());
-      }
-      if (options_.shot != nullptr) TakeScreenshot(options_.shot);
-      break;
-    }
-    ++frame;
+#ifdef __EMSCRIPTEN__
+  // The browser owns the loop: blocking in one here would never yield the page
+  // back to it. Nothing after this call runs -- the tab is closed, not exited.
+  emscripten_set_main_loop_arg([](void* self) { static_cast<App*>(self)->step(); }, this, 0, true);
+  return 0;
+#else
+  while (step()) {
   }
+  return report();
+#endif
+}
 
+int App::report() {
   if (!options_.smoke) return 0;
 
   // ---- What the smoke run asserts ---------------------------------------
 
-  if (worstPasses > 1) {
-    std::printf("FAIL: layout did not converge in one pass (worst = %d)\n", worstPasses);
+  bool ok = true;
+
+  if (worstPasses_ > 1) {
+    std::printf("FAIL: layout did not converge in one pass (worst = %d)\n", worstPasses_);
     ok = false;
   }
 
@@ -297,8 +348,8 @@ int App::run() {
     ok = false;
   }
 
-  std::printf("%s: %d frames, worst layout passes = %d\n", ok ? "PASS" : "FAIL", frame + 1,
-              worstPasses);
+  std::printf("%s: %d frames, worst layout passes = %d\n", ok ? "PASS" : "FAIL", frame_ + 1,
+              worstPasses_);
   return ok ? 0 : 1;
 }
 

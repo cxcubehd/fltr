@@ -48,7 +48,7 @@ WidgetRef levelSelectScreen(App& app, const Theme& theme) {
   });
 
   return sheet(
-      Key::of("screen.levels"), theme, 560.0f,
+      Key::of("screen.levels"), theme, theme.px(560.0f),
       Column::make({
           .crossAxisAlignment = CrossAxisAlignment::Stretch,
           .mainAxisSize = MainAxisSize::Min,

@@ -75,11 +75,13 @@ export default defineConfig({
             { label: 'Docs', link: '/getting-started/' },
             { label: 'Architecture', link: '/architecture/overview/' },
             { label: 'Walkthrough', link: '/walkthrough/' },
+            { label: 'Demo', link: '/demo/' },
             { label: 'Reference', link: '/reference/core/' },
           ],
         }),
       ],
       sidebar: [
+        { label: 'Demo', link: '/demo/' },
         {
           label: 'Getting started',
           items: [

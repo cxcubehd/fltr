@@ -121,7 +121,7 @@ WidgetRef panelFor(App& app, const Theme& theme, Outcome outcome) {
               // The scrim is part of the panel rather than a separate entry, so
               // it fades with it: one subtree in, one subtree out.
               DecoratedBox::make({.decoration = scrimDecoration(theme)}),
-              sheet(Key::of("pause.sheet"), theme, 420.0f,
+              sheet(Key::of("pause.sheet"), theme, theme.px(420.0f),
                     panel(theme, EdgeInsets::all(theme.unit * 0.75f),
                           Column::make({ ... }))),
           },

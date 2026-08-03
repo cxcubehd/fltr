@@ -62,7 +62,7 @@ SurfaceStyle listItemStyle(const Theme& theme) {
 }
 
 SurfaceStyle trackStyle(const Theme& theme) {
-  const BorderRadius radius = BorderRadius::all(3.0f);
+  const BorderRadius radius = BorderRadius::all(theme.px(3.0f));
   return SurfaceStyle{
       .rest = {theme.background, radius, theme.border, theme.hairline},
       .hovered = {theme.background, radius, theme.borderStrong, theme.hairline},

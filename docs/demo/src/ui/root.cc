@@ -49,13 +49,11 @@ fltr::Key keyFor(Screen screen) {
   return {};
 }
 
-}  // namespace
-
-WidgetRef buildRoot(App& app) {
+WidgetRef themedTree(App& app, float scale) {
   return ThemeScope::make({
       // The theme carries the one thing the surfaces cannot work out for
       // themselves: whether the keyboard is what is driving the focus.
-      .value = Theme{.keyboardMode = &app.input().keyboardMode()},
+      .value = scaledTheme(scale, &app.input().keyboardMode()),
       // A focus scope is what brings the focus subsystem into existence at all:
       // a tree without one holds no focus nodes and no key handlers. It is also
       // the traversal group, so tab and the arrow keys work inside it.
@@ -95,6 +93,20 @@ WidgetRef buildRoot(App& app) {
               }),
           }),
       }),
+  });
+}
+
+}  // namespace
+
+WidgetRef buildRoot(App& app) {
+  // The interface scale is the one value the whole tree is measured in, so it is
+  // watched at the very top: changing it is the only thing that rebuilds
+  // everything, and it happens when a player drags a slider.
+  return Watch<float>::make({
+      .value = &app.uiScale(),
+      .builder = [&app](BuildContext&, const float& scale) -> WidgetRef {
+        return themedTree(app, scale);
+      },
   });
 }
 

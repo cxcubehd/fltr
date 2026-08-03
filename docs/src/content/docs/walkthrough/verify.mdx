@@ -230,34 +230,44 @@ diagnostic in the project and the one you will reach for first.
 ## The whole run loop
 
 ```cpp title="docs/demo/src/app/app.cc"
+bool App::step() {
+  if (quitting_ || window_.shouldClose()) return false;
+  if (options_.smoke) runScript(frame_);
+
+  const fltr::Scene scene = runFrame(*this);
+  worstPasses_ = std::max(worstPasses_, binding_->pipeline().stats().layoutPasses);
+
+  if (options_.smoke && frame_ + 1 >= options_.smokeFrames) {
+    if (options_.dump && scene.root != nullptr) {
+      std::printf("%s\n", fltr::dumpDisplayList(*scene.root).c_str());
+    }
+    if (options_.shot != nullptr) TakeScreenshot(options_.shot);
+    return false;
+  }
+  ++frame_;
+  return true;
+}
+
 int App::run() {
   openWindow();
   attachUi();
 
-  int frame = 0;
-  int worstPasses = 0;
-  bool ok = true;
-
-  while (!quitting_ && !window_.shouldClose()) {
-    if (options_.smoke) runScript(frame);
-
-    const fltr::Scene scene = runFrame(*this);
-    worstPasses = std::max(worstPasses, binding_->pipeline().stats().layoutPasses);
-
-    if (options_.smoke && frame + 1 >= options_.smokeFrames) {
-      if (options_.dump && scene.root != nullptr) {
-        std::printf("%s\n", fltr::dumpDisplayList(*scene.root).c_str());
-      }
-      if (options_.shot != nullptr) TakeScreenshot(options_.shot);
-      break;
-    }
-    ++frame;
+#ifdef __EMSCRIPTEN__
+  // The browser owns the loop: blocking in one here would never yield the page
+  // back to it. Nothing after this call runs -- the tab is closed, not exited.
+  emscripten_set_main_loop_arg([](void* self) { static_cast<App*>(self)->step(); }, this, 0, true);
+  return 0;
+#else
+  while (step()) {
   }
-
-  if (!options_.smoke) return 0;
-  ...
+  return report();
+#endif
 }
 ```
+
+One frame is a function rather than the inside of a `while`, which is what lets
+the same source run [in a browser](/fltr/demo/): a page owns its own loop and
+calls back into yours.
 
 ## Where to go from here
 
