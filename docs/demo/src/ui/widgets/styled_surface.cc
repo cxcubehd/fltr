@@ -16,6 +16,10 @@ using fltr::WidgetStatesController;
 using fltr::WidgetState;
 using fltr::WidgetStates;
 
+bool focusVisible(const SurfaceStyle& style) noexcept {
+  return style.keyboardMode == nullptr || style.keyboardMode->value();
+}
+
 BoxDecoration resolveSurface(const SurfaceStyle& style, WidgetStates states) noexcept {
   BoxDecoration decoration = style.rest;
   if (states.has(WidgetState::Selected)) decoration = style.selected;
@@ -24,7 +28,7 @@ BoxDecoration resolveSurface(const SurfaceStyle& style, WidgetStates states) noe
   if (states.has(WidgetState::Disabled)) decoration = style.disabled;
 
   if (states.has(WidgetState::Focused) && !states.has(WidgetState::Disabled) &&
-      style.focusRing.a > 0) {
+      style.focusRing.a > 0 && focusVisible(style)) {
     decoration.borderColor = style.focusRing;
     decoration.borderWidth = std::max(decoration.borderWidth, 1.0f);
   }
@@ -40,6 +44,7 @@ SurfaceStyle buttonStyle(const Theme& theme) {
       .selected = {theme.accentSoft, radius, theme.accent, theme.hairline},
       .disabled = {theme.background, radius, theme.border, theme.hairline},
       .focusRing = theme.accent,
+      .keyboardMode = theme.keyboardMode,
   };
 }
 
@@ -52,6 +57,7 @@ SurfaceStyle listItemStyle(const Theme& theme) {
       .selected = {theme.accentSoft, radius, theme.accent, theme.hairline},
       .disabled = {theme.background, radius, theme.border, theme.hairline},
       .focusRing = theme.accent,
+      .keyboardMode = theme.keyboardMode,
   };
 }
 
@@ -64,6 +70,7 @@ SurfaceStyle trackStyle(const Theme& theme) {
       .selected = {theme.background, radius, theme.borderStrong, theme.hairline},
       .disabled = {theme.background, radius, theme.border, theme.hairline},
       .focusRing = theme.accent,
+      .keyboardMode = theme.keyboardMode,
   };
 }
 
@@ -82,6 +89,7 @@ void StyledSurfaceState::didUpdateWidget(const StyledSurface& previous) {
 
 void StyledSurfaceState::dispose() {
   states_.detach();
+  mode_.detach();
   driver_.detach();
 }
 
@@ -102,6 +110,11 @@ WidgetRef StyledSurfaceState::build(BuildContext& context) {
   // Reading the component's states subscribes this element to the *scope*, not
   // to the controller: the scope only changes when a different component wraps
   // us, which is almost never.
+  if (!mode_.attached() && widget().style().keyboardMode != nullptr) {
+    fltr::subscribeMember<StyledSurfaceState, &StyledSurfaceState::onStatesChanged>(
+        *widget().style().keyboardMode, mode_, this);
+  }
+
   WidgetStatesController* controller = ComponentScope::statesOf(context);
   if (controller != controller_) {
     controller_ = controller;

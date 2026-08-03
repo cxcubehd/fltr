@@ -670,6 +670,34 @@ TEST(scroll_a_refused_push_stretches_the_view_and_lays_nothing_out) {
   CHECK(stretch.transform().isIdentity());
 }
 
+TEST(scroll_the_stretch_is_anchored_at_the_edge_the_content_ran_out_at) {
+  Harness h;
+  ScrollController controller;
+  ScriptedRoot root(h, [&] {
+    return Overscroll::make({.controller = &controller, .child = listOf(&controller)});
+  });
+  h.frame();
+
+  // Pulled down while already at the top: the top edge is the one being pushed
+  // against, so it stays put and the content behind it stretches.
+  h.binding().dispatchPointer(touch(PointerPhase::Down, {100, 20}));
+  h.binding().dispatchPointer(touch(PointerPhase::Move, {100, 60}));
+  h.frame();
+  CHECK(controller.position().overscroll() < 0.0f);
+  CHECK(renderFor<Transform>(h).origin() == Alignment::topCenter());
+
+  h.binding().dispatchPointer(touch(PointerPhase::Up, {100, 60}));
+  for (int i = 0; i < 60 && controller.position().overscroll() != 0.0f; ++i) h.frame(0.016f);
+
+  controller.jumpTo(controller.position().maxScrollExtent());
+  h.frame();
+  h.binding().dispatchPointer(touch(PointerPhase::Down, {100, 60}));
+  h.binding().dispatchPointer(touch(PointerPhase::Move, {100, 20}));
+  h.frame();
+  CHECK(controller.position().overscroll() > 0.0f);
+  CHECK(renderFor<Transform>(h).origin() == Alignment::bottomCenter());
+}
+
 TEST(scroll_a_view_that_bounces_never_stretches_as_well) {
   Harness h;
   ScrollController controller;

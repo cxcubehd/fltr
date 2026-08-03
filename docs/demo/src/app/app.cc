@@ -164,8 +164,9 @@ void App::check(bool condition, const char* what) {
 }
 
 void App::pressEscape() {
-  // The rule the platform layer applies to a real keypress: the UI is offered
-  // the key, and what it declines is the app's.
+  // The rule the platform layer applies to a real keypress: the keyboard becomes
+  // the modality, the UI is offered the key, and what it declines is the app's.
+  input_.keyboardMode().set(true);
   const fltr::KeyEvent event{.type = fltr::KeyEventType::Down,
                              .physical = fltr::PhysicalKey::Escape,
                              .logical = fltr::LogicalKey::Escape};

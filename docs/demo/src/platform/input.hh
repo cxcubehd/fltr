@@ -1,5 +1,6 @@
 #pragma once
 
+#include "fltr/core/observable.hpp"
 #include "fltr/gestures/events.hpp"
 #include "fltr/gestures/keys.hpp"
 #include "fltr/widgets/binding.hpp"
@@ -32,11 +33,19 @@ public:
   /// though raylib still reports them as down.
   void setGameHasFocus(bool value) noexcept { gameHasFocus_ = value; }
 
+  /// Whether the player is currently driving with the keyboard. A key turns it
+  /// on, the mouse turns it off, and the UI shows focus rings only while it is
+  /// on -- so a fresh window is not covered in keyboard affordances nobody asked
+  /// for. Focus itself is unaffected: this is what the focus *looks* like, which
+  /// is the consumer's half of the bargain, not the framework's.
+  fltr::Observable<bool>& keyboardMode() noexcept { return keyboardMode_; }
+
 private:
   void pumpPointer(fltr::WidgetBinding& binding);
   void pumpSignals(fltr::WidgetBinding& binding);
   void pumpKeys(fltr::WidgetBinding& binding);
 
+  fltr::Observable<bool> keyboardMode_{false};
   ShipInput ship_;
   fltr::Offset lastPointer_{-1.0f, -1.0f};
   bool pointerDown_ = false;

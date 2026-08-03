@@ -372,8 +372,10 @@ struct Args {
 };
 ```
 
-Shows what the boundary refused, by scaling the scroll view away from the edge
-being pushed.
+Shows what the boundary refused, by scaling the scroll view. The pivot is the
+edge the content ran out at -- the one the finger is pulling against -- so that
+edge stays put and everything behind it stretches, following the drag rather
+than moving against it.
 
 It is the render-attached path and nothing else: the scale is an observable the
 `Transform` render object subscribes to, so a frame of stretching repaints one

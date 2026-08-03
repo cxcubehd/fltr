@@ -109,7 +109,7 @@ existing render-attached transform path.
 | `Viewport` | The render object underneath, if you want it without the gestures. |
 | `ScrollScope` | The ambient value publishing the position downward. `ScrollScope::of(context)` is null outside a scrollable. |
 | `Scrollbar` | Wraps a scrollable. Fades on idle, widens on hover, draggable thumb. |
-| `Overscroll` | Wraps a scrollable. Stretches the content at the ends. |
+| `Overscroll` | Wraps a scrollable. Stretches the content at the ends, anchored at the edge that refused. |
 | `ScrollbarThumb` | The bare thumb, if you want to place it yourself. |
 
 ```cpp

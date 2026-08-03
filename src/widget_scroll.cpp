@@ -215,11 +215,13 @@ void OverscrollState::didScroll() {
   stretch_.set(vertical ? Transform2D::scaling(1.0f, scale) : Transform2D::scaling(scale, 1.0f));
 
   if (refused == 0.0f) return;
-  // Anchored at the edge opposite the one being pushed, so the content
-  // stretches away from the finger rather than sliding under it.
+  // Anchored at the edge the content ran out at, which is the edge the finger is
+  // pulling against: that edge stays where it is and everything behind it
+  // stretches away, so the content follows the drag instead of moving against
+  // it. Positive refusal is past the end, negative past the start.
   const Alignment pivot =
-      vertical ? (refused > 0.0f ? Alignment::topCenter() : Alignment::bottomCenter())
-               : (refused > 0.0f ? Alignment::centerLeft() : Alignment::centerRight());
+      vertical ? (refused > 0.0f ? Alignment::bottomCenter() : Alignment::topCenter())
+               : (refused > 0.0f ? Alignment::centerRight() : Alignment::centerLeft());
   if (pivot != pivot_) setState([&] { pivot_ = pivot; });
 }
 

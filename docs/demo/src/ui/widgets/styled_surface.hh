@@ -21,8 +21,10 @@ struct SurfaceStyle {
   fltr::BoxDecoration pressed;
   fltr::BoxDecoration selected;
   fltr::BoxDecoration disabled;
-  /// Applied on top of whichever of the above won, as a border only.
+  /// Applied on top of whichever of the above won, as a border only, and only
+  /// while `keyboardMode` says the focus is being driven by the keyboard.
   fltr::Color focusRing = fltr::Color::transparent();
+  fltr::ValueListenable<bool>* keyboardMode = nullptr;
   /// How far the surface shrinks while pressed. 1 adds no transform at all.
   float pressScale = 1.0f;
   float duration = 0.12f;
@@ -34,6 +36,9 @@ struct SurfaceStyle {
 /// Focus is not a fifth surface -- it recolours the border of whichever won, so
 /// a focused *and* hovered control still looks hovered.
 fltr::BoxDecoration resolveSurface(const SurfaceStyle& style, fltr::WidgetStates states) noexcept;
+
+/// Whether a focus ring should be drawn at all right now.
+bool focusVisible(const SurfaceStyle& style) noexcept;
 
 SurfaceStyle buttonStyle(const Theme& theme);
 SurfaceStyle listItemStyle(const Theme& theme);
@@ -61,6 +66,9 @@ private:
   fltr::AnimatedValue<fltr::BoxDecoration> decoration_{driver_, {}};
   fltr::AnimatedValue<fltr::Transform2D> scale_{driver_, {}};
   fltr::Subscription states_;
+  /// The surface repaints when the input modality flips, so a ring appears on
+  /// whatever is already focused the moment a key is pressed.
+  fltr::Subscription mode_;
   fltr::WidgetStatesController* controller_ = nullptr;
 };
 
